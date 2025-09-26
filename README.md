@@ -7,6 +7,8 @@
   </tr>
 </table>
 
+<p align="center"><a href="https://buymeacoffee.com/agalli">Enjoying CSVMusic? Buy me a coffee ☕</a></p>
+
 CSVMusic is a Windows desktop app that turns the playlist CSV files you export from TuneMyMusic into ready-to-play, fully tagged audio. Point the app at a TuneMyMusic CSV and it handles YouTube Music lookup, `yt-dlp` downloads, and FFmpeg processing automatically.
 
 ## Quick Start
