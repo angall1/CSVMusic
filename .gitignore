@@ -1,0 +1,29 @@
+# Virtual environments
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# PyInstaller outputs
+*.spec
+
+# Executables and binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Logs and reports
+*.log
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
