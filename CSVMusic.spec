@@ -64,12 +64,27 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+splash_args = []
+splash_path = root_dir / 'resources' / 'splash.png'
+if splash_path.exists() and sys.platform.startswith('win'):
+	splash = Splash(
+		str(splash_path),
+		binaries=a.binaries,
+		datas=a.datas,
+		text_pos=None,
+		text_size=12,
+		minify_script=True,
+		always_on_top=True,
+		max_img_size=(2048, 1536),
+	)
+	splash_args = [splash, splash.binaries]
+
 exe = EXE(
 	pyz,
 	a.scripts,
 	a.binaries,
-	a.zipfiles,
 	a.datas,
+	*splash_args,
 	[],
 	name='CSVMusic',
 	debug=False,
@@ -84,15 +99,4 @@ exe = EXE(
 	target_arch=None,
 	codesign_identity=None,
 	entitlements_file=None,
-)
-
-COLLECT(
-	exe,
-	a.binaries,
-	a.zipfiles,
-	a.datas,
-	strip=False,
-	upx=True,
-	upx_exclude=[],
-	name='CSVMusic',
 )
