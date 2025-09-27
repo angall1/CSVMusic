@@ -12,6 +12,8 @@ dist/
 
 # PyInstaller outputs
 *.spec
+!Spotify2Media.spec
+!CSVMusic.spec
 
 # Executables and binaries
 *.exe
