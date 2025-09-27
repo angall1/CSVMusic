@@ -27,6 +27,14 @@ CSVMusic is a Windows desktop app that turns the playlist CSV files you export f
 - Rich metadata included by TuneMyMusic (duration, ISRC) helps improve matching accuracy.
 
 ## Contributing
+
+## Release Automation
+- Create and push a Git tag for the commit you want to ship.
+- Publish a GitHub release; the workflow builds Linux, macOS, and Windows bundles automatically.
+- The Linux job also uploads the source tarball and wheel built via `python -m build`.
+- Each PyInstaller zip includes platform-specific FFmpeg binaries and `yt-dlp`, so the app runs out of the box.
+- Keep `resources/ffmpeg/**` and `Spotify2Media.spec` updated if you change binary locations—releases depend on them.
+
 Developers can run the source version by creating a virtual environment, installing with `pip install -e .`, and launching `python -m spotify2media.app`. See `AGENTS.md` for repo guidelines if you plan to contribute changes.
 
 Enjoy building a local library from any streaming service!

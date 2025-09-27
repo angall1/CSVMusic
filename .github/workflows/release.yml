@@ -7,9 +7,32 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  build-and-release:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+            suffix: linux
+            ffmpeg-platform: linux
+            build-sdist: true
+          - os: macos-latest
+            python-version: "3.11"
+            suffix: macos
+            ffmpeg-platform: darwin
+            build-sdist: false
+          - os: windows-latest
+            python-version: "3.11"
+            suffix: windows
+            ffmpeg-platform: win
+            build-sdist: false
 
     steps:
       - name: Check out repository
@@ -18,30 +41,96 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix["python-version"] }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build pyinstaller
+          python -m pip install build pyinstaller yt-dlp ytmusicapi
           python -m pip install -e .
 
+      - name: Fetch FFmpeg (Linux)
+        if: ${{ matrix["ffmpeg-platform"] == 'linux' }}
+        run: |
+          mkdir -p resources/ffmpeg/linux
+          curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          tar -xf ffmpeg.tar.xz
+          cp ffmpeg-*-amd64-static/ffmpeg resources/ffmpeg/linux/ffmpeg
+          chmod +x resources/ffmpeg/linux/ffmpeg
+
+      - name: Fetch FFmpeg (macOS)
+        if: ${{ matrix["ffmpeg-platform"] == 'darwin' }}
+        run: |
+          mkdir -p resources/ffmpeg/darwin
+          curl -L -o ffmpeg.zip https://evermeet.cx/ffmpeg/ffmpeg-6.1.1.zip
+          unzip -o ffmpeg.zip ffmpeg -d resources/ffmpeg/darwin
+          chmod +x resources/ffmpeg/darwin/ffmpeg
+
       - name: Build source and wheel distributions
+        if: ${{ matrix["build-sdist"] == true }}
         run: python -m build
 
       - name: Build PyInstaller bundle
         run: pyinstaller Spotify2Media.spec
 
       - name: Package PyInstaller bundle
+        env:
+          PACKAGE_SUFFIX: ${{ matrix.suffix }}
         run: |
-          cd dist
-          zip -r Spotify2Media-linux.zip Spotify2Media
-        shell: bash
+          python - <<'PY'
+from __future__ import annotations
+import os
+import pathlib
+import zipfile
+
+suffix = os.environ["PACKAGE_SUFFIX"]
+dist_dir = pathlib.Path("dist")
+app_dir = dist_dir / "CSVMusic"
+if not app_dir.exists():
+    raise SystemExit(f"Missing PyInstaller output: {app_dir}")
+zip_path = dist_dir / f"CSVMusic-{suffix}.zip"
+with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    zf.write(app_dir, app_dir.name + "/")
+    for path in sorted(app_dir.rglob('*')):
+        if path.is_dir():
+            continue
+        arcname = app_dir.name + "/" + path.relative_to(app_dir).as_posix()
+        zf.write(path, arcname)
+PY
+
+      - name: Collect PyInstaller bundle
+        run: |
+          mkdir -p release
+          cp dist/CSVMusic-${{ matrix.suffix }}.zip release/
+
+      - name: Collect Python distributions
+        if: ${{ matrix["build-sdist"] == true }}
+        run: |
+          mkdir -p release
+          cp dist/*.whl release/
+          cp dist/*.tar.gz release/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.suffix }}
+          path: release
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            dist/*.whl
-            dist/*.tar.gz
-            dist/Spotify2Media-linux.zip
+            release/*.whl
+            release/*.tar.gz
+            release/*.zip
