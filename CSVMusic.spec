@@ -13,9 +13,15 @@ datas = []
 binaries = []
 hiddenimports = []
 
+
+def add_dir(path_obj, target, container):
+	"""Append a data directory if it exists to avoid PyInstaller aborts."""
+	if path_obj.exists():
+		container.append((str(path_obj), target))
+
 # Bundle resource directories so runtime helpers can locate icons/fonts.
-datas.append((str(root_dir / 'resources'), 'resources'))
-datas.append((str(root_dir / 'licenses'), 'licenses'))
+add_dir(root_dir / 'resources', 'resources', datas)
+add_dir(root_dir / 'licenses', 'licenses', datas)
 
 # Platform-specific FFmpeg binary packaged alongside the app.
 ffmpeg_map = {
