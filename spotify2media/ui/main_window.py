@@ -1,7 +1,7 @@
 # tabs only
 import pathlib
 from functools import partial
-from typing import List
+from typing import List, Tuple
 from PySide6.QtWidgets import (
 	QMainWindow, QWidget, QFileDialog, QMessageBox,
 	QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 	QRadioButton, QButtonGroup, QProgressBar, QToolButton, QSizePolicy, QFrame, QComboBox
 )
 from PySide6.QtCore import Qt, QSignalBlocker
-from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication
 
 from spotify2media.core.csv_import import load_csv, tracks_from_csv
 from spotify2media.core.settings import load_settings, save_settings
@@ -25,8 +25,12 @@ GREEN = QColor(200, 230, 201)    # soft green
 class MainWindow(QMainWindow):
 	def __init__(self):
 		super().__init__()
+		self._scale = self._compute_scale_factor()
 		self.setWindowTitle("CSVMusic")
-		self.setMinimumSize(980, 640)
+		min_w, min_h = self._clamp_to_screen(760, 520)
+		self.setMinimumSize(min_w, min_h)
+		init_w, init_h = self._clamp_to_screen(self._px(980), self._px(640))
+		self.resize(max(min_w, init_w), max(min_h, init_h))
 
 		self.worker: PipelineWorker | None = None
 		self.tracks: list[dict] = []
@@ -41,7 +45,7 @@ class MainWindow(QMainWindow):
 
 		root = QWidget(self); self.setCentralWidget(root)
 		vl = QVBoxLayout(root)
-		vl.setSpacing(8)
+		vl.setSpacing(self._px(8))
 		win_base = "#c0c0c0"
 		win_panel = "#d4d0c8"
 		win_text = "#000000"
@@ -71,40 +75,40 @@ class MainWindow(QMainWindow):
 			QLineEdit, QComboBox, QTableWidget {{
 				background-color: {win_panel};
 				color: {win_text};
-				border-top: 2px solid {win_light};
-				border-left: 2px solid {win_light};
-				border-right: 2px solid {win_shadow};
-				border-bottom: 2px solid {win_shadow};
+				border-top: {self._px(2)}px solid {win_light};
+				border-left: {self._px(2)}px solid {win_light};
+				border-right: {self._px(2)}px solid {win_shadow};
+				border-bottom: {self._px(2)}px solid {win_shadow};
 				selection-background-color: #000080;
 				selection-color: #ffffff;
 			}}
 			QTableWidget QHeaderView::section {{
 				background-color: {win_panel};
 				color: {win_text};
-				border: 1px solid {win_shadow};
+				border: {self._px(1)}px solid {win_shadow};
 			}}
 			QScrollBar {{ background: {win_panel}; }}
 			QPushButton {{
 				background-color: {win_panel};
 				color: {win_text};
-				border-top: 2px solid {win_light};
-				border-left: 2px solid {win_light};
-				border-right: 2px solid {win_dark};
-				border-bottom: 2px solid {win_dark};
-				padding: 4px 12px;
+				border-top: {self._px(2)}px solid {win_light};
+				border-left: {self._px(2)}px solid {win_light};
+				border-right: {self._px(2)}px solid {win_dark};
+				border-bottom: {self._px(2)}px solid {win_dark};
+				padding: {self._px(4)}px {self._px(12)}px;
 			}}
 			QPushButton:disabled {{
 				color: #808080;
-				border-top: 2px solid {win_light};
-				border-left: 2px solid {win_light};
-				border-right: 2px solid {win_shadow};
-				border-bottom: 2px solid {win_shadow};
+				border-top: {self._px(2)}px solid {win_light};
+				border-left: {self._px(2)}px solid {win_light};
+				border-right: {self._px(2)}px solid {win_shadow};
+				border-bottom: {self._px(2)}px solid {win_shadow};
 			}}
 			QPushButton:pressed {{
-				border-top: 2px solid {win_dark};
-				border-left: 2px solid {win_dark};
-				border-right: 2px solid {win_light};
-				border-bottom: 2px solid {win_light};
+				border-top: {self._px(2)}px solid {win_dark};
+				border-left: {self._px(2)}px solid {win_dark};
+				border-right: {self._px(2)}px solid {win_light};
+				border-bottom: {self._px(2)}px solid {win_light};
 			}}
 			QToolButton {{
 				color: {win_text};
@@ -115,11 +119,11 @@ class MainWindow(QMainWindow):
 			QProgressBar {{
 				background-color: {win_panel};
 				color: {win_text};
-				border-top: 2px solid {win_light};
-				border-left: 2px solid {win_light};
-				border-right: 2px solid {win_shadow};
-				border-bottom: 2px solid {win_shadow};
-				height: 18px;
+				border-top: {self._px(2)}px solid {win_light};
+				border-left: {self._px(2)}px solid {win_light};
+				border-right: {self._px(2)}px solid {win_shadow};
+				border-bottom: {self._px(2)}px solid {win_shadow};
+				height: {self._px(18)}px;
 			}}
 			QProgressBar::chunk {{
 				background-color: {progress_chunk};
@@ -133,12 +137,12 @@ class MainWindow(QMainWindow):
 		if icon_path:
 			pm = QPixmap(str(icon_path))
 			if not pm.isNull():
-				logo_size = 56
+				logo_size = self._px(56)
 				logo.setPixmap(pm.scaled(logo_size, logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 				logo.setFixedSize(logo_size, logo_size)
 				logo.setStyleSheet("background: transparent;")
 		else:
-			logo.setFixedSize(56, 56)
+			logo.setFixedSize(self._px(56), self._px(56))
 		logo.setAlignment(Qt.AlignCenter)
 		title_label = QLabel("CSVMusic")
 		title_font = QFont(retro_font_family, default_pt + 10, QFont.Bold)
@@ -146,7 +150,7 @@ class MainWindow(QMainWindow):
 		title_label.setStyleSheet("color: #000000;")
 		title_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 		title_row.addWidget(logo)
-		title_row.addSpacing(12)
+		title_row.addSpacing(self._px(12))
 		title_row.addWidget(title_label)
 		title_row.addStretch(1)
 		vl.addLayout(title_row)
@@ -181,6 +185,8 @@ class MainWindow(QMainWindow):
 		self.help_panel = QFrame()
 		self.help_panel.setFrameShape(QFrame.StyledPanel)
 		help_layout = QVBoxLayout(self.help_panel)
+		help_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		help_layout.setSpacing(self._px(6))
 		help_text = QLabel(
 			"Instructions:\n"
 			"1) Click the link above → select your music platform\n"
@@ -192,7 +198,7 @@ class MainWindow(QMainWindow):
 		)
 		help_text.setFont(QFont(retro_font_family, default_pt + 3))
 		help_text.setWordWrap(True)
-		help_text.setMinimumHeight(160)
+		help_text.setMinimumHeight(self._px(160))
 		help_layout.addWidget(help_text)
 		self.help_panel.setVisible(False)
 		vl.addWidget(self.help_panel)
@@ -204,8 +210,8 @@ class MainWindow(QMainWindow):
 		self.advanced_panel = QFrame()
 		self.advanced_panel.setFrameShape(QFrame.StyledPanel)
 		adv_layout = QVBoxLayout(self.advanced_panel)
-		adv_layout.setContentsMargins(12, 10, 12, 10)
-		adv_layout.setSpacing(8)
+		adv_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		adv_layout.setSpacing(self._px(8))
 		note = QLabel("These overrides are optional. Leave blank to use bundled tools.")
 		note.setWordWrap(True)
 		note.setFont(QFont(retro_font_family, default_pt))
@@ -293,10 +299,10 @@ class MainWindow(QMainWindow):
 			w.setFont(controls_font)
 		lbl_fmt = QLabel("Format & Options:"); lbl_fmt.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		row3.addWidget(lbl_fmt)
-		row3.addSpacing(8)
+		row3.addSpacing(self._px(8))
 		row3.addWidget(self.rb_m4a)
 		row3.addWidget(self.rb_mp3)
-		row3.addSpacing(16)
+		row3.addSpacing(self._px(16))
 		row3.addWidget(self.cb_m3u8)
 		row3.addWidget(self.cb_m3u_plain)
 		row3.addWidget(self.cb_album_art)
@@ -342,16 +348,36 @@ class MainWindow(QMainWindow):
 		self.resolve_box.setFrameShape(QFrame.StyledPanel)
 		self.resolve_box.setVisible(False)
 		res_layout = QVBoxLayout(self.resolve_box)
-		res_layout.setContentsMargins(12, 10, 12, 10)
-		res_layout.setSpacing(6)
+		res_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		res_layout.setSpacing(self._px(6))
 		self.resolve_header = QLabel("Alternative matches pending")
 		res_layout.addWidget(self.resolve_header)
 		self.resolve_items_layout = QVBoxLayout()
-		self.resolve_items_layout.setSpacing(8)
+		self.resolve_items_layout.setSpacing(self._px(8))
 		res_layout.addLayout(self.resolve_items_layout)
 		vl.addWidget(self.resolve_box)
 
 		self._load_last_session()
+
+	def _compute_scale_factor(self) -> float:
+		screen = QGuiApplication.primaryScreen()
+		if screen is None:
+			return 1.0
+		dpi = screen.logicalDotsPerInch() or 96.0
+		scale = dpi / 96.0
+		return max(0.85, min(scale, 3.0))
+
+	def _px(self, value: int) -> int:
+		return max(1, int(round(value * self._scale)))
+
+	def _clamp_to_screen(self, width: int, height: int) -> Tuple[int, int]:
+		screen = QGuiApplication.primaryScreen()
+		if screen is None:
+			return int(width), int(height)
+		geo = screen.availableGeometry()
+		max_w = max(int(geo.width() * 0.95), 640)
+		max_h = max(int(geo.height() * 0.95), 480)
+		return min(int(width), max_w), min(int(height), max_h)
 
 	def on_browse_csv(self):
 		p, _ = QFileDialog.getOpenFileName(self, "Select CSV", "", "CSV files (*.csv);;All files (*)")
@@ -692,8 +718,8 @@ class MainWindow(QMainWindow):
 		widget = QFrame()
 		widget.setFrameShape(QFrame.StyledPanel)
 		layout = QVBoxLayout(widget)
-		layout.setContentsMargins(8, 6, 8, 6)
-		layout.setSpacing(4)
+		layout.setContentsMargins(self._px(8), self._px(6), self._px(8), self._px(6))
+		layout.setSpacing(self._px(4))
 		title = QLabel(f"{track.get('artists','')} — {track.get('title','')}")
 		title.setWordWrap(True)
 		layout.addWidget(title)
@@ -701,7 +727,7 @@ class MainWindow(QMainWindow):
 		combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
 		layout.addWidget(combo)
 		btn_row = QHBoxLayout()
-		btn_row.setSpacing(6)
+		btn_row.setSpacing(self._px(6))
 		btn_download = QPushButton("Download")
 		btn_skip = QPushButton("Skip Song")
 		btn_close = QPushButton("Close")

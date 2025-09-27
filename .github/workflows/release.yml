@@ -1,0 +1,47 @@
+name: Release Builds
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build pyinstaller
+          python -m pip install -e .
+
+      - name: Build source and wheel distributions
+        run: python -m build
+
+      - name: Build PyInstaller bundle
+        run: pyinstaller Spotify2Media.spec
+
+      - name: Package PyInstaller bundle
+        run: |
+          cd dist
+          zip -r Spotify2Media-linux.zip Spotify2Media
+        shell: bash
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/Spotify2Media-linux.zip
