@@ -11,12 +11,12 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QSignalBlocker
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication
 
-from spotify2media.core.csv_import import load_csv, tracks_from_csv
-from spotify2media.core.settings import load_settings, save_settings
-from spotify2media.core.downloader import sanitize_name
-from spotify2media.core.preflight import run_preflight_checks
-from spotify2media.core.paths import app_icon_path, resource_base
-from spotify2media.ui.workers import PipelineWorker, SingleDownloadWorker
+from csvmusic.core.csv_import import load_csv, tracks_from_csv
+from csvmusic.core.settings import load_settings, save_settings
+from csvmusic.core.downloader import sanitize_name
+from csvmusic.core.preflight import run_preflight_checks
+from csvmusic.core.paths import app_icon_path, resource_base
+from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
 RED = QColor(255, 205, 210)      # soft red

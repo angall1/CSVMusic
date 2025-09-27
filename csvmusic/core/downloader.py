@@ -5,7 +5,7 @@ import re, sys
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4, MP4Cover
-from spotify2media.core.paths import ffmpeg_path
+from csvmusic.core.paths import ffmpeg_path
 
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
 

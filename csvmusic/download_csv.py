@@ -1,15 +1,15 @@
 # tabs only
 import sys, pathlib, time, argparse, traceback
 from typing import Optional
-from spotify2media.core.csv_import import load_csv, tracks_from_csv
-from spotify2media.core.ytmusic_match import batch_match
-from spotify2media.core.downloader import (
+from csvmusic.core.csv_import import load_csv, tracks_from_csv
+from csvmusic.core.ytmusic_match import batch_match
+from csvmusic.core.downloader import (
 	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name
 )
 
 def main(argv: list[str]) -> int:
 	parser = argparse.ArgumentParser(
-		prog="spotify2media.download_csv",
+		prog="csvmusic.download_csv",
 		description="CSV -> YT Music match -> download/tag -> M3U"
 	)
 	parser.add_argument("--csv", required=True, help="Path to 'My Spotify Library.csv'")

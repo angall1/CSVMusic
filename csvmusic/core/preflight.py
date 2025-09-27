@@ -7,7 +7,7 @@ import os
 
 import requests
 
-from spotify2media.core.paths import ffmpeg_path
+from csvmusic.core.paths import ffmpeg_path
 
 _WINDOWS = sys.platform.startswith("win")
 

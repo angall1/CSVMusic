@@ -3,9 +3,9 @@ from PySide6.QtCore import QObject, Signal, QThread
 import pathlib, traceback, time
 from typing import Optional, List, Dict, Set
 
-from spotify2media.core.csv_import import load_csv, tracks_from_csv
-from spotify2media.core.ytmusic_match import batch_match
-from spotify2media.core.downloader import (
+from csvmusic.core.csv_import import load_csv, tracks_from_csv
+from csvmusic.core.ytmusic_match import batch_match
+from csvmusic.core.downloader import (
 	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name
 )
 

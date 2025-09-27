@@ -7,8 +7,23 @@ def _settings_dir() -> pathlib.Path:
 	if sys.platform.startswith("win"):
 		appdata = os.environ.get("APPDATA")
 		if appdata:
-			return pathlib.Path(appdata) / "Spotify2Media"
-	return pathlib.Path.home() / ".local" / "share" / "spotify2media"
+			appdata_path = pathlib.Path(appdata)
+			old = appdata_path / "Spotify2Media"
+			new = appdata_path / "CSVMusic"
+			if old.exists() and not new.exists():
+				try:
+					old.rename(new)
+				except Exception:
+					return old
+			return new
+	linux_old = pathlib.Path.home() / ".local" / "share" / "spotify2media"
+	linux_new = pathlib.Path.home() / ".local" / "share" / "csvmusic"
+	if linux_old.exists() and not linux_new.exists():
+		try:
+			linux_old.rename(linux_new)
+		except Exception:
+			return linux_old
+	return linux_new
 
 def settings_path() -> pathlib.Path:
 	d = _settings_dir()

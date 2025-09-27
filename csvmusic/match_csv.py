@@ -1,11 +1,11 @@
 # tabs only
 import sys
-from spotify2media.core.csv_import import load_csv, tracks_from_csv
-from spotify2media.core.ytmusic_match import batch_match
+from csvmusic.core.csv_import import load_csv, tracks_from_csv
+from csvmusic.core.ytmusic_match import batch_match
 
 def main(argv):
 	if len(argv) < 2:
-		print("Usage: python -m spotify2media.match_csv <csv_path> [--playlist \"Playlist Name\"]")
+		print("Usage: python -m csvmusic.match_csv <csv_path> [--playlist \"Playlist Name\"]")
 		return 2
 	csv = argv[1]
 	pl = None

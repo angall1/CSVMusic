@@ -77,8 +77,17 @@ jobs:
         if: ${{ matrix.build_sdist == true }}
         run: python -m build
 
+      - name: Confirm PyInstaller spec file
+        run: |
+          if [ ! -f "CSVMusic.spec" ]; then
+            echo "Unable to locate CSVMusic.spec" >&2
+            echo "Repository contents:" >&2
+            ls -al >&2
+            exit 1
+          fi
+
       - name: Build PyInstaller bundle
-        run: pyinstaller Spotify2Media.spec
+        run: pyinstaller CSVMusic.spec
 
       - name: Package PyInstaller bundle
         env:

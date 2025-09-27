@@ -29,14 +29,14 @@ except Exception:
 from PySide6.QtWidgets import QApplication, QSplashScreen
 from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtCore import Qt
-from spotify2media.core.paths import (
+from csvmusic.core.paths import (
 	ffmpeg_path,
 	splash_image_path,
 	app_icon_path,
 	resource_base,
 )
-from spotify2media.core.log import log
-from spotify2media.version import APP_VERSION
+from csvmusic.core.log import log
+from csvmusic.version import APP_VERSION
 
 _WINDOWS = sys.platform.startswith("win")
 
@@ -100,7 +100,7 @@ def main() -> int:
 	try:
 		import pyi_splash as _ps
 		pyi_splash = _ps
-		pyi_splash.update_text(f"Loading Spotify2Media v{APP_VERSION}…")
+		pyi_splash.update_text(f"Loading CSVMusic v{APP_VERSION}…")
 	except Exception:
 		pyi_splash = None
 
@@ -108,7 +108,7 @@ def main() -> int:
 	if _WINDOWS:
 		try:
 			import ctypes
-			ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Spotify2Media.CSVMusic")
+			ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("CSVMusic.CSVMusic")
 		except Exception:
 			pass
 	icon_path = app_icon_path()
@@ -130,7 +130,7 @@ def main() -> int:
 	except Exception:
 		pass
 
-	from spotify2media.ui.main_window import MainWindow
+	from csvmusic.ui.main_window import MainWindow
 	w = MainWindow()
 	if icon_path:
 		w.setWindowIcon(QIcon(str(icon_path)))

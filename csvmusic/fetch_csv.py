@@ -1,10 +1,10 @@
 # tabs only
 import sys
-from spotify2media.core.csv_import import load_csv, tracks_from_csv, list_playlists
+from csvmusic.core.csv_import import load_csv, tracks_from_csv, list_playlists
 
 def main(argv: list[str]) -> int:
 	if len(argv) < 2:
-		print("Usage: python -m spotify2media.fetch_csv <csv_path> [--playlist \"Playlist Name\"]")
+		print("Usage: python -m csvmusic.fetch_csv <csv_path> [--playlist \"Playlist Name\"]")
 		return 2
 	csv = argv[1]
 	pl = None

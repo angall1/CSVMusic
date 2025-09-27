@@ -2,7 +2,7 @@
 import pathlib, datetime, sys
 
 def log_path() -> pathlib.Path:
-	base = pathlib.Path.home() / ".local" / "share" / "spotify2media"
+	base = pathlib.Path.home() / ".local" / "share" / "csvmusic"
 	base.mkdir(parents=True, exist_ok=True)
 	return base / "app.log"
 
