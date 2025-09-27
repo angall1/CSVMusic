@@ -3,6 +3,11 @@ name: Release Builds
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (must already exist)"
+        required: true
 
 permissions:
   contents: write
@@ -37,6 +42,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -130,6 +137,7 @@ PY
       - name: Upload release assets
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ github.event.release.tag_name || inputs.tag }}
           files: |
             release/*.whl
             release/*.tar.gz

@@ -30,7 +30,7 @@ CSVMusic is a Windows desktop app that turns the playlist CSV files you export f
 
 ## Release Automation
 - Create and push a Git tag for the commit you want to ship.
-- Publish a GitHub release; the workflow builds Linux, macOS, and Windows bundles automatically.
+- Publish a GitHub release; the workflow builds Linux, macOS, and Windows bundles automatically (or trigger the `Release Builds` workflow manually with the release tag).
 - The Linux job also uploads the source tarball and wheel built via `python -m build`.
 - Each PyInstaller zip includes platform-specific FFmpeg binaries and `yt-dlp`, so the app runs out of the box.
 - Keep `resources/ffmpeg/**` and `Spotify2Media.spec` updated if you change binary locations—releases depend on them.
