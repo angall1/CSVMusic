@@ -85,25 +85,25 @@ jobs:
           PACKAGE_SUFFIX: ${{ matrix.suffix }}
         run: |
           python - <<'PY'
-from __future__ import annotations
-import os
-import pathlib
-import zipfile
+          from __future__ import annotations
+          import os
+          import pathlib
+          import zipfile
 
-suffix = os.environ["PACKAGE_SUFFIX"]
-dist_dir = pathlib.Path("dist")
-app_dir = dist_dir / "CSVMusic"
-if not app_dir.exists():
-    raise SystemExit(f"Missing PyInstaller output: {app_dir}")
-zip_path = dist_dir / f"CSVMusic-{suffix}.zip"
-with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-    zf.write(app_dir, app_dir.name + "/")
-    for path in sorted(app_dir.rglob('*')):
-        if path.is_dir():
-            continue
-        arcname = app_dir.name + "/" + path.relative_to(app_dir).as_posix()
-        zf.write(path, arcname)
-PY
+          suffix = os.environ["PACKAGE_SUFFIX"]
+          dist_dir = pathlib.Path("dist")
+          app_dir = dist_dir / "CSVMusic"
+          if not app_dir.exists():
+              raise SystemExit(f"Missing PyInstaller output: {app_dir}")
+          zip_path = dist_dir / f"CSVMusic-{suffix}.zip"
+          with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+              zf.write(app_dir, app_dir.name + "/")
+              for path in sorted(app_dir.rglob("*")):
+                  if path.is_dir():
+                      continue
+                  arcname = app_dir.name + "/" + path.relative_to(app_dir).as_posix()
+                  zf.write(path, arcname)
+          PY
 
       - name: Collect PyInstaller bundle
         run: |
