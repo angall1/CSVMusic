@@ -103,12 +103,25 @@ jobs:
           import os
           import pathlib
           import zipfile
+          import shutil
 
           suffix = os.environ["PACKAGE_SUFFIX"]
           dist_dir = pathlib.Path("dist")
           app_dir = dist_dir / "CSVMusic"
           if not app_dir.exists():
-              raise SystemExit(f"Missing PyInstaller output: {app_dir}")
+              single_candidates = [
+                  dist_dir / "CSVMusic.exe",
+                  dist_dir / "CSVMusic",
+              ]
+              for candidate in single_candidates:
+                  if candidate.exists():
+                      app_dir.mkdir(exist_ok=True)
+                      shutil.copy2(candidate, app_dir / candidate.name)
+                      break
+              else:
+                  raise SystemExit(
+                      "Missing PyInstaller output: neither directory nor single-file bundle found"
+                  )
           zip_path = dist_dir / f"CSVMusic-{suffix}.zip"
           with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
               zf.write(app_dir, app_dir.name + "/")
