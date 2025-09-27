@@ -24,20 +24,20 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python-version: "3.11"
+            python_version: "3.11"
             suffix: linux
-            ffmpeg-platform: linux
-            build-sdist: true
+            ffmpeg_platform: linux
+            build_sdist: true
           - os: macos-latest
-            python-version: "3.11"
+            python_version: "3.11"
             suffix: macos
-            ffmpeg-platform: darwin
-            build-sdist: false
+            ffmpeg_platform: darwin
+            build_sdist: false
           - os: windows-latest
-            python-version: "3.11"
+            python_version: "3.11"
             suffix: windows
-            ffmpeg-platform: win
-            build-sdist: false
+            ffmpeg_platform: win
+            build_sdist: false
 
     steps:
       - name: Check out repository
@@ -48,7 +48,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix["python-version"] }}
+          python-version: ${{ matrix.python_version }}
 
       - name: Install dependencies
         run: |
@@ -57,7 +57,7 @@ jobs:
           python -m pip install -e .
 
       - name: Fetch FFmpeg (Linux)
-        if: ${{ matrix["ffmpeg-platform"] == 'linux' }}
+        if: ${{ matrix.ffmpeg_platform == 'linux' }}
         run: |
           mkdir -p resources/ffmpeg/linux
           curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
@@ -66,7 +66,7 @@ jobs:
           chmod +x resources/ffmpeg/linux/ffmpeg
 
       - name: Fetch FFmpeg (macOS)
-        if: ${{ matrix["ffmpeg-platform"] == 'darwin' }}
+        if: ${{ matrix.ffmpeg_platform == 'darwin' }}
         run: |
           mkdir -p resources/ffmpeg/darwin
           curl -L -o ffmpeg.zip https://evermeet.cx/ffmpeg/ffmpeg-6.1.1.zip
@@ -74,7 +74,7 @@ jobs:
           chmod +x resources/ffmpeg/darwin/ffmpeg
 
       - name: Build source and wheel distributions
-        if: ${{ matrix["build-sdist"] == true }}
+        if: ${{ matrix.build_sdist == true }}
         run: python -m build
 
       - name: Build PyInstaller bundle
@@ -111,7 +111,7 @@ jobs:
           cp dist/CSVMusic-${{ matrix.suffix }}.zip release/
 
       - name: Collect Python distributions
-        if: ${{ matrix["build-sdist"] == true }}
+        if: ${{ matrix.build_sdist == true }}
         run: |
           mkdir -p release
           cp dist/*.whl release/
