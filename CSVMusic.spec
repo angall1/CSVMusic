@@ -2,7 +2,12 @@
 from PyInstaller.utils.hooks import collect_all
 import sys, pathlib
 
-root_dir = pathlib.Path(__file__).resolve().parent
+# PyInstaller 6.16+ executes spec files without __file__ defined when run via
+# python -m PyInstaller, so fall back to the CWD to keep root resolution stable.
+try:
+	root_dir = pathlib.Path(__file__).resolve().parent
+except NameError:
+	root_dir = pathlib.Path.cwd()
 
 datas = []
 binaries = []
