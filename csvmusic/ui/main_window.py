@@ -452,10 +452,14 @@ class MainWindow(QMainWindow):
 		cfg = load_settings()
 		csv_path = cfg.get("csv_path") or ""
 		out_dir = cfg.get("output_dir") or ""
-		if csv_path:
+		if csv_path and pathlib.Path(csv_path).exists():
 			self.ed_csv.setText(csv_path)
-		if out_dir:
+		else:
+			self.ed_csv.clear()
+		if out_dir and pathlib.Path(out_dir).exists():
 			self.ed_out.setText(out_dir)
+		else:
+			self.ed_out.clear()
 		yt_path = cfg.get("yt_dlp_path") or ""
 		blocker_yt = QSignalBlocker(self.ed_ytdlp)
 		self.ed_ytdlp.setText(yt_path)
@@ -468,7 +472,7 @@ class MainWindow(QMainWindow):
 		blocker_skip = QSignalBlocker(self.cb_skip_network)
 		self.cb_skip_network.setChecked(skip_net)
 		del blocker_skip
-		self.btn_clear.setEnabled(bool(csv_path or out_dir))
+		self.btn_clear.setEnabled(bool(self.ed_csv.text().strip() or self.ed_out.text().strip()))
 
 	def on_start(self):
 		csv_path = self.ed_csv.text().strip()

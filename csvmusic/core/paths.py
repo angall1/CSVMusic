@@ -1,6 +1,15 @@
 # tabs only
 import os, sys, shutil, pathlib, stat
 
+
+def _meipass_dir() -> pathlib.Path | None:
+	if hasattr(sys, "_MEIPASS"):
+		try:
+			return pathlib.Path(sys._MEIPASS)  # type: ignore[attr-defined]
+		except Exception:
+			return None
+	return None
+
 def _is_frozen() -> bool:
 	return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 
@@ -56,22 +65,41 @@ def ffmpeg_packaged_path() -> pathlib.Path:
 	name = "ffmpeg.exe" if platform_key() == "windows" else "ffmpeg"
 	plat = platform_key()
 	base = resource_base()
-	candidates = [
-		base,
+	exe_dir = pathlib.Path(sys.executable).resolve().parent
+	meipass = _meipass_dir()
+	search_roots = [base, exe_dir]
+	if meipass:
+		search_roots.extend([meipass, meipass / "resources"])
+	search_roots.extend([
+		exe_dir / "resources",
 		base.parent,
-		pathlib.Path(sys.executable).resolve().parent,
-		pathlib.Path(sys.executable).resolve().parent / "resources",
-	]
-	seen: set[pathlib.Path] = set()
-	for root in candidates:
+	])
+
+	checked: set[pathlib.Path] = set()
+	for root in search_roots:
 		if not isinstance(root, pathlib.Path):
 			continue
-		if root in seen:
+		if root in checked:
 			continue
-		seen.add(root)
-		candidate = root / "ffmpeg" / plat / name
-		if candidate.exists():
-			return candidate
+		checked.add(root)
+		for rel in (
+			pathlib.Path("ffmpeg") / plat / name,
+			pathlib.Path("resources") / "ffmpeg" / plat / name,
+			pathlib.Path("ffmpeg") / name,
+			pathlib.Path(name),
+		):
+			candidate = root / rel
+			if candidate.exists():
+				return candidate
+
+	for root in checked:
+		try:
+			found = next(root.rglob(name))
+			if found.exists():
+				return found
+		except Exception:
+			continue
+
 	return base / "ffmpeg" / plat / name
 
 def ensure_executable(p: pathlib.Path) -> None:
