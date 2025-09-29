@@ -14,6 +14,7 @@ dependencies = [
 	"ytmusicapi>=1.7.4",
 	"mutagen>=1.47.0",
 	"requests>=2.32.0",
+	"pandas>=2.2.0",
 ]
 
 [tool.setuptools]

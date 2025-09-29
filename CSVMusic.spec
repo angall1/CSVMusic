@@ -45,6 +45,8 @@ tmp_ret = collect_all('ytmusicapi')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('mutagen')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('pandas')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 pathex = [str(root_dir)]
@@ -65,19 +67,29 @@ a = Analysis(
 pyz = PYZ(a.pure)
 
 splash_args = []
-splash_path = root_dir / 'resources' / 'splash.png'
-if splash_path.exists() and sys.platform.startswith('win'):
-	splash = Splash(
-		str(splash_path),
-		binaries=a.binaries,
-		datas=a.datas,
-		text_pos=None,
-		text_size=12,
-		minify_script=True,
-		always_on_top=True,
-		max_img_size=(2048, 1536),
-	)
-	splash_args = [splash, splash.binaries]
+if sys.platform.startswith('win'):
+	for splash_name in ('splash_small.png', 'splash.png'):
+		splash_path = root_dir / 'resources' / splash_name
+		if splash_path.exists():
+			splash = Splash(
+				str(splash_path),
+				binaries=a.binaries,
+				datas=a.datas,
+				text_pos=None,
+				text_size=12,
+				minify_script=True,
+				always_on_top=True,
+				max_img_size=(768, 768),
+			)
+			splash_args = [splash, splash.binaries]
+			break
+
+icon_path = None
+for icon_name in ('app.ico', 'icon.ico'):
+	candidate = root_dir / 'resources' / icon_name
+	if candidate.exists():
+		icon_path = str(candidate)
+		break
 
 exe = EXE(
 	pyz,
@@ -94,6 +106,7 @@ exe = EXE(
 	upx_exclude=[],
 	runtime_tmpdir=None,
 	console=False,
+	icon=icon_path,
 	disable_windowed_traceback=False,
 	argv_emulation=False,
 	target_arch=None,
