@@ -54,7 +54,25 @@ def platform_key() -> str:
 
 def ffmpeg_packaged_path() -> pathlib.Path:
 	name = "ffmpeg.exe" if platform_key() == "windows" else "ffmpeg"
-	return resource_base() / "ffmpeg" / platform_key() / name
+	plat = platform_key()
+	base = resource_base()
+	candidates = [
+		base,
+		base.parent,
+		pathlib.Path(sys.executable).resolve().parent,
+		pathlib.Path(sys.executable).resolve().parent / "resources",
+	]
+	seen: set[pathlib.Path] = set()
+	for root in candidates:
+		if not isinstance(root, pathlib.Path):
+			continue
+		if root in seen:
+			continue
+		seen.add(root)
+		candidate = root / "ffmpeg" / plat / name
+		if candidate.exists():
+			return candidate
+	return base / "ffmpeg" / plat / name
 
 def ensure_executable(p: pathlib.Path) -> None:
 	try:
