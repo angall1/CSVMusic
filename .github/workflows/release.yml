@@ -78,6 +78,40 @@ jobs:
           unzip -o ffmpeg.zip ffmpeg -d resources/ffmpeg/darwin
           chmod +x resources/ffmpeg/darwin/ffmpeg
 
+      - name: Fetch FFmpeg (Windows)
+        if: ${{ matrix.ffmpeg_platform == 'win' }}
+        shell: pwsh
+        run: |
+          $destDir = "resources/ffmpeg/windows"
+          $destExe = Join-Path $destDir "ffmpeg.exe"
+          if (Test-Path $destExe) {
+            Write-Host "Using existing FFmpeg at $destExe"
+            return
+          }
+          Write-Host "Downloading FFmpeg for Windows…"
+          New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+          $primary = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
+          $fallback = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          $tmpZip = Join-Path $env:TEMP ("ffmpeg_" + [Guid]::NewGuid().ToString() + ".zip")
+          $tmpDir = Join-Path $env:TEMP ("ffmpeg_unpack_" + [Guid]::NewGuid().ToString())
+          try {
+            try {
+              Invoke-WebRequest -Uri $primary -OutFile $tmpZip -UseBasicParsing
+            } catch {
+              Write-Host "Primary FFmpeg download failed, trying fallback…"
+              Invoke-WebRequest -Uri $fallback -OutFile $tmpZip -UseBasicParsing
+            }
+            Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
+            $ffmpeg = Get-ChildItem -Path $tmpDir -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+            if (-not $ffmpeg) {
+              throw "ffmpeg.exe not found in downloaded archive"
+            }
+            Copy-Item $ffmpeg.FullName $destExe -Force
+          } finally {
+            Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Build source and wheel distributions
         if: ${{ matrix.build_sdist == true }}
         run: python -m build
