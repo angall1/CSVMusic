@@ -39,6 +39,7 @@ class MainWindow(QMainWindow):
 		self.action_buttons: dict[int, QPushButton] = {}
 		self.resolve_items: dict[int, dict] = {}
 		self.last_playlist_name: str | None = None
+		self._allow_path_persist = False
 		icon_p = app_icon_path()
 		if icon_p:
 			self.setWindowIcon(QIcon(str(icon_p)))
@@ -384,14 +385,16 @@ class MainWindow(QMainWindow):
 		if p:
 			self.ed_csv.setText(p)
 			self.btn_clear.setEnabled(True)
-			self._persist_settings()
+			self._allow_path_persist = True
+			self._persist_settings(include_paths=True)
 
 	def on_browse_out(self):
 		p = QFileDialog.getExistingDirectory(self, "Select Output Folder", "")
 		if p:
 			self.ed_out.setText(p)
 			self.btn_clear.setEnabled(True)
-			self._persist_settings()
+			self._allow_path_persist = True
+			self._persist_settings(include_paths=True)
 
 	def on_browse_ytdlp(self):
 		path, _ = QFileDialog.getOpenFileName(self, "Select yt-dlp executable", "", "Executables (*.exe *.bat *.cmd);;All files (*)")
@@ -438,17 +441,18 @@ class MainWindow(QMainWindow):
 		val = self.ed_ffmpeg.text().strip()
 		return val or None
 
-	def _persist_settings(self) -> None:
+	def _persist_settings(self, *, include_paths: bool = False) -> None:
 		def _norm(text: str) -> str | None:
 			value = text.strip()
 			return value or None
 		cfg = {
-			"csv_path": _norm(self.ed_csv.text()),
-			"output_dir": _norm(self.ed_out.text()),
 			"yt_dlp_path": _norm(self.ed_ytdlp.text()),
 			"ffmpeg_path": _norm(self.ed_ffmpeg.text()),
 			"skip_network_check": self.cb_skip_network.isChecked(),
 		}
+		if include_paths:
+			cfg["csv_path"] = _norm(self.ed_csv.text())
+			cfg["output_dir"] = _norm(self.ed_out.text())
 		save_settings(cfg)
 
 	def _load_last_session(self) -> None:
@@ -456,11 +460,17 @@ class MainWindow(QMainWindow):
 		csv_path = cfg.get("csv_path") or ""
 		out_dir = cfg.get("output_dir") or ""
 		if csv_path and pathlib.Path(csv_path).exists():
+			self._allow_path_persist = True
+			blocker_csv = QSignalBlocker(self.ed_csv)
 			self.ed_csv.setText(csv_path)
+			del blocker_csv
 		else:
 			self.ed_csv.clear()
 		if out_dir and pathlib.Path(out_dir).exists():
+			self._allow_path_persist = True
+			blocker_out = QSignalBlocker(self.ed_out)
 			self.ed_out.setText(out_dir)
+			del blocker_out
 		else:
 			self.ed_out.clear()
 		yt_path = cfg.get("yt_dlp_path") or ""
@@ -507,7 +517,8 @@ class MainWindow(QMainWindow):
 			if skip_network:
 				detail_lines.append("Network check: skipped")
 			self.lbl_log.setText("; ".join(detail_lines))
-		self._persist_settings()
+		self._allow_path_persist = True
+		self._persist_settings(include_paths=self._allow_path_persist)
 
 		# Build table from all tracks in CSV
 		try:
@@ -607,7 +618,8 @@ class MainWindow(QMainWindow):
 		self.btn_start.setEnabled(True)
 		self.btn_stop.setEnabled(False)
 		self.btn_clear.setEnabled(False)
-		self._persist_settings()
+		self._allow_path_persist = False
+		self._persist_settings(include_paths=True)
 		self.track_results = {}
 		self.action_buttons = {}
 		self._clear_resolution_panel()
@@ -636,7 +648,7 @@ class MainWindow(QMainWindow):
 		self.btn_stop.setEnabled(False)
 		self.btn_clear.setEnabled(True)
 		self.lbl_log.setText(msg)
-		self._persist_settings()
+		self._persist_settings(include_paths=self._allow_path_persist)
 		QApplication.beep()
 		if self.worker:
 			self.worker.quit()
