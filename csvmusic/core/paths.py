@@ -63,7 +63,7 @@ def platform_key() -> str:
 		return "windows"
 	raise RuntimeError(f"Unsupported platform: {p}")
 
-def _ffmpeg_search_roots(plat: str) -> list[pathlib.Path]:
+def _candidate_roots() -> list[pathlib.Path]:
 	roots: list[pathlib.Path] = []
 	try:
 		roots.append(resource_base())
@@ -71,51 +71,49 @@ def _ffmpeg_search_roots(plat: str) -> list[pathlib.Path]:
 		pass
 	try:
 		exe_dir = pathlib.Path(sys.executable).resolve().parent
-		roots.append(exe_dir)
-		roots.append(exe_dir / "resources")
-		roots.append(exe_dir.parent)
-		roots.append(exe_dir.parent / "resources")
+		roots.extend([
+			exe_dir,
+			exe_dir / "resources",
+			exe_dir.parent,
+			exe_dir.parent / "resources",
+		])
 	except Exception:
 		pass
 	meipass = _meipass_dir()
 	if meipass:
-		roots.append(meipass)
-		roots.append(meipass / "resources")
+		roots.extend([meipass, meipass / "resources"])
 	try:
 		module_root = pathlib.Path(__file__).resolve().parents[2]
 		roots.append(module_root / "resources")
 	except Exception:
 		pass
-	cwd = pathlib.Path.cwd()
-	roots.append(cwd)
-	roots.append(cwd / "resources")
-	return [r for r in roots if isinstance(r, pathlib.Path)]
+	return [r.resolve() for r in roots if isinstance(r, pathlib.Path)]
 
 
-def _ffmpeg_candidates(name: str, plat: str) -> tuple[list[pathlib.Path], list[pathlib.Path]]:
-	roots = _ffmpeg_search_roots(plat)
-	cands: list[pathlib.Path] = []
+def _ffmpeg_candidates(name: str, plat: str) -> list[pathlib.Path]:
 	seen: set[pathlib.Path] = set()
-	ordered_roots: list[pathlib.Path] = []
-	for root in roots:
-		root = root.resolve()
+	cands: list[pathlib.Path] = []
+	for root in _candidate_roots():
 		if root in seen:
 			continue
 		seen.add(root)
-		ordered_roots.append(root)
 		for rel in (
 			pathlib.Path("ffmpeg") / plat / name,
 			pathlib.Path("resources") / "ffmpeg" / plat / name,
 			pathlib.Path("ffmpeg") / name,
 			pathlib.Path(name),
 		):
-			cands.append(root / rel)
+			candidate = (root / rel).resolve()
+			if candidate not in cands:
+				cands.append(candidate)
 	try:
 		exe_path = pathlib.Path(sys.executable).resolve()
-		cands.append(exe_path.with_name(name))
+		local = exe_path.with_name(name)
+		if local not in cands:
+			cands.append(local)
 	except Exception:
 		pass
-	return cands, ordered_roots
+	return cands
 
 def ffmpeg_packaged_path() -> pathlib.Path:
 	global _FFMPEG_CACHE
@@ -123,8 +121,7 @@ def ffmpeg_packaged_path() -> pathlib.Path:
 		return _FFMPEG_CACHE
 	plat = platform_key()
 	name = "ffmpeg.exe" if plat == "windows" else "ffmpeg"
-	candidates, roots = _ffmpeg_candidates(name, plat)
-	for candidate in candidates:
+	for candidate in _ffmpeg_candidates(name, plat):
 		if candidate.exists():
 			_FFMPEG_CACHE = candidate
 			return candidate
@@ -134,16 +131,6 @@ def ffmpeg_packaged_path() -> pathlib.Path:
 			if alt.exists():
 				_FFMPEG_CACHE = alt
 				return alt
-	for root in roots:
-		try:
-			found = next(root.rglob(name))
-			if found.exists():
-				_FFMPEG_CACHE = found
-				return found
-		except StopIteration:
-			continue
-		except Exception:
-			continue
 	fallback = resource_base() / "ffmpeg" / plat / name
 	_FFMPEG_CACHE = fallback
 	return fallback
