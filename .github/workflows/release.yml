@@ -61,6 +61,9 @@ jobs:
           python -m pip install build pyinstaller yt-dlp ytmusicapi
           python -m pip install -e .
 
+      - name: Ensure license directory
+        run: mkdir -p licenses
+
       - name: Fetch FFmpeg (Linux)
         if: ${{ matrix.ffmpeg_platform == 'linux' }}
         run: |
