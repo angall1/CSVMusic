@@ -63,57 +63,55 @@ def platform_key() -> str:
 		return "windows"
 	raise RuntimeError(f"Unsupported platform: {p}")
 
-def _candidate_roots() -> list[pathlib.Path]:
-	roots: list[pathlib.Path] = []
-	try:
-		roots.append(resource_base())
-	except Exception:
-		pass
-	try:
-		exe_dir = pathlib.Path(sys.executable).resolve().parent
-		roots.extend([
-			exe_dir,
-			exe_dir / "resources",
-			exe_dir.parent,
-			exe_dir.parent / "resources",
-		])
-	except Exception:
-		pass
-	meipass = _meipass_dir()
-	if meipass:
-		roots.extend([meipass, meipass / "resources"])
-	try:
-		module_root = pathlib.Path(__file__).resolve().parents[2]
-		roots.append(module_root / "resources")
-	except Exception:
-		pass
-	return [r.resolve() for r in roots if isinstance(r, pathlib.Path)]
+def _dedup(paths: list[pathlib.Path]) -> list[pathlib.Path]:
+	seen: set[pathlib.Path] = set()
+	result: list[pathlib.Path] = []
+	for path in paths:
+		resolved = path.resolve()
+		if resolved in seen:
+			continue
+		seen.add(resolved)
+		result.append(resolved)
+	return result
 
 
 def _ffmpeg_candidates(name: str, plat: str) -> list[pathlib.Path]:
-	seen: set[pathlib.Path] = set()
-	cands: list[pathlib.Path] = []
-	for root in _candidate_roots():
-		if root in seen:
-			continue
-		seen.add(root)
-		for rel in (
-			pathlib.Path("ffmpeg") / plat / name,
-			pathlib.Path("resources") / "ffmpeg" / plat / name,
-			pathlib.Path("ffmpeg") / name,
-			pathlib.Path(name),
-		):
-			candidate = (root / rel).resolve()
-			if candidate not in cands:
-				cands.append(candidate)
+	paths: list[pathlib.Path] = []
+	meipass = _meipass_dir()
+	if meipass:
+		paths.extend([
+			meipass / "ffmpeg" / plat / name,
+			meipass / "resources" / "ffmpeg" / plat / name,
+		])
 	try:
-		exe_path = pathlib.Path(sys.executable).resolve()
-		local = exe_path.with_name(name)
-		if local not in cands:
-			cands.append(local)
+		exe_dir = pathlib.Path(sys.executable).resolve().parent
+		paths.extend([
+			exe_dir / "ffmpeg" / plat / name,
+			exe_dir / "resources" / "ffmpeg" / plat / name,
+			exe_dir.parent / "ffmpeg" / plat / name,
+			exe_dir.parent / "resources" / "ffmpeg" / plat / name,
+		])
 	except Exception:
 		pass
-	return cands
+	try:
+		res_base = resource_base()
+		paths.append(res_base / "ffmpeg" / plat / name)
+		paths.append(res_base.parent / "ffmpeg" / plat / name)
+	except Exception:
+		pass
+	try:
+		module_root = pathlib.Path(__file__).resolve().parents[2]
+		paths.append(module_root / "resources" / "ffmpeg" / plat / name)
+		paths.append(module_root / "ffmpeg" / plat / name)
+	except Exception:
+		pass
+	paths.append(pathlib.Path.cwd() / "ffmpeg" / plat / name)
+	try:
+		exe_path = pathlib.Path(sys.executable).resolve()
+		paths.append(exe_path.with_name(name))
+	except Exception:
+		pass
+	return _dedup(paths)
 
 def ffmpeg_packaged_path() -> pathlib.Path:
 	global _FFMPEG_CACHE
@@ -131,9 +129,27 @@ def ffmpeg_packaged_path() -> pathlib.Path:
 			if alt.exists():
 				_FFMPEG_CACHE = alt
 				return alt
-	fallback = resource_base() / "ffmpeg" / plat / name
-	_FFMPEG_CACHE = fallback
-	return fallback
+	fallbacks: list[pathlib.Path] = []
+	try:
+		res_base = resource_base()
+		fallbacks.append(res_base / "ffmpeg" / plat / name)
+		fallbacks.append(res_base.parent / "ffmpeg" / plat / name)
+	except Exception:
+		pass
+	try:
+		module_root = pathlib.Path(__file__).resolve().parents[2]
+		fallbacks.append(module_root / "resources" / "ffmpeg" / plat / name)
+	except Exception:
+		pass
+	fallbacks.append(pathlib.Path(name))
+	for fb in _dedup(fallbacks):
+		if fb.exists():
+			_FFMPEG_CACHE = fb
+			return fb
+	if fallbacks:
+		_FFMPEG_CACHE = fallbacks[0]
+		return fallbacks[0]
+	raise RuntimeError("ffmpeg binary not found (packaged or system).")
 
 
 def ensure_executable(p: pathlib.Path) -> None:
