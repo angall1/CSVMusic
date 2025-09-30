@@ -43,12 +43,24 @@ def load_settings() -> dict:
 		pass
 	return {}
 
+def _should_clear(value: object) -> bool:
+	if value is None:
+		return True
+	if isinstance(value, str) and value.strip() == "":
+		return True
+	return False
+
+
 def save_settings(data: dict) -> None:
 	try:
 		p = settings_path()
 		existing = load_settings()
-		merged = dict(existing)
-		merged.update({k: v for k, v in data.items()})
+		merged = {k: v for k, v in existing.items() if not _should_clear(v)}
+		updates = {k: v for k, v in data.items() if not _should_clear(v)}
+		drops = [k for k, v in data.items() if _should_clear(v)]
+		merged.update(updates)
+		for key in drops:
+			merged.pop(key, None)
 		with p.open("w", encoding="utf-8") as f:
 			json.dump(merged, f, ensure_ascii=False, indent=2)
 	except Exception:

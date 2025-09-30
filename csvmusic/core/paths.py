@@ -1,6 +1,8 @@
 # tabs only
 import os, sys, shutil, pathlib, stat
 
+_FFMPEG_CACHE: pathlib.Path | None = None
+
 
 def _meipass_dir() -> pathlib.Path | None:
 	if hasattr(sys, "_MEIPASS"):
@@ -61,46 +63,65 @@ def platform_key() -> str:
 		return "windows"
 	raise RuntimeError(f"Unsupported platform: {p}")
 
-def ffmpeg_packaged_path() -> pathlib.Path:
-	name = "ffmpeg.exe" if platform_key() == "windows" else "ffmpeg"
-	plat = platform_key()
-	base = resource_base()
-	exe_dir = pathlib.Path(sys.executable).resolve().parent
+def _ffmpeg_candidates(name: str, plat: str) -> list[pathlib.Path]:
+	cands: list[pathlib.Path] = []
+	roots: list[pathlib.Path] = []
+	try:
+		roots.append(resource_base())
+	except Exception:
+		pass
+	try:
+		exe_dir = pathlib.Path(sys.executable).resolve().parent
+		roots.append(exe_dir)
+		roots.append(exe_dir / "resources")
+		roots.append(exe_dir.parent)
+	except Exception:
+		pass
 	meipass = _meipass_dir()
-	search_roots = [base, exe_dir]
 	if meipass:
-		search_roots.extend([meipass, meipass / "resources"])
-	search_roots.extend([
-		exe_dir / "resources",
-		base.parent,
-	])
-
-	checked: set[pathlib.Path] = set()
-	for root in search_roots:
+		roots.append(meipass)
+		roots.append(meipass / "resources")
+	module_root = pathlib.Path(__file__).resolve().parents[2]
+	roots.append(module_root / "resources")
+	seen: set[pathlib.Path] = set()
+	for root in roots:
 		if not isinstance(root, pathlib.Path):
 			continue
-		if root in checked:
+		if root in seen:
 			continue
-		checked.add(root)
+		seen.add(root)
 		for rel in (
 			pathlib.Path("ffmpeg") / plat / name,
 			pathlib.Path("resources") / "ffmpeg" / plat / name,
 			pathlib.Path("ffmpeg") / name,
 			pathlib.Path(name),
 		):
-			candidate = root / rel
-			if candidate.exists():
-				return candidate
+			cands.append(root / rel)
+	try:
+		exe_path = pathlib.Path(sys.executable).resolve()
+		cands.append(exe_path.with_name(name))
+	except Exception:
+		pass
+	return cands
 
-	for root in checked:
-		try:
-			found = next(root.rglob(name))
-			if found.exists():
-				return found
-		except Exception:
-			continue
+def ffmpeg_packaged_path() -> pathlib.Path:
+	global _FFMPEG_CACHE
+	if _FFMPEG_CACHE and _FFMPEG_CACHE.exists():
+		return _FFMPEG_CACHE
+	plat = platform_key()
+	name = "ffmpeg.exe" if plat == "windows" else "ffmpeg"
+	for candidate in _ffmpeg_candidates(name, plat):
+		if candidate.exists():
+			_FFMPEG_CACHE = candidate
+			return candidate
+		parent = candidate.parent
+		if parent.name.lower() == plat and parent.parent.exists():
+			alt = parent.parent / name
+			if alt.exists():
+				_FFMPEG_CACHE = alt
+				return alt
+	return resource_base() / "ffmpeg" / plat / name
 
-	return base / "ffmpeg" / plat / name
 
 def ensure_executable(p: pathlib.Path) -> None:
 	try:

@@ -439,11 +439,14 @@ class MainWindow(QMainWindow):
 		return val or None
 
 	def _persist_settings(self) -> None:
+		def _norm(text: str) -> str | None:
+			value = text.strip()
+			return value or None
 		cfg = {
-			"csv_path": self.ed_csv.text().strip(),
-			"output_dir": self.ed_out.text().strip(),
-			"yt_dlp_path": self.ed_ytdlp.text().strip(),
-			"ffmpeg_path": self.ed_ffmpeg.text().strip(),
+			"csv_path": _norm(self.ed_csv.text()),
+			"output_dir": _norm(self.ed_out.text()),
+			"yt_dlp_path": _norm(self.ed_ytdlp.text()),
+			"ffmpeg_path": _norm(self.ed_ffmpeg.text()),
 			"skip_network_check": self.cb_skip_network.isChecked(),
 		}
 		save_settings(cfg)
