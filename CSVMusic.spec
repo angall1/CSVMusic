@@ -3,43 +3,45 @@ from PyInstaller.utils.hooks import collect_all
 import sys, pathlib
 
 try:
-	root_dir = pathlib.Path(__file__).resolve().parent
+    root_dir = pathlib.Path(__file__).resolve().parent
 except NameError:
-	root_dir = pathlib.Path.cwd()
+    root_dir = pathlib.Path.cwd()
+
+def _posix(path: pathlib.Path) -> str:
+    return path.resolve().as_posix()
+
+def add_dir(path_obj: pathlib.Path, target: str, container: list[tuple[str, str]]) -> None:
+    if path_obj.exists():
+        container.append((_posix(path_obj), target))
 
 datas: list[tuple[str, str]] = []
 binaries: list[tuple[str, str]] = []
 hiddenimports = []
 
-
-def add_dir(path_obj: pathlib.Path, target: str, container: list[tuple[str, str]]) -> None:
-	if path_obj.exists():
-		container.append((str(path_obj), target))
-
-
 add_dir(root_dir / "resources", "resources", datas)
 add_dir(root_dir / "licenses", "licenses", datas)
 
 ffmpeg_map = {
-	"win": (root_dir / "resources" / "ffmpeg" / "windows" / "ffmpeg.exe", "ffmpeg/windows"),
-	"darwin": (root_dir / "resources" / "ffmpeg" / "darwin" / "ffmpeg", "ffmpeg/darwin"),
-	"linux": (root_dir / "resources" / "ffmpeg" / "linux" / "ffmpeg", "ffmpeg/linux"),
+    "win": (root_dir / "resources" / "ffmpeg" / "windows" / "ffmpeg.exe", "ffmpeg/windows"),
+    "darwin": (root_dir / "resources" / "ffmpeg" / "darwin" / "ffmpeg", "ffmpeg/darwin"),
+    "linux": (root_dir / "resources" / "ffmpeg" / "linux" / "ffmpeg", "ffmpeg/linux"),
 }
 for key, (src, dest) in ffmpeg_map.items():
-	if sys.platform.startswith(key) and src.exists():
-		binaries.append((str(src), dest))
-		break
+    if sys.platform.startswith(key) and src.exists():
+        binaries.append((_posix(src), dest))
+        break
 
 for pkg in ("PySide6", "shiboken6", "yt_dlp", "ytmusicapi", "mutagen"):
-	tmp = collect_all(pkg)
-	datas += tmp[0]
-	binaries += tmp[1]
-	hiddenimports += tmp[2]
+    tmp_datas, tmp_bins, tmp_hidden = collect_all(pkg)
+    for entry, target in tmp_datas:
+        datas.append((_posix(pathlib.Path(entry)), target))
+    for entry, target in tmp_bins:
+        binaries.append((_posix(pathlib.Path(entry)), target))
+    hiddenimports += tmp_hidden
 
-pathex = [(root_dir).as_posix()]
+pathex = [_posix(root_dir)]
 
-script_path = (root_dir / "csvmusic" / "app.py").resolve()
-script = script_path.as_posix()
+script = _posix(root_dir / "csvmusic" / "app.py")
 
 a = Analysis(
     [script],
@@ -56,12 +58,10 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-icon_path = (root_dir / "resources" / "app.ico").resolve()
-icon_arg = icon_path.as_posix() if icon_path.exists() else None
-
+icon_path = root_dir / "resources" / "app.ico"
 exe_kwargs = {}
-if icon_arg:
-	exe_kwargs["icon"] = icon_arg
+if icon_path.exists():
+    exe_kwargs["icon"] = _posix(icon_path)
 
 exe = EXE(
     pyz,
