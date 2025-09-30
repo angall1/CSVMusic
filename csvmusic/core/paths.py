@@ -1,5 +1,19 @@
 # tabs only
 import os, sys, shutil, pathlib, stat
+from typing import Iterable
+
+try:
+	from csvmusic.core.log import log as _log
+except Exception:
+	def _log(msg: str) -> None:
+		pass
+
+
+def _debug(msg: str) -> None:
+	try:
+		_log(msg)
+	except Exception:
+		pass
 
 _FFMPEG_CACHE: pathlib.Path | None = None
 
@@ -63,7 +77,7 @@ def platform_key() -> str:
 		return "windows"
 	raise RuntimeError(f"Unsupported platform: {p}")
 
-def _dedup(paths: list[pathlib.Path]) -> list[pathlib.Path]:
+def _dedup(paths: Iterable[pathlib.Path]) -> list[pathlib.Path]:
 	seen: set[pathlib.Path] = set()
 	result: list[pathlib.Path] = []
 	for path in paths:
@@ -111,7 +125,9 @@ def _ffmpeg_candidates(name: str, plat: str) -> list[pathlib.Path]:
 		paths.append(exe_path.with_name(name))
 	except Exception:
 		pass
-	return _dedup(paths)
+	unique = _dedup(paths)
+	_debug(f"ffmpeg search candidates: {unique}")
+	return unique
 
 def ffmpeg_packaged_path() -> pathlib.Path:
 	global _FFMPEG_CACHE
@@ -119,14 +135,17 @@ def ffmpeg_packaged_path() -> pathlib.Path:
 		return _FFMPEG_CACHE
 	plat = platform_key()
 	name = "ffmpeg.exe" if plat == "windows" else "ffmpeg"
+	_debug(f"Resolving ffmpeg for platform={plat}")
 	for candidate in _ffmpeg_candidates(name, plat):
 		if candidate.exists():
+			_debug(f"ffmpeg found at {candidate}")
 			_FFMPEG_CACHE = candidate
 			return candidate
 		parent = candidate.parent
 		if parent.name.lower() == plat and parent.parent.exists():
 			alt = parent.parent / name
 			if alt.exists():
+				_debug(f"ffmpeg found via parent fallback at {alt}")
 				_FFMPEG_CACHE = alt
 				return alt
 	fallbacks: list[pathlib.Path] = []
@@ -142,13 +161,22 @@ def ffmpeg_packaged_path() -> pathlib.Path:
 	except Exception:
 		pass
 	fallbacks.append(pathlib.Path(name))
+	_debug(f"ffmpeg fallback candidates: {fallbacks}")
 	for fb in _dedup(fallbacks):
 		if fb.exists():
+			_debug(f"ffmpeg found via fallback at {fb}")
 			_FFMPEG_CACHE = fb
 			return fb
+	which = shutil.which(name)
+	if which:
+		_debug(f"ffmpeg found via PATH at {which}")
+		_FFMPEG_CACHE = pathlib.Path(which)
+		return _FFMPEG_CACHE
 	if fallbacks:
+		_debug(f"ffmpeg not found; returning first fallback {fallbacks[0]}")
 		_FFMPEG_CACHE = fallbacks[0]
 		return fallbacks[0]
+	_debug("ffmpeg not found anywhere; raising runtime error")
 	raise RuntimeError("ffmpeg binary not found (packaged or system).")
 
 
