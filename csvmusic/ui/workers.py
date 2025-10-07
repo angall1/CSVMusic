@@ -1,10 +1,13 @@
 # tabs only
 from PySide6.QtCore import QObject, Signal, QThread
 import pathlib, traceback, time
-from typing import Optional, List, Dict, Set
+from typing import List, Dict
+
+from ytmusicapi import YTMusic
 
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
-from csvmusic.core.ytmusic_match import batch_match
+from csvmusic.core.log import log
+from csvmusic.core.ytmusic_match import find_best, RATE_LIMIT_S
 from csvmusic.core.downloader import (
 	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name
 )
@@ -51,10 +54,13 @@ class PipelineWorker(QThread):
 			total = len(tracks)
 			self.sig_total.emit(total)
 			self.sig_log.emit("[match] searching on YouTube Music…")
-			results = batch_match(tracks)
-			matched = sum(1 for r in results if not r.get("skipped"))
-			skipped_initial = total - matched
-			self.sig_match_stats.emit(matched, skipped_initial)
+			matched = 0
+			skipped_count = 0
+			self.sig_match_stats.emit(matched, skipped_count)
+			try:
+				yt = YTMusic()
+			except Exception as exc:
+				raise RuntimeError(f"Failed to initialize YTMusic client: {exc}")
 			playlist_name = self.playlist or (tracks[0]["playlist"] if tracks else "Playlist")
 			if not playlist_name:
 				playlist_name = "Playlist"
@@ -63,34 +69,57 @@ class PipelineWorker(QThread):
 			dest_dir.mkdir(parents=True, exist_ok=True)
 			done_tracks: List[Dict] = []
 			failed_tracks: List[Dict] = []
+			skipped_tracks: List[Dict] = []
 			processed = 0
-			for idx, r in enumerate(results):
+			for idx, track in enumerate(tracks):
 				if self._stop:
 					break
-				t = r["track"]
+				t = track
 				title = t["title"]
 				artists = t["artists"]
-				options = r.get("options") or []
+				search_error = None
+				options: List[Dict] = []
+				match = None
+				confidence = 0.0
+				try:
+					match, confidence, options = find_best(yt, t)
+				except Exception as exc:
+					search_error = str(exc)
 				payload = {
 					"track": t,
 					"options": options,
-					"match": r.get("match"),
-					"confidence": r.get("confidence", 0.0),
-					"skipped": bool(r.get("skipped")),
-					"error": r.get("error"),
+					"match": match,
+					"confidence": confidence,
+					"skipped": False,
+					"error": None,
 					"playlist_name": playlist_name,
 					"file_path": None,
 					"downloaded": False
 				}
 
-				if r.get("skipped"):
+				if match is None:
+					if search_error:
+						log(f"match skip: query='{t['title']} {t['artists']}' error={search_error}")
+					else:
+						log(f"match skip: query='{t['title']} {t['artists']}' no candidate >= threshold (confidence={confidence:.2f})")
+					payload["skipped"] = True
+					payload["error"] = search_error
+					reason = search_error or "No confident match"
+					skipped_tracks.append({"track": t, "reason": reason, "options": options})
 					self.sig_row_status.emit(idx, "Skipped (no good match)")
 					processed += 1
 					self.sig_progress.emit(processed, total)
 					self.sig_track_result.emit(idx, payload)
+					skipped_count += 1
+					self.sig_match_stats.emit(matched, skipped_count)
+					if not self._stop and idx < total - 1:
+						time.sleep(RATE_LIMIT_S)
 					continue
 
-				vid = r["match"]["videoId"]
+				payload["match"] = match
+				matched += 1
+				self.sig_match_stats.emit(matched, skipped_count)
+				vid = match["videoId"]
 				self.sig_row_status.emit(idx, f"Downloading ({self.fmt})…")
 				error_msg = None
 
@@ -107,6 +136,7 @@ class PipelineWorker(QThread):
 					done_tracks.append(t)
 				except Exception as e:
 					err = str(e)
+					log(f"download failure: playlist='{playlist_name}' track='{artists} — {title}' fmt={self.fmt} error={err}")
 					self.sig_row_status.emit(idx, f"Fail: {err[:120]}")
 					failed_tracks.append({"track": t, "error": err})
 					error_msg = err
@@ -119,6 +149,8 @@ class PipelineWorker(QThread):
 					payload["downloaded"] = True
 					payload["file_path"] = str(fp)
 				self.sig_track_result.emit(idx, payload)
+				if not self._stop and idx < total - 1:
+					time.sleep(RATE_LIMIT_S)
 				time.sleep(0.02)
 			if done_tracks:
 				ext = "m4a" if self.fmt == "m4a" else "mp3"
@@ -128,12 +160,6 @@ class PipelineWorker(QThread):
 				if self.write_m3u_plain:
 					m3u_plain = write_m3u(self.out_dir, playlist_name, done_tracks, ext, suffix=".m3u", encoding="cp1252")
 					self.sig_log.emit(f"[m3u] wrote: {m3u_plain}")
-			skipped_tracks = []
-			for r in results:
-				if r.get("skipped"):
-					reason = r.get("error") or "No confident match"
-					entry = {"track": r["track"], "reason": reason, "options": r.get("options", [])}
-					skipped_tracks.append(entry)
 			msg = "All tasks finished."
 			if self._stop:
 				msg = "Stopped (partial results saved)."
@@ -191,6 +217,7 @@ class SingleDownloadWorker(QThread):
 			self.sig_finished.emit(self.row_idx, payload)
 		except Exception as e:
 			err = str(e)
+			log(f"manual download failure: playlist='{self.playlist_name}' track='{self.track.get('artists','')} — {self.track.get('title','')}' fmt={self.fmt} error={err}")
 			self.sig_status.emit(self.row_idx, f"Fail: {err[:120]}")
 			payload = {
 				"track": self.track,

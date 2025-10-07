@@ -6,8 +6,11 @@ from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4, MP4Cover
 from csvmusic.core.paths import ffmpeg_path
+from csvmusic.core.log import log
 
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
+YT_URL = "https://www.youtube.com/watch?v={vid}"
+YOUTUBE_CLIENTS: list[str] = ["ios", "tv_embedded", "webremix"]
 
 class DownloadError(Exception): pass
 
@@ -26,8 +29,13 @@ def _run(cmd: list[str]) -> int:
 		cmd,
 		stdout=subprocess.PIPE,
 		stderr=subprocess.PIPE,
+		text=True,
 		**_hidden_subprocess_kwargs()
 	)
+	if proc.returncode != 0:
+		err = (proc.stderr or "").strip()
+		out = (proc.stdout or "").strip()
+		log(f"yt-dlp command failed rc={proc.returncode} cmd={' '.join(cmd)} stderr={err[:500]} stdout={out[:200]}")
 	return proc.returncode
 
 def sanitize_name(name: str) -> str:
@@ -92,6 +100,11 @@ def tag_file(path: pathlib.Path, meta: Dict, cover_bytes: Optional[bytes]) -> No
 			mp4["covr"] = [MP4Cover(cover_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
 		mp4.save()
 
+
+def _extractor_args(client: str) -> list[str]:
+	return ["--extractor-args", f"youtube:player_client={client}"]
+
+
 def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None) -> pathlib.Path:
 	"""
 	YT Music only. Save using a sanitized stem so our search matches what yt-dlp writes.
@@ -106,7 +119,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	out_tpl = str(dst_dir / (safe_base + ".%(ext)s"))
 	_cleanup_outputs(dst_dir, safe_base)
 	yt_bin = yt_dlp_bin or "yt-dlp"
-	cmd = [
+	primary_base = [
 		yt_bin,
 		"-f", "ba[ext=m4a]/bestaudio[ext=m4a]/bestaudio",
 		"--no-playlist",
@@ -114,26 +127,48 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		"--retries", "5",
 		"--fragment-retries", "5",
 		"--socket-timeout", "30",
-		"-o", out_tpl,
-		YTM_URL.format(vid=video_id),
 	]
-	code = _run(cmd)
-	if code != 0:
-		# retry once without ext filters + use FFMPEG to convert
-		cmd_fallback = [
-			yt_bin,
-			"-f", "bestaudio",
-			"--no-continue",
-			"--no-playlist",
-			"--force-overwrites",
-			"--retries", "5",
-			"--fragment-retries", "5",
-			"--socket-timeout", "30",
-			"-o", out_tpl,
-			YTM_URL.format(vid=video_id),
-		]
-		if _run(cmd_fallback) != 0:
-			raise DownloadError("yt-dlp failed for m4a")
+	fallback_base = [
+		yt_bin,
+		"-f", "bestaudio",
+		"--no-continue",
+		"--no-playlist",
+		"--force-overwrites",
+		"--retries", "5",
+		"--fragment-retries", "5",
+		"--socket-timeout", "30",
+	]
+	success = False
+	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
+		for client in YOUTUBE_CLIENTS:
+			extractor_args = _extractor_args(client)
+			cmd_primary = primary_base + extractor_args + ["-o", out_tpl, base_url]
+			if _run(cmd_primary) == 0:
+				success = True
+				log(f"download_m4a: primary succeeded video_id={video_id} client={client} url={base_url}")
+				break
+			log(f"download_m4a: primary failed video_id={video_id} client={client} url={base_url}")
+			cmd_fallback = fallback_base + extractor_args + ["-o", out_tpl, base_url]
+			if _run(cmd_fallback) == 0:
+				success = True
+				log(f"download_m4a: fallback succeeded video_id={video_id} client={client} url={base_url}")
+				break
+			log(f"download_m4a: fallback failed video_id={video_id} client={client} url={base_url}")
+		if success:
+			break
+	if not success:
+		search_url = f"ytsearch1:{base_name}"
+		for client in YOUTUBE_CLIENTS:
+			extractor_args = _extractor_args(client)
+			cmd_search = primary_base + extractor_args + ["-o", out_tpl, search_url]
+			if _run(cmd_search) == 0:
+				success = True
+				log(f"download_m4a: search fallback succeeded query='{base_name}' client={client}")
+				break
+			log(f"download_m4a: search fallback failed query='{base_name}' client={client}")
+	if not success:
+		log(f"download_m4a: all extractor clients failed video_id={video_id} base='{base_name}'")
+		raise DownloadError("yt-dlp failed for m4a")
 
 	# What got written?
 	cands = _list_downloads(dst_dir, safe_base)
@@ -162,6 +197,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	try: src.unlink()
 	except Exception: pass
 	if rc != 0 or not dst.exists():
+		log(f"download_m4a: ffmpeg conversion failed video_id={video_id} src='{src.name}' dst='{dst.name}' rc={rc}")
 		raise DownloadError("failed to produce .m4a (remux and transcode failed)")
 	return dst
 
@@ -174,7 +210,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		except Exception: pass
 	_cleanup_outputs(dst_dir, safe_base)
 	yt_bin = yt_dlp_bin or "yt-dlp"
-	cmd = [
+	cmd_base = [
 		yt_bin,
 		"-f", "bestaudio",
 		"--no-playlist",
@@ -182,11 +218,31 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		"--retries", "5",
 		"--fragment-retries", "5",
 		"--socket-timeout", "30",
-		"-o", str(tmp),
-		YTM_URL.format(vid=video_id),
 	]
-	code = _run(cmd)
-	if code != 0:
+	success = False
+	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
+		for client in YOUTUBE_CLIENTS:
+			extractor_args = _extractor_args(client)
+			cmd = cmd_base + extractor_args + ["-o", str(tmp), base_url]
+			if _run(cmd) == 0:
+				success = True
+				log(f"download_mp3: yt-dlp succeeded video_id={video_id} client={client} url={base_url}")
+				break
+			log(f"download_mp3: yt-dlp attempt failed video_id={video_id} client={client} url={base_url}")
+		if success:
+			break
+	if not success:
+		search_url = f"ytsearch1:{base_name}"
+		for client in YOUTUBE_CLIENTS:
+			extractor_args = _extractor_args(client)
+			cmd = cmd_base + extractor_args + ["-o", str(tmp), search_url]
+			if _run(cmd) == 0:
+				success = True
+				log(f"download_mp3: search fallback succeeded query='{base_name}' client={client}")
+				break
+			log(f"download_mp3: search fallback failed query='{base_name}' client={client}")
+	if not success:
+		log(f"download_mp3: yt-dlp initial fetch failed video_id={video_id} base='{base_name}'")
 		raise DownloadError("yt-dlp failed for mp3 temp")
 
 	# yt-dlp may append extension to .tmp; find it
@@ -211,6 +267,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	try: src.unlink()
 	except Exception: pass
 	if rc != 0 or not dst.exists():
+		log(f"download_mp3: ffmpeg transcode failed video_id={video_id} dst='{dst.name}' rc={rc}")
 		raise DownloadError("ffmpeg mp3 transcode failed")
 	return dst
 
