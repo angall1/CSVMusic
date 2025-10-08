@@ -105,7 +105,7 @@ def _extractor_args(client: str) -> list[str]:
 	return ["--extractor-args", f"youtube:player_client={client}"]
 
 
-def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None) -> pathlib.Path:
+def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
 	"""
 	YT Music only. Save using a sanitized stem so our search matches what yt-dlp writes.
 	- If output is already .m4a → done.
@@ -119,6 +119,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	out_tpl = str(dst_dir / (safe_base + ".%(ext)s"))
 	_cleanup_outputs(dst_dir, safe_base)
 	yt_bin = yt_dlp_bin or "yt-dlp"
+	cookies_args: list[str] = list(extra_yt_dlp_args or [])
 	primary_base = [
 		yt_bin,
 		"-f", "ba[ext=m4a]/bestaudio[ext=m4a]/bestaudio",
@@ -142,13 +143,13 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
-			cmd_primary = primary_base + extractor_args + ["-o", out_tpl, base_url]
+			cmd_primary = primary_base + extractor_args + cookies_args + ["-o", out_tpl, base_url]
 			if _run(cmd_primary) == 0:
 				success = True
 				log(f"download_m4a: primary succeeded video_id={video_id} client={client} url={base_url}")
 				break
 			log(f"download_m4a: primary failed video_id={video_id} client={client} url={base_url}")
-			cmd_fallback = fallback_base + extractor_args + ["-o", out_tpl, base_url]
+			cmd_fallback = fallback_base + extractor_args + cookies_args + ["-o", out_tpl, base_url]
 			if _run(cmd_fallback) == 0:
 				success = True
 				log(f"download_m4a: fallback succeeded video_id={video_id} client={client} url={base_url}")
@@ -160,7 +161,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		search_url = f"ytsearch1:{base_name}"
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
-			cmd_search = primary_base + extractor_args + ["-o", out_tpl, search_url]
+			cmd_search = primary_base + extractor_args + cookies_args + ["-o", out_tpl, search_url]
 			if _run(cmd_search) == 0:
 				success = True
 				log(f"download_m4a: search fallback succeeded query='{base_name}' client={client}")
@@ -201,7 +202,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		raise DownloadError("failed to produce .m4a (remux and transcode failed)")
 	return dst
 
-def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None) -> pathlib.Path:
+def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
 	dst_dir.mkdir(parents=True, exist_ok=True)
 	safe_base = _safe(base_name)
 	tmp = dst_dir / (safe_base + ".tmp")
@@ -210,6 +211,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		except Exception: pass
 	_cleanup_outputs(dst_dir, safe_base)
 	yt_bin = yt_dlp_bin or "yt-dlp"
+	cookies_args: list[str] = list(extra_yt_dlp_args or [])
 	cmd_base = [
 		yt_bin,
 		"-f", "bestaudio",
@@ -223,7 +225,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
-			cmd = cmd_base + extractor_args + ["-o", str(tmp), base_url]
+			cmd = cmd_base + extractor_args + cookies_args + ["-o", str(tmp), base_url]
 			if _run(cmd) == 0:
 				success = True
 				log(f"download_mp3: yt-dlp succeeded video_id={video_id} client={client} url={base_url}")
@@ -235,7 +237,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		search_url = f"ytsearch1:{base_name}"
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
-			cmd = cmd_base + extractor_args + ["-o", str(tmp), search_url]
+			cmd = cmd_base + extractor_args + cookies_args + ["-o", str(tmp), search_url]
 			if _run(cmd) == 0:
 				success = True
 				log(f"download_mp3: search fallback succeeded query='{base_name}' client={client}")

@@ -27,6 +27,7 @@ class PipelineWorker(QThread):
 	             embed_art: bool,
 	             yt_dlp_path: str | None,
 	             ffmpeg_path_override: str | None,
+	             cookies_browser: str | None,
 	             parent: QObject | None = None):
 		super().__init__(parent)
 		self.csv_path = csv_path
@@ -38,6 +39,7 @@ class PipelineWorker(QThread):
 		self.embed_art = embed_art
 		self.yt_dlp_path = yt_dlp_path
 		self.ffmpeg_path_override = ffmpeg_path_override
+		self.cookies_browser = cookies_browser
 		self._stop = False
 
 	def stop(self):
@@ -125,10 +127,11 @@ class PipelineWorker(QThread):
 
 				try:
 					base = f"{artists} - {title}"
+					cookies_args = ["--cookies-from-browser", self.cookies_browser] if self.cookies_browser else None
 					if self.fmt == "m4a":
-						fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override)
+						fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
 					else:
-						fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override)
+						fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
 					self.sig_row_status.emit(idx, "Tagging…")
 					cover = yt_thumbnail_bytes(vid) if self.embed_art else None
 					tag_file(fp, t, cover)
@@ -177,6 +180,7 @@ class SingleDownloadWorker(QThread):
 	             fmt: str, embed_art: bool,
 	             yt_dlp_path: str | None,
 	             ffmpeg_path_override: str | None,
+	             cookies_browser: str | None,
 	             parent: QObject | None = None):
 		super().__init__(parent)
 		self.row_idx = row_idx
@@ -188,6 +192,7 @@ class SingleDownloadWorker(QThread):
 		self.playlist_name = track.get("playlist") or "Playlist"
 		self.yt_dlp_path = yt_dlp_path
 		self.ffmpeg_path_override = ffmpeg_path_override
+		self.cookies_browser = cookies_browser
 
 	def run(self):
 		try:
@@ -198,10 +203,11 @@ class SingleDownloadWorker(QThread):
 			base = f"{self.track.get('artists','')} - {self.track.get('title','')}"
 			vid = self.match.get("videoId")
 			self.sig_status.emit(self.row_idx, f"Downloading ({self.fmt})…")
+			cookies_args = ["--cookies-from-browser", self.cookies_browser] if self.cookies_browser else None
 			if self.fmt == "m4a":
-				fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override)
+				fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
 			else:
-				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override)
+				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
 			self.sig_status.emit(self.row_idx, "Tagging…")
 			cover = yt_thumbnail_bytes(vid) if self.embed_art else None
 			tag_file(fp, self.track, cover)

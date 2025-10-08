@@ -253,6 +253,19 @@ class MainWindow(QMainWindow):
 		row_ffmpeg.addWidget(btn_ffmpeg)
 		row_ffmpeg.addWidget(btn_ffmpeg_clear)
 		adv_layout.addLayout(row_ffmpeg)
+		# Cookies-from-browser (optional)
+		row_cookies = QHBoxLayout()
+		lbl_cookies = QLabel("Use browser cookies:")
+		lbl_cookies.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.combo_cookies = QComboBox()
+		self.combo_cookies.setEditable(False)
+		self.combo_cookies.addItem("Disabled", "")
+		for b in ("edge", "chrome", "firefox", "brave", "opera", "vivaldi"):
+			self.combo_cookies.addItem(b.capitalize(), b)
+		self.combo_cookies.currentIndexChanged.connect(lambda _=None: self._persist_settings())
+		row_cookies.addWidget(lbl_cookies)
+		row_cookies.addWidget(self.combo_cookies, 1)
+		adv_layout.addLayout(row_cookies)
 		self.cb_skip_network = QCheckBox("Skip network connectivity check during preflight")
 		self.cb_skip_network.setFont(QFont(retro_font_family, default_pt + 1))
 		self.cb_skip_network.stateChanged.connect(lambda _=None: self._persist_settings())
@@ -441,6 +454,12 @@ class MainWindow(QMainWindow):
 		val = self.ed_ffmpeg.text().strip()
 		return val or None
 
+	def _cookies_browser(self) -> str | None:
+		data = self.combo_cookies.currentData()
+		if isinstance(data, str) and data.strip():
+			return data.strip()
+		return None
+
 	def _persist_settings(self, *, include_paths: bool = False) -> None:
 		def _norm(text: str) -> str | None:
 			value = text.strip()
@@ -449,6 +468,7 @@ class MainWindow(QMainWindow):
 			"yt_dlp_path": _norm(self.ed_ytdlp.text()),
 			"ffmpeg_path": _norm(self.ed_ffmpeg.text()),
 			"skip_network_check": self.cb_skip_network.isChecked(),
+			"cookies_browser": self._cookies_browser(),
 		}
 		if include_paths:
 			cfg["csv_path"] = _norm(self.ed_csv.text())
@@ -485,6 +505,14 @@ class MainWindow(QMainWindow):
 		blocker_skip = QSignalBlocker(self.cb_skip_network)
 		self.cb_skip_network.setChecked(skip_net)
 		del blocker_skip
+		stored_browser = str(cfg.get("cookies_browser") or "")
+		if stored_browser:
+			for i in range(self.combo_cookies.count()):
+				if self.combo_cookies.itemData(i) == stored_browser:
+					self.combo_cookies.setCurrentIndex(i)
+					break
+		else:
+			self.combo_cookies.setCurrentIndex(0)
 		self.btn_clear.setEnabled(bool(self.ed_csv.text().strip() or self.ed_out.text().strip()))
 
 	def on_start(self):
@@ -553,6 +581,7 @@ class MainWindow(QMainWindow):
 		want_m3u8 = self.cb_m3u8.isChecked()
 		want_m3u_plain = self.cb_m3u_plain.isChecked()
 		embed_art = self.cb_album_art.isChecked()
+		cookies_browser = self._cookies_browser()
 
 		self.btn_start.setEnabled(False)
 		self.btn_stop.setEnabled(True)
@@ -560,7 +589,7 @@ class MainWindow(QMainWindow):
 		self.lbl_log.setText("Starting…")
 
 		# playlist=None → worker picks a default name internally
-		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, yt_override, ff_override, self)
+		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, yt_override, ff_override, cookies_browser, self)
 		self.worker.sig_log.connect(self.lbl_log.setText)
 		self.worker.sig_total.connect(lambda n: self.lbl_log.setText(f"Queued {n} tracks…"))
 		self.worker.sig_match_stats.connect(lambda m, s: self.lbl_log.setText(f"Matched: {m} | Skipped: {s}"))
@@ -809,6 +838,7 @@ class MainWindow(QMainWindow):
 			self.cb_album_art.isChecked(),
 			self._yt_dlp_override(),
 			self._ffmpeg_override(),
+			self._cookies_browser(),
 			self
 		)
 		record["worker"] = worker
