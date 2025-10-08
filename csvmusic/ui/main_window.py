@@ -17,6 +17,7 @@ from csvmusic.core.downloader import sanitize_name
 from csvmusic.core.preflight import run_preflight_checks
 from csvmusic.core.paths import app_icon_path, resource_base
 from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker
+from csvmusic.core.browsers import list_profiles, list_available_browsers
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
 RED = QColor(255, 205, 210)      # soft red
@@ -260,12 +261,26 @@ class MainWindow(QMainWindow):
 		self.combo_cookies = QComboBox()
 		self.combo_cookies.setEditable(False)
 		self.combo_cookies.addItem("Disabled", "")
-		for b in ("edge", "chrome", "firefox", "brave", "opera", "vivaldi"):
+		for b in list_available_browsers():
 			self.combo_cookies.addItem(b.capitalize(), b)
-		self.combo_cookies.currentIndexChanged.connect(lambda _=None: self._persist_settings())
+		self.combo_cookies.currentIndexChanged.connect(self.on_cookies_browser_changed)
 		row_cookies.addWidget(lbl_cookies)
 		row_cookies.addWidget(self.combo_cookies, 1)
 		adv_layout.addLayout(row_cookies)
+		# Browser profile (appears after a browser is selected)
+		self.profile_panel = QFrame()
+		self.profile_panel.setFrameShape(QFrame.NoFrame)
+		self.profile_panel.setVisible(False)
+		row_prof = QHBoxLayout(self.profile_panel)
+		row_prof.setContentsMargins(0, 0, 0, 0)
+		lbl_profile = QLabel("Profile:")
+		lbl_profile.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.combo_profile = QComboBox()
+		self.combo_profile.setEditable(False)
+		self.combo_profile.currentIndexChanged.connect(lambda _=None: self._persist_settings())
+		row_prof.addWidget(lbl_profile)
+		row_prof.addWidget(self.combo_profile, 1)
+		adv_layout.addWidget(self.profile_panel)
 		self.cb_skip_network = QCheckBox("Skip network connectivity check during preflight")
 		self.cb_skip_network.setFont(QFont(retro_font_family, default_pt + 1))
 		self.cb_skip_network.stateChanged.connect(lambda _=None: self._persist_settings())
@@ -455,10 +470,43 @@ class MainWindow(QMainWindow):
 		return val or None
 
 	def _cookies_browser(self) -> str | None:
-		data = self.combo_cookies.currentData()
-		if isinstance(data, str) and data.strip():
-			return data.strip()
-		return None
+		b = self.combo_cookies.currentData()
+		if not isinstance(b, str) or not b.strip():
+			return None
+		browser = b.strip()
+		# Combine with selected profile if present
+		if self.profile_panel.isVisible() and self.combo_profile.count() > 0:
+			p = self.combo_profile.currentData()
+			if isinstance(p, str) and p.strip():
+				return f"{browser}:{p.strip()}"
+		return browser
+
+	def _refresh_profiles(self, *, stored_profile: str | None = None) -> None:
+		# Populate profile list for the selected browser
+		b = self.combo_cookies.currentData()
+		self.combo_profile.clear()
+		if not isinstance(b, str) or not b:
+			self.profile_panel.setVisible(False)
+			return
+		profiles = list_profiles(b)
+		if not profiles:
+			# Still show a simple Default choice; many browsers use it
+			self.combo_profile.addItem("Default", "Default")
+		else:
+			for p in profiles:
+				self.combo_profile.addItem(p, p)
+		self.profile_panel.setVisible(True)
+		# Restore selection if available
+		if stored_profile:
+			for i in range(self.combo_profile.count()):
+				if self.combo_profile.itemData(i) == stored_profile:
+					self.combo_profile.setCurrentIndex(i)
+					break
+
+	def on_cookies_browser_changed(self) -> None:
+		# Toggle and populate profiles based on browser choice
+		self._refresh_profiles()
+		self._persist_settings()
 
 	def _persist_settings(self, *, include_paths: bool = False) -> None:
 		def _norm(text: str) -> str | None:
@@ -507,9 +555,18 @@ class MainWindow(QMainWindow):
 		del blocker_skip
 		stored_browser = str(cfg.get("cookies_browser") or "")
 		if stored_browser:
+			# Support optional profile: "browser[:profile]"
+			parts = stored_browser.split(":", 1)
+			sb = parts[0].strip()
+			sp = parts[1].strip() if len(parts) == 2 else None
+			# Set browser selection
 			for i in range(self.combo_cookies.count()):
-				if self.combo_cookies.itemData(i) == stored_browser:
+				if self.combo_cookies.itemData(i) == sb:
+					block_b = QSignalBlocker(self.combo_cookies)
 					self.combo_cookies.setCurrentIndex(i)
+					del block_b
+					# Populate profiles and set stored
+					self._refresh_profiles(stored_profile=sp)
 					break
 		else:
 			self.combo_cookies.setCurrentIndex(0)
