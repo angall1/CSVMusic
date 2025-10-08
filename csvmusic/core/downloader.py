@@ -5,7 +5,7 @@ import re, sys
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4, MP4Cover
-from csvmusic.core.paths import ffmpeg_path
+from csvmusic.core.paths import ffmpeg_path, ytdlp_path
 from csvmusic.core.log import log
 
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
@@ -36,6 +36,60 @@ def _run(cmd: list[str]) -> int:
 		err = (proc.stderr or "").strip()
 		out = (proc.stdout or "").strip()
 		log(f"yt-dlp command failed rc={proc.returncode} cmd={' '.join(cmd)} stderr={err[:500]} stdout={out[:200]}")
+	return proc.returncode
+
+def _strip_cookie_args(cmd: list[str]) -> list[str]:
+	new: list[str] = []
+	skip_next = False
+	for i, tok in enumerate(cmd):
+		if skip_next:
+			skip_next = False
+			continue
+		if tok == "--cookies-from-browser":
+			skip_next = True
+			continue
+		if tok.startswith("--cookies-from-browser="):
+			continue
+		new.append(tok)
+	return new
+
+def _run_ytdlp(cmd: list[str]) -> int:
+	"""
+	Run yt-dlp command. If it fails specifically due to browser cookie copy
+	issues (common when Chrome/Edge is running or profiles are locked), retry
+	once without the cookies flag so public videos can still be fetched.
+	"""
+	proc = subprocess.run(
+		cmd,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		text=True,
+		**_hidden_subprocess_kwargs()
+	)
+	if proc.returncode == 0:
+		return 0
+	stderr = (proc.stderr or "")
+	stdout = (proc.stdout or "")
+	log(f"yt-dlp command failed rc={proc.returncode} cmd={' '.join(cmd)} stderr={stderr[:500]} stdout={stdout[:200]}")
+	# Detect cookie DB copy failure and retry without cookies
+	if any(t.startswith("--cookies-from-browser") or t == "--cookies-from-browser" for t in cmd):
+		lower_err = stderr.lower()
+		if "could not copy" in lower_err and "cookie" in lower_err:
+			no_cookie_cmd = _strip_cookie_args(cmd)
+			log("yt-dlp retrying without browser cookies due to cookie DB copy error")
+			proc2 = subprocess.run(
+				no_cookie_cmd,
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE,
+				text=True,
+				**_hidden_subprocess_kwargs()
+			)
+			if proc2.returncode != 0:
+				stderr2 = (proc2.stderr or "")
+				stdout2 = (proc2.stdout or "")
+				log(f"yt-dlp retry (no-cookies) failed rc={proc2.returncode} cmd={' '.join(no_cookie_cmd)} stderr={stderr2[:500]} stdout={stdout2[:200]}")
+				return proc2.returncode
+			return 0
 	return proc.returncode
 
 def sanitize_name(name: str) -> str:
@@ -118,7 +172,8 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	# Force yt-dlp to use our sanitized basename
 	out_tpl = str(dst_dir / (safe_base + ".%(ext)s"))
 	_cleanup_outputs(dst_dir, safe_base)
-	yt_bin = yt_dlp_bin or "yt-dlp"
+	# Resolve yt-dlp automatically if not provided
+	yt_bin = yt_dlp_bin or ytdlp_path()
 	cookies_args: list[str] = list(extra_yt_dlp_args or [])
 	primary_base = [
 		yt_bin,
@@ -144,13 +199,13 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
 			cmd_primary = primary_base + extractor_args + cookies_args + ["-o", out_tpl, base_url]
-			if _run(cmd_primary) == 0:
+			if _run_ytdlp(cmd_primary) == 0:
 				success = True
 				log(f"download_m4a: primary succeeded video_id={video_id} client={client} url={base_url}")
 				break
 			log(f"download_m4a: primary failed video_id={video_id} client={client} url={base_url}")
 			cmd_fallback = fallback_base + extractor_args + cookies_args + ["-o", out_tpl, base_url]
-			if _run(cmd_fallback) == 0:
+			if _run_ytdlp(cmd_fallback) == 0:
 				success = True
 				log(f"download_m4a: fallback succeeded video_id={video_id} client={client} url={base_url}")
 				break
@@ -162,7 +217,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
 			cmd_search = primary_base + extractor_args + cookies_args + ["-o", out_tpl, search_url]
-			if _run(cmd_search) == 0:
+			if _run_ytdlp(cmd_search) == 0:
 				success = True
 				log(f"download_m4a: search fallback succeeded query='{base_name}' client={client}")
 				break
@@ -210,7 +265,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		try: tmp.unlink()
 		except Exception: pass
 	_cleanup_outputs(dst_dir, safe_base)
-	yt_bin = yt_dlp_bin or "yt-dlp"
+	yt_bin = yt_dlp_bin or ytdlp_path()
 	cookies_args: list[str] = list(extra_yt_dlp_args or [])
 	cmd_base = [
 		yt_bin,
@@ -226,7 +281,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
 			cmd = cmd_base + extractor_args + cookies_args + ["-o", str(tmp), base_url]
-			if _run(cmd) == 0:
+			if _run_ytdlp(cmd) == 0:
 				success = True
 				log(f"download_mp3: yt-dlp succeeded video_id={video_id} client={client} url={base_url}")
 				break
@@ -238,7 +293,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
 			cmd = cmd_base + extractor_args + cookies_args + ["-o", str(tmp), search_url]
-			if _run(cmd) == 0:
+			if _run_ytdlp(cmd) == 0:
 				success = True
 				log(f"download_mp3: search fallback succeeded query='{base_name}' client={client}")
 				break

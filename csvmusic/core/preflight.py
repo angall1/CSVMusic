@@ -7,7 +7,7 @@ import os
 
 import requests
 
-from csvmusic.core.paths import ffmpeg_path
+from csvmusic.core.paths import ffmpeg_path, ytdlp_path
 
 _WINDOWS = sys.platform.startswith("win")
 
@@ -34,17 +34,19 @@ def _valid_executable(path: pathlib.Path) -> bool:
 
 
 def _check_yt_dlp(errors: List[str], warnings: List[str], details: Dict[str, str], override: str | None = None) -> None:
-	bin_path = None
+	bin_path: str | None = None
 	if override:
 		over = pathlib.Path(override)
 		if _valid_executable(over):
 			bin_path = str(over)
 		else:
 			errors.append(f"yt-dlp override invalid: {override}")
+			return
 	if bin_path is None:
-		bin_path = shutil.which("yt-dlp")
-		if not bin_path:
-			errors.append("yt-dlp not found in PATH. Install it or configure the path in Advanced Settings.")
+		try:
+			bin_path = ytdlp_path()
+		except Exception as exc:
+			errors.append(str(exc))
 			return
 	try:
 		proc = subprocess.run(

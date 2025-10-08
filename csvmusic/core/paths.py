@@ -125,6 +125,24 @@ def _ffmpeg_candidates(name: str, plat: str) -> list[pathlib.Path]:
 		paths.append(exe_path.with_name(name))
 	except Exception:
 		pass
+	# Common Windows install locations (winget/choco/scoop or manual)
+	if plat == "windows":
+		program_files = os.environ.get("ProgramFiles")
+		program_files_x86 = os.environ.get("ProgramFiles(x86)") or os.environ.get("ProgramFilesX86")
+		home = pathlib.Path.home()
+		candidates = [
+			pathlib.Path("C:/ffmpeg/bin") / name,
+			pathlib.Path("C:/ffmpeg") / name,
+			pathlib.Path("C:/ProgramData/chocolatey/bin") / name,
+			(home / "scoop" / "apps" / "ffmpeg" / "current" / name),
+		]
+		if program_files:
+			candidates.append(pathlib.Path(program_files) / "ffmpeg" / "bin" / name)
+			candidates.append(pathlib.Path(program_files) / "FFmpeg" / "bin" / name)
+		if program_files_x86:
+			candidates.append(pathlib.Path(program_files_x86) / "ffmpeg" / "bin" / name)
+			candidates.append(pathlib.Path(program_files_x86) / "FFmpeg" / "bin" / name)
+		paths.extend(candidates)
 	unique = _dedup(paths)
 	_debug(f"ffmpeg search candidates: {unique}")
 	return unique
@@ -199,3 +217,50 @@ def ffmpeg_path() -> str:
 	if sys_ff:
 		return sys_ff
 	raise RuntimeError("ffmpeg binary not found (packaged or system).")
+
+
+# --- yt-dlp resolution ---
+
+def _ytdlp_candidates() -> list[pathlib.Path]:
+	paths: list[pathlib.Path] = []
+	exe = pathlib.Path(sys.executable).resolve()
+	plat_win = sys.platform.startswith("win")
+	# Next to current Python (common in venvs)
+	name = "yt-dlp.exe" if plat_win else "yt-dlp"
+	paths.append(exe.with_name(name))
+	# Inside sibling bin/Scripts of this interpreter
+	paths.append(exe.parent / name)
+	# Project-local venvs
+	for root in (
+		pathlib.Path.cwd(),
+		pathlib.Path(__file__).resolve().parents[2],
+	):
+		if plat_win:
+			paths.append(root / ".venv" / "Scripts" / "yt-dlp.exe")
+			paths.append(root / "venv" / "Scripts" / "yt-dlp.exe")
+		else:
+			paths.append(root / ".venv" / "bin" / "yt-dlp")
+			paths.append(root / "venv" / "bin" / "yt-dlp")
+	# PATH resolution as last resort is handled in ytdlp_path()
+	return _dedup([p for p in paths])
+
+def ytdlp_path() -> str:
+	"""
+	Resolve a usable yt-dlp binary path.
+	Order: env override -> nearby venv locations -> PATH.
+	Raises RuntimeError if not found.
+	"""
+	override = os.environ.get("YTDLP_BIN") or os.environ.get("YT_DLP_BIN")
+	if override and shutil.which(override):
+		return override
+	for cand in _ytdlp_candidates():
+		try:
+			if cand.exists() and cand.is_file() and os.access(cand, os.X_OK):
+				ensure_executable(cand)
+				return str(cand)
+		except Exception:
+			pass
+	which = shutil.which("yt-dlp")
+	if which:
+		return which
+	raise RuntimeError("yt-dlp binary not found (venv or system PATH).")

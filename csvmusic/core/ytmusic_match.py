@@ -67,13 +67,67 @@ def _score(track: Dict, cand: Dict) -> float:
 	total = max(0.0, d_score * 0.5 + overlap * 0.45 + ch_boost - p_pen)
 	return min(total, 0.99)
 
-def _build_query(track: Dict) -> str:
-	title = track.get("title","")
-	artists = track.get("artists","")
-	if track.get("isrc"):
-		# try ISRC first (works surprisingly often on Topic uploads)
-		return f'{track["isrc"]} {title} {artists}'
-	return f"{title} {artists}"
+def _clean_title_artist(title: str, artists: str) -> str:
+	# Basic collapse of whitespace and stray separators for searching
+	q = f"{title} {artists}".strip()
+	q = re.sub(r"\s+", " ", q)
+	q = q.replace(" - ", " ")
+	q = q.replace("–", " ").replace("—", " ")
+	return q.strip()
+
+def _strip_noise(title: str) -> str:
+	# Remove common bracketed qualifiers that hurt search recall
+	# e.g., (feat. ...), [Official Video], (Live), etc.
+	s = re.sub(r"[\(\[][^\)\]]*[Ff]eat[^\)\]]*[\)\]]", " ", title)
+	s = re.sub(r"[\(\[][Oo]fficial[^\)\]]*[\)\]]", " ", s)
+	s = re.sub(r"[\(\[][Ll]ive[^\)\]]*[\)\]]", " ", s)
+	s = re.sub(r"[\(\[][Rr]emix[^\)\]]*[\)\]]", " ", s)
+	# Remove any empty brackets left behind
+	s = re.sub(r"[\(\)\[\]]", " ", s)
+	return re.sub(r"\s+", " ", s).strip()
+
+def _query_variants(track: Dict) -> List[str]:
+	"""
+	Generate a small set of search queries to improve recall across
+	"&" vs "and", hyphens, and bracketed noise.
+	Order variants from most specific to broader fallbacks.
+	"""
+	title = track.get("title", "") or ""
+	artists = track.get("artists", "") or ""
+	isrc = track.get("isrc")
+
+	base_title = title
+	clean_title = _strip_noise(base_title)
+	base = _clean_title_artist(base_title, artists)
+	clean = _clean_title_artist(clean_title, artists)
+
+	variants: List[str] = []
+	if isrc:
+		variants.append(f"{isrc} {clean}")
+
+	variants.append(base)
+	if clean != base:
+		variants.append(clean)
+
+	# Swap common conjunction styles
+	if "&" in base:
+		variants.append(base.replace("&", "and"))
+	if re.search(r"\band\b", base, flags=re.I):
+		variants.append(re.sub(r"\band\b", "&", base, flags=re.I))
+
+	# Hyphen to space (already mostly handled in _clean_title_artist)
+	if "-" in base:
+		variants.append(base.replace("-", " "))
+
+	# Deduplicate while preserving order
+	seen: Set[str] = set()
+	out: List[str] = []
+	for q in variants:
+		qq = re.sub(r"\s+", " ", q).strip()
+		if qq and qq not in seen:
+			seen.add(qq)
+			out.append(qq)
+	return out
 
 def _search(yt: YTMusic, q: str, limit: int = SEARCH_LIMIT) -> List[Dict]:
 	# Primary: songs; Fallback: videos (still on music domain results)
@@ -103,19 +157,24 @@ def _search(yt: YTMusic, q: str, limit: int = SEARCH_LIMIT) -> List[Dict]:
 			})
 	return cands
 def _rank_candidates(yt: YTMusic, track: Dict, limit: int = SEARCH_LIMIT) -> List[Dict]:
-	q = _build_query(track)
-	cands = _search(yt, q, limit)
-	seen: Set[str] = set()
+	seen_vids: Set[str] = set()
+	all_cands: List[Dict] = []
+	for q in _query_variants(track):
+		cands = _search(yt, q, limit)
+		for cand in cands:
+			vid = cand.get("videoId")
+			if not vid or vid in seen_vids:
+				continue
+			seen_vids.add(vid)
+			all_cands.append(cand)
+
 	scored: List[Dict] = []
-	for cand in cands:
-		vid = cand.get("videoId")
-		if not vid or vid in seen:
-			continue
-		seen.add(vid)
-		score = _score(track, cand)
-		cand = dict(cand)
-		cand["score"] = score
-		scored.append(cand)
+	for cand in all_cands:
+		s = _score(track, cand)
+		item = dict(cand)
+		item["score"] = s
+		scored.append(item)
+
 	return sorted(scored, key=lambda c: c["score"], reverse=True)
 
 def find_best(yt: YTMusic, track: Dict) -> Tuple[Optional[Dict], float, List[Dict]]:
