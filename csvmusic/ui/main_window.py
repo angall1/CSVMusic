@@ -16,7 +16,7 @@ from csvmusic.core.settings import load_settings, save_settings
 from csvmusic.core.downloader import sanitize_name
 from csvmusic.core.preflight import run_preflight_checks
 from csvmusic.core.paths import app_icon_path, resource_base
-from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker
+from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker
 from csvmusic.core.browsers import list_profiles, list_available_browsers
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
@@ -41,6 +41,7 @@ class MainWindow(QMainWindow):
 		self.resolve_items: dict[int, dict] = {}
 		self.last_playlist_name: str | None = None
 		self._allow_path_persist = False
+		self.cookie_check_worker: CookiesCheckWorker | None = None
 		icon_p = app_icon_path()
 		if icon_p:
 			self.setWindowIcon(QIcon(str(icon_p)))
@@ -214,6 +215,8 @@ class MainWindow(QMainWindow):
 		adv_layout = QVBoxLayout(self.advanced_panel)
 		adv_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
 		adv_layout.setSpacing(self._px(8))
+		# Darker background for clarity
+		self.advanced_panel.setStyleSheet("background-color: #bcb7ae;")
 		note = QLabel("These overrides are optional. Leave blank to use bundled tools.")
 		note.setWordWrap(True)
 		note.setFont(QFont(retro_font_family, default_pt))
@@ -277,14 +280,40 @@ class MainWindow(QMainWindow):
 		lbl_profile.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
 		self.combo_profile = QComboBox()
 		self.combo_profile.setEditable(False)
-		self.combo_profile.currentIndexChanged.connect(lambda _=None: self._persist_settings())
+		self.combo_profile.currentIndexChanged.connect(self.on_profile_changed)
 		row_prof.addWidget(lbl_profile)
 		row_prof.addWidget(self.combo_profile, 1)
 		adv_layout.addWidget(self.profile_panel)
-		self.cb_skip_network = QCheckBox("Skip network connectivity check during preflight")
-		self.cb_skip_network.setFont(QFont(retro_font_family, default_pt + 1))
-		self.cb_skip_network.stateChanged.connect(lambda _=None: self._persist_settings())
-		adv_layout.addWidget(self.cb_skip_network)
+		# Tip: Firefox avoids DPAPI on Windows
+		lbl_ff_tip = QLabel("Tip: For reliable cookies on Windows, use Firefox or export a cookies.txt. <a href=\"https://www.mozilla.org/firefox/download/\">Get Firefox</a>")
+		lbl_ff_tip.setOpenExternalLinks(True)
+		lbl_ff_tip.setTextInteractionFlags(Qt.TextBrowserInteraction)
+		lbl_ff_tip.setFont(QFont(retro_font_family, default_pt))
+		adv_layout.addWidget(lbl_ff_tip)
+		# Cookies file alternative
+		row_cookie_file = QHBoxLayout()
+		lbl_cookie_file = QLabel("Cookies file (.txt):")
+		lbl_cookie_file.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.ed_cookies_file = QLineEdit()
+		self.ed_cookies_file.setPlaceholderText("Optional: Netscape cookies.txt (YouTube domain)")
+		self.ed_cookies_file.setFont(QFont(retro_font_family, default_pt + 1))
+		self.ed_cookies_file.textChanged.connect(self.on_cookies_file_changed)
+		btn_cookie_file = QPushButton("Browse...")
+		btn_cookie_file.setFont(btn_font)
+		btn_cookie_file.clicked.connect(self.on_browse_cookies_file)
+		btn_cookie_file_clear = QPushButton("Clear")
+		btn_cookie_file_clear.setFont(btn_font)
+		btn_cookie_file_clear.clicked.connect(self.on_clear_cookies_file)
+		row_cookie_file.addWidget(lbl_cookie_file)
+		row_cookie_file.addWidget(self.ed_cookies_file, 1)
+		row_cookie_file.addWidget(btn_cookie_file)
+		row_cookie_file.addWidget(btn_cookie_file_clear)
+		adv_layout.addLayout(row_cookie_file)
+		# Cookie check status label
+		self.lbl_cookie_status = QLabel("")
+		self.lbl_cookie_status.setVisible(False)
+		self.lbl_cookie_status.setFont(QFont(retro_font_family, max(default_pt - 1, 8)))
+		adv_layout.addWidget(self.lbl_cookie_status)
 		self.advanced_panel.setVisible(False)
 		vl.addWidget(self.advanced_panel)
 
@@ -481,6 +510,10 @@ class MainWindow(QMainWindow):
 				return f"{browser}:{p.strip()}"
 		return browser
 
+	def _cookies_file(self) -> str | None:
+		val = self.ed_cookies_file.text().strip()
+		return val or None
+
 	def _refresh_profiles(self, *, stored_profile: str | None = None) -> None:
 		# Populate profile list for the selected browser
 		b = self.combo_cookies.currentData()
@@ -489,24 +522,86 @@ class MainWindow(QMainWindow):
 			self.profile_panel.setVisible(False)
 			return
 		profiles = list_profiles(b)
+		chromium_like = b in ("edge","chrome","brave","opera","vivaldi")
 		if not profiles:
-			# Still show a simple Default choice; many browsers use it
-			self.combo_profile.addItem("Default", "Default")
+			if chromium_like:
+				# Chromium often has a Default profile
+				self.combo_profile.addItem("Default", "Default")
+				self.profile_panel.setVisible(True)
+			else:
+				# Firefox: if no profiles resolved, hide and let yt-dlp choose default
+				self.profile_panel.setVisible(False)
+				return
 		else:
 			for p in profiles:
 				self.combo_profile.addItem(p, p)
-		self.profile_panel.setVisible(True)
+			self.profile_panel.setVisible(True)
 		# Restore selection if available
 		if stored_profile:
 			for i in range(self.combo_profile.count()):
 				if self.combo_profile.itemData(i) == stored_profile:
 					self.combo_profile.setCurrentIndex(i)
 					break
+		# Kick off cookie check when profiles are ready
+		self._start_cookie_check()
 
 	def on_cookies_browser_changed(self) -> None:
 		# Toggle and populate profiles based on browser choice
 		self._refresh_profiles()
 		self._persist_settings()
+
+	def on_profile_changed(self) -> None:
+		self._persist_settings()
+		self._start_cookie_check()
+
+	def on_browse_cookies_file(self):
+		p, _ = QFileDialog.getOpenFileName(self, "Select cookies.txt", "", "Text files (*.txt);;All files (*)")
+		if p:
+			self.ed_cookies_file.setText(p)
+			self._persist_settings()
+
+	def on_clear_cookies_file(self):
+		self.ed_cookies_file.clear()
+		self._persist_settings()
+
+	def on_cookies_file_changed(self, _text: str) -> None:
+		# If a cookies file is provided, it takes precedence; still allow browser/profile selection
+		self._persist_settings()
+		self._start_cookie_check()
+
+	def _set_cookie_status(self, text: str, *, ok: bool | None) -> None:
+		self.lbl_cookie_status.setVisible(True)
+		self.lbl_cookie_status.setText(text)
+		if ok is True:
+			self.lbl_cookie_status.setStyleSheet("color: #006400")
+		elif ok is False:
+			self.lbl_cookie_status.setStyleSheet("color: #8B0000")
+		else:
+			self.lbl_cookie_status.setStyleSheet("color: #000000")
+
+	def _start_cookie_check(self) -> None:
+		# Only check when a browser is selected
+		cookies = self._cookies_browser()
+		import sys as _sys
+		if _sys.platform.startswith("win") and cookies and not self._cookies_file():
+			b = cookies.split(":", 1)[0].strip().lower()
+			if b in ("chrome", "edge", "brave", "vivaldi", "opera"):
+				self._set_cookie_status("On Windows, Chromium cookies require cookies.txt export.", ok=False)
+				return
+		if not cookies and not self._cookies_file():
+			self.lbl_cookie_status.setVisible(False)
+			return
+		self._set_cookie_status("Checking cookies…", ok=None)
+		# Cancel prior worker if any
+		if hasattr(self, "cookie_check_worker") and self.cookie_check_worker:
+			try:
+				self.cookie_check_worker.quit()
+				self.cookie_check_worker.wait(200)
+			except Exception:
+				pass
+		self.cookie_check_worker = CookiesCheckWorker(self._cookies_browser(), self._cookies_file(), self._yt_dlp_override(), self)
+		self.cookie_check_worker.sig_done.connect(lambda ok, msg: self._set_cookie_status(msg, ok=ok))
+		self.cookie_check_worker.start()
 
 	def _persist_settings(self, *, include_paths: bool = False) -> None:
 		def _norm(text: str) -> str | None:
@@ -515,8 +610,8 @@ class MainWindow(QMainWindow):
 		cfg = {
 			"yt_dlp_path": _norm(self.ed_ytdlp.text()),
 			"ffmpeg_path": _norm(self.ed_ffmpeg.text()),
-			"skip_network_check": self.cb_skip_network.isChecked(),
 			"cookies_browser": self._cookies_browser(),
+			"cookies_file": _norm(self.ed_cookies_file.text()),
 		}
 		if include_paths:
 			cfg["csv_path"] = _norm(self.ed_csv.text())
@@ -549,10 +644,6 @@ class MainWindow(QMainWindow):
 		blocker_ff = QSignalBlocker(self.ed_ffmpeg)
 		self.ed_ffmpeg.setText(ff_path)
 		del blocker_ff
-		skip_net = bool(cfg.get("skip_network_check"))
-		blocker_skip = QSignalBlocker(self.cb_skip_network)
-		self.cb_skip_network.setChecked(skip_net)
-		del blocker_skip
 		stored_browser = str(cfg.get("cookies_browser") or "")
 		if stored_browser:
 			# Support optional profile: "browser[:profile]"
@@ -569,7 +660,23 @@ class MainWindow(QMainWindow):
 					self._refresh_profiles(stored_profile=sp)
 					break
 		else:
-			self.combo_cookies.setCurrentIndex(0)
+			# Default to Firefox if available; otherwise Disabled
+			set_default = True
+			for i in range(self.combo_cookies.count()):
+				if self.combo_cookies.itemData(i) == "firefox":
+					block_b = QSignalBlocker(self.combo_cookies)
+					self.combo_cookies.setCurrentIndex(i)
+					del block_b
+					self._refresh_profiles()
+					set_default = False
+					break
+			if set_default:
+				self.combo_cookies.setCurrentIndex(0)
+		# Load cookies file path
+		cookie_file = cfg.get("cookies_file") or ""
+		block_cf = QSignalBlocker(self.ed_cookies_file)
+		self.ed_cookies_file.setText(cookie_file)
+		del block_cf
 		self.btn_clear.setEnabled(bool(self.ed_csv.text().strip() or self.ed_out.text().strip()))
 
 	def on_start(self):
@@ -583,8 +690,7 @@ class MainWindow(QMainWindow):
 			return
 		yt_override = self._yt_dlp_override()
 		ff_override = self._ffmpeg_override()
-		skip_network = self.cb_skip_network.isChecked()
-		result = run_preflight_checks(yt_override, ff_override, skip_network=skip_network)
+		result = run_preflight_checks(yt_override, ff_override, skip_network=False)
 		if result.errors:
 			lines = "\n - ".join(["Preflight failed due to:"] + result.errors)
 			QMessageBox.critical(self, "Preflight errors", lines)
@@ -599,8 +705,6 @@ class MainWindow(QMainWindow):
 				return
 		if result.details:
 			detail_lines = [f"{key}: {value}" for key, value in sorted(result.details.items())]
-			if skip_network:
-				detail_lines.append("Network check: skipped")
 			self.lbl_log.setText("; ".join(detail_lines))
 		self._allow_path_persist = True
 		self._persist_settings(include_paths=self._allow_path_persist)
@@ -646,7 +750,7 @@ class MainWindow(QMainWindow):
 		self.lbl_log.setText("Starting…")
 
 		# playlist=None → worker picks a default name internally
-		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, yt_override, ff_override, cookies_browser, self)
+		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, yt_override, ff_override, cookies_browser, self._cookies_file(), self)
 		self.worker.sig_log.connect(self.lbl_log.setText)
 		self.worker.sig_total.connect(lambda n: self.lbl_log.setText(f"Queued {n} tracks…"))
 		self.worker.sig_match_stats.connect(lambda m, s: self.lbl_log.setText(f"Matched: {m} | Skipped: {s}"))
@@ -896,6 +1000,7 @@ class MainWindow(QMainWindow):
 			self._yt_dlp_override(),
 			self._ffmpeg_override(),
 			self._cookies_browser(),
+			self._cookies_file(),
 			self
 		)
 		record["worker"] = worker

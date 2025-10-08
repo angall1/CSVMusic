@@ -115,7 +115,7 @@ def _opera_profiles(base: pathlib.Path) -> List[str]:
 	return names
 
 def _firefox_profiles() -> List[str]:
-	# Return firefox profiles as directory names acceptable to yt-dlp
+	# Return absolute Firefox profile paths (more reliable for yt-dlp)
 	if _WINDOWS or _LINUX:
 		base = (_app_data() / "Mozilla" / "Firefox") if _WINDOWS else (_home() / ".mozilla" / "firefox")
 	else:
@@ -124,7 +124,6 @@ def _firefox_profiles() -> List[str]:
 	if not ini.exists():
 		return []
 	profiles: List[Tuple[str, str]] = []
-	section = None
 	name = None
 	path = None
 	try:
@@ -133,27 +132,29 @@ def _firefox_profiles() -> List[str]:
 			if not line or line.startswith("#"):
 				continue
 			if line.startswith("[") and line.endswith("]"):
-				# flush previous
 				if name and path:
 					profiles.append((name, path))
-				section = line[1:-1]
 				name = None; path = None
 				continue
-			if line.lower().startswith("name="):
-				name = line.split("=",1)[1].strip()
-			elif line.lower().startswith("path="):
-				path = line.split("=",1)[1].strip()
+			key, eq, val = line.partition("=")
+			if not eq:
+				continue
+			k = key.strip().lower(); v = val.strip()
+			if k == "name":
+				name = v
+			elif k == "path":
+				path = v
 		# flush last
 		if name and path:
 			profiles.append((name, path))
 	except Exception:
 		return []
-	# yt-dlp accepts the profile directory (e.g., abcdef.default) or the name
-	# Prefer the directory slug for precision; display the Name
-	ordered = []
-	for disp, p in profiles:
-		ordered.append(p)
-	return ordered
+	result: List[str] = []
+	for _disp, rel in profiles:
+		p = pathlib.Path(rel)
+		abs_path = p if p.is_absolute() else (base / rel)
+		result.append(str(abs_path))
+	return result
 
 def list_profiles(browser: str) -> List[str]:
 	"""

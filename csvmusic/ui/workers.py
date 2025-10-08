@@ -1,7 +1,10 @@
 # tabs only
 from PySide6.QtCore import QObject, Signal, QThread
 import pathlib, traceback, time
+import subprocess
+import sqlite3
 from typing import List, Dict
+import json
 
 from ytmusicapi import YTMusic
 
@@ -11,6 +14,7 @@ from csvmusic.core.ytmusic_match import find_best, RATE_LIMIT_S
 from csvmusic.core.downloader import (
 	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name
 )
+from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp
 
 class PipelineWorker(QThread):
 	sig_log = Signal(str)                       # log strings
@@ -28,6 +32,7 @@ class PipelineWorker(QThread):
 	             yt_dlp_path: str | None,
 	             ffmpeg_path_override: str | None,
 	             cookies_browser: str | None,
+	             cookies_file: str | None,
 	             parent: QObject | None = None):
 		super().__init__(parent)
 		self.csv_path = csv_path
@@ -40,6 +45,7 @@ class PipelineWorker(QThread):
 		self.yt_dlp_path = yt_dlp_path
 		self.ffmpeg_path_override = ffmpeg_path_override
 		self.cookies_browser = cookies_browser
+		self.cookies_file = cookies_file
 		self._stop = False
 
 	def stop(self):
@@ -127,7 +133,12 @@ class PipelineWorker(QThread):
 
 				try:
 					base = f"{artists} - {title}"
-					cookies_args = ["--cookies-from-browser", self.cookies_browser] if self.cookies_browser else None
+					if self.cookies_file:
+						cookies_args = ["--cookies", self.cookies_file]
+					elif self.cookies_browser:
+						cookies_args = ["--cookies-from-browser", self.cookies_browser]
+					else:
+						cookies_args = None
 					if self.fmt == "m4a":
 						fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
 					else:
@@ -181,6 +192,7 @@ class SingleDownloadWorker(QThread):
 	             yt_dlp_path: str | None,
 	             ffmpeg_path_override: str | None,
 	             cookies_browser: str | None,
+	             cookies_file: str | None,
 	             parent: QObject | None = None):
 		super().__init__(parent)
 		self.row_idx = row_idx
@@ -193,6 +205,7 @@ class SingleDownloadWorker(QThread):
 		self.yt_dlp_path = yt_dlp_path
 		self.ffmpeg_path_override = ffmpeg_path_override
 		self.cookies_browser = cookies_browser
+		self.cookies_file = cookies_file
 
 	def run(self):
 		try:
@@ -203,7 +216,12 @@ class SingleDownloadWorker(QThread):
 			base = f"{self.track.get('artists','')} - {self.track.get('title','')}"
 			vid = self.match.get("videoId")
 			self.sig_status.emit(self.row_idx, f"Downloading ({self.fmt})…")
-			cookies_args = ["--cookies-from-browser", self.cookies_browser] if self.cookies_browser else None
+			if self.cookies_file:
+				cookies_args = ["--cookies", self.cookies_file]
+			elif self.cookies_browser:
+				cookies_args = ["--cookies-from-browser", self.cookies_browser]
+			else:
+				cookies_args = None
 			if self.fmt == "m4a":
 				fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
 			else:
@@ -234,3 +252,149 @@ class SingleDownloadWorker(QThread):
 				"playlist_name": self.playlist_name
 			}
 			self.sig_finished.emit(self.row_idx, payload)
+
+
+class CookiesCheckWorker(QThread):
+	# Emits (ok, message)
+	sig_done = Signal(bool, str)
+
+	def __init__(self, cookies_browser: str | None, cookies_file: str | None, yt_dlp_path: str | None, parent: QObject | None = None):
+		super().__init__(parent)
+		self.cookies_browser = cookies_browser
+		self.cookies_file = cookies_file
+		self.yt_dlp_path = yt_dlp_path
+
+	def run(self):
+		try:
+			yt = self.yt_dlp_path or _resolve_ytdlp()
+			# Firefox profile pre-check: if a concrete profile path is provided, verify cookies DB exists
+			ff_signed_in_hint = None
+			if self.cookies_browser:
+				parts = str(self.cookies_browser).split(":", 1)
+				bid = parts[0].strip().lower()
+				prof = parts[1].strip() if len(parts) == 2 else None
+				if bid == "firefox" and prof:
+					try:
+						db = pathlib.Path(prof) / "cookies.sqlite"
+						if not db.exists():
+							self.sig_done.emit(False, "Firefox cookies DB not found for selected profile.")
+							return
+						conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+						cur = conn.cursor()
+						cur.execute(
+							"SELECT name FROM moz_cookies WHERE (host LIKE '%youtube.com' OR host LIKE '%google.com') AND name IN (?,?,?,?,?,?,?) LIMIT 1",
+							("__Secure-3PSID","__Secure-1PSID","SAPISID","APISID","SID","SSID","HSID")
+						)
+						ff_signed_in_hint = cur.fetchone() is not None
+						conn.close()
+					except Exception:
+						# Ignore DB probing errors; continue with yt-dlp probing
+						pass
+			cmd = [yt]
+			if self.cookies_file:
+				cmd += ["--cookies", self.cookies_file]
+			elif self.cookies_browser:
+				cmd += ["--cookies-from-browser", self.cookies_browser]
+			# Use a harmless simulation JSON fetch to trigger cookie handling
+			cmd += ["-s", "-J", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+			proc = subprocess.run(
+				cmd,
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE,
+				text=True,
+				timeout=12,
+			)
+			if proc.returncode == 0:
+				# Even on success, detect cookie DB issues from logs
+				stderr = (proc.stderr or ""); stdout = (proc.stdout or "")
+				low_all = (stderr + " \n" + stdout).lower()
+				if ("cookie" in low_all) and ("could not" in low_all or "not find" in low_all or "no such file" in low_all):
+					self.sig_done.emit(False, "Could not find cookies in database. Check profile selection.")
+					return
+				# Determine signed-in state
+				signed_in = False
+				account_hint = None
+				if self.cookies_file:
+					try:
+						with open(self.cookies_file, "r", encoding="utf-8", errors="ignore") as f:
+							for line in f:
+								line = line.strip()
+								if not line or line.startswith("#"):
+									continue
+								parts = line.split("\t")
+								if len(parts) < 7:
+									continue
+								domain = parts[0].lower()
+								name = parts[5]
+								if ("youtube.com" in domain or "google.com" in domain) and name in {"__Secure-3PSID","__Secure-1PSID","SAPISID","APISID","SID","SSID","HSID"}:
+									signed_in = True
+									break
+					except Exception:
+						pass
+					# Try to extract account hint via yt-dlp JSON of feed/you
+					probe = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/feed/you"]
+					proc_acc = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+					if proc_acc.returncode == 0 and proc_acc.stdout:
+						try:
+							obj = json.loads(proc_acc.stdout)
+							account_hint = self._extract_account_hint(obj)
+						except Exception:
+							pass
+				else:
+					# For Firefox, prefer the DB hint result; otherwise do a lightweight probe
+					if ff_signed_in_hint is not None:
+						signed_in = bool(ff_signed_in_hint)
+					else:
+						probe = [yt]
+						if self.cookies_browser:
+							probe += ["--cookies-from-browser", self.cookies_browser]
+						probe += ["-J", "https://www.youtube.com/feed/you"]
+						proc2 = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+						signed_in = (proc2.returncode == 0 and (proc2.stdout or "").strip().startswith("{"))
+						if signed_in and proc2.stdout:
+							try:
+								obj = json.loads(proc2.stdout)
+								account_hint = self._extract_account_hint(obj)
+							except Exception:
+								pass
+				msg = (f"Signed in as {account_hint}" if (signed_in and account_hint)
+					else ("Signed-in cookies detected" if signed_in else "Guest session (no account cookies)"))
+				self.sig_done.emit(True, msg)
+				return
+			stderr = (proc.stderr or "")
+			low = stderr.lower()
+			if ("could not copy" in low and "cookie" in low) or ("locked" in low and "cookie" in low):
+				self.sig_done.emit(False, "Cookie DB locked. Close browser and retry.")
+				return
+			if "dpapi" in low or "cryptprotectdata" in low:
+				self.sig_done.emit(False, "DPAPI decryption error. Use same Windows user.")
+				return
+			self.sig_done.emit(False, stderr.strip()[:160] or "Cookie test failed.")
+		except subprocess.TimeoutExpired:
+			self.sig_done.emit(False, "Cookie test timeout.")
+		except Exception as e:
+			self.sig_done.emit(False, str(e)[:160])
+
+	def _extract_account_hint(self, obj: object) -> str | None:
+		try:
+			if isinstance(obj, dict):
+				# Direct keys first
+				cand = obj.get("accountName") or obj.get("ownerChannelName") or obj.get("uploader")
+				if isinstance(cand, str) and cand.strip():
+					return cand.strip()
+				if isinstance(obj.get("accountName"), dict):
+					st = obj["accountName"].get("simpleText")
+					if isinstance(st, str) and st.strip():
+						return st.strip()
+				for v in obj.values():
+					h = self._extract_account_hint(v)
+					if h:
+						return h
+			elif isinstance(obj, list):
+				for it in obj:
+					h = self._extract_account_hint(it)
+					if h:
+						return h
+		except Exception:
+			return None
+		return None
