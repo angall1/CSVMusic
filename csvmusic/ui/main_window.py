@@ -995,3 +995,20 @@ class MainWindow(QMainWindow):
 				file_path.unlink()
 			except Exception:
 				pass
+
+	def closeEvent(self, event):
+		"""Ensure all threads are stopped before closing"""
+		# Stop main worker if running
+		if self.worker and self.worker.isRunning():
+			self.worker.stop()
+			self.worker.quit()
+			self.worker.wait(3000)  # wait up to 3 seconds
+
+		# Stop resolution workers if running
+		for record in list(self.resolve_items.values()):
+			worker = record.get("worker")
+			if worker and worker.isRunning():
+				worker.quit()
+				worker.wait(1000)
+
+		event.accept()
