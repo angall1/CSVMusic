@@ -147,20 +147,38 @@ jobs:
           suffix = os.environ["PACKAGE_SUFFIX"]
           dist_dir = pathlib.Path("dist")
           app_dir = dist_dir / "CSVMusic"
-          if not app_dir.exists():
+          # Handle cases:
+          # - One-folder: dist/CSVMusic is a directory (use as-is)
+          # - One-file (Linux/mac): dist/CSVMusic is a file (create a staging dir)
+          # - One-file (Windows): dist/CSVMusic.exe exists (create dir and copy)
+          staging_root: pathlib.Path | None = None
+          if app_dir.exists() and app_dir.is_file():
+              # Create a staging folder to wrap the single-file binary
+              staging_root = dist_dir / "_pkgroot"
+              if staging_root.exists():
+                  shutil.rmtree(staging_root)
+              (staging_root / "CSVMusic").mkdir(parents=True, exist_ok=True)
+              shutil.copy2(app_dir, (staging_root / "CSVMusic" / app_dir.name))
+              app_dir = staging_root / "CSVMusic"
+          elif not app_dir.exists():
               single_candidates = [
                   dist_dir / "CSVMusic.exe",
                   dist_dir / "CSVMusic",
               ]
-              for candidate in single_candidates:
-                  if candidate.exists():
-                      app_dir.mkdir(exist_ok=True)
-                      shutil.copy2(candidate, app_dir / candidate.name)
-                      break
+              # macOS app bundle
+              mac_app = dist_dir / "CSVMusic.app"
+              if mac_app.exists() and mac_app.is_dir():
+                  app_dir = mac_app
               else:
-                  raise SystemExit(
-                      "Missing PyInstaller output: neither directory nor single-file bundle found"
-                  )
+                  for candidate in single_candidates:
+                      if candidate.exists():
+                          app_dir.mkdir(exist_ok=True)
+                          shutil.copy2(candidate, app_dir / candidate.name)
+                          break
+                  else:
+                      raise SystemExit(
+                          "Missing PyInstaller output: neither directory nor single-file bundle found"
+                      )
           # Ensure yt-dlp CLI is bundled alongside the app binary so runtime
           # resolution in csvmusic.core.paths.ytdlp_path() can find it.
           def _ensure_exec(p: pathlib.Path) -> None:
@@ -187,7 +205,15 @@ jobs:
           src_ytdlp = next((p for p in candidates if p.exists()), None)
           if not src_ytdlp:
               raise SystemExit("yt-dlp executable not found in environment; cannot bundle.")
-          dst_ytdlp = app_dir / ytdlp_name
+          # Determine where the app's executable lives so yt-dlp sits alongside it
+          bin_dir = app_dir
+          if app_dir.suffix == ".app":
+              cand = app_dir / "Contents" / "MacOS"
+              if cand.exists():
+                  bin_dir = cand
+          elif (app_dir / "CSVMusic").exists() or (app_dir / "CSVMusic.exe").exists():
+              bin_dir = app_dir
+          dst_ytdlp = bin_dir / ytdlp_name
           shutil.copy2(src_ytdlp, dst_ytdlp)
           _ensure_exec(dst_ytdlp)
           zip_path = dist_dir / f"CSVMusic-{suffix}.zip"
@@ -198,6 +224,9 @@ jobs:
                       continue
                   arcname = app_dir.name + "/" + path.relative_to(app_dir).as_posix()
                   zf.write(path, arcname)
+          # Cleanup staging if used (zip is already written)
+          if staging_root and staging_root.exists():
+              shutil.rmtree(staging_root, ignore_errors=True)
           PY
 
       - name: Collect PyInstaller bundle
