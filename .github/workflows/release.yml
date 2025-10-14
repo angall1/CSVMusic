@@ -190,21 +190,6 @@ jobs:
 
           plat_win = sys.platform.startswith("win")
           ytdlp_name = "yt-dlp.exe" if plat_win else "yt-dlp"
-          exe = pathlib.Path(sys.executable).resolve()
-          candidates = [
-              exe.with_name(ytdlp_name),
-              exe.parent / ytdlp_name,
-          ]
-          if plat_win:
-              candidates += [exe.parent / "Scripts" / ytdlp_name]
-          else:
-              candidates += [exe.parent / "bin" / ytdlp_name]
-          which = shutil.which("yt-dlp")
-          if which:
-              candidates.append(pathlib.Path(which))
-          src_ytdlp = next((p for p in candidates if p.exists()), None)
-          if not src_ytdlp:
-              raise SystemExit("yt-dlp executable not found in environment; cannot bundle.")
           # Determine where the app's executable lives so yt-dlp sits alongside it
           bin_dir = app_dir
           if app_dir.suffix == ".app":
@@ -213,8 +198,19 @@ jobs:
                   bin_dir = cand
           elif (app_dir / "CSVMusic").exists() or (app_dir / "CSVMusic.exe").exists():
               bin_dir = app_dir
+          # Always fetch official standalone yt-dlp for portability
           dst_ytdlp = bin_dir / ytdlp_name
-          shutil.copy2(src_ytdlp, dst_ytdlp)
+          url = (
+              "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" if plat_win else
+              ("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" if sys.platform.startswith("darwin") else
+               "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux")
+          )
+          try:
+              import urllib.request
+              with urllib.request.urlopen(url) as r, open(dst_ytdlp, "wb") as f:
+                  shutil.copyfileobj(r, f)
+          except Exception as e:
+              raise SystemExit(f"Failed to download yt-dlp from {url}: {e}")
           _ensure_exec(dst_ytdlp)
           zip_path = dist_dir / f"CSVMusic-{suffix}.zip"
           with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:

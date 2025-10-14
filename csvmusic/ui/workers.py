@@ -2,6 +2,7 @@
 from PySide6.QtCore import QObject, Signal, QThread
 import pathlib, traceback, time
 import subprocess
+import sys, json
 import sqlite3
 from typing import List, Dict
 
@@ -14,6 +15,16 @@ from csvmusic.core.downloader import (
 	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name
 )
 from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp
+
+_WINDOWS = sys.platform.startswith("win")
+
+def _hidden_subprocess_kwargs() -> dict:
+	if not _WINDOWS:
+		return {}
+	startupinfo = subprocess.STARTUPINFO()
+	startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+	flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+	return {"startupinfo": startupinfo, "creationflags": flags}
 
 class PipelineWorker(QThread):
 	sig_log = Signal(str)                       # log strings
@@ -302,6 +313,7 @@ class CookiesCheckWorker(QThread):
 				stderr=subprocess.PIPE,
 				text=True,
 				timeout=12,
+				**_hidden_subprocess_kwargs()
 			)
 			if proc.returncode == 0:
 				# Even on success, detect cookie DB issues from logs
@@ -332,7 +344,7 @@ class CookiesCheckWorker(QThread):
 						pass
 					# Try to extract account hint via yt-dlp JSON of feed/you
 					probe = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/feed/you"]
-					proc_acc = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+					proc_acc = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, **_hidden_subprocess_kwargs())
 					if proc_acc.returncode == 0 and proc_acc.stdout:
 						try:
 							obj = json.loads(proc_acc.stdout)
@@ -345,7 +357,7 @@ class CookiesCheckWorker(QThread):
 					if not account_hint:
 						try:
 							probe2 = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/"]
-							proc_home = subprocess.run(probe2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+						proc_home = subprocess.run(probe2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, **_hidden_subprocess_kwargs())
 							if proc_home.returncode == 0 and proc_home.stdout:
 								try:
 									obj2 = json.loads(proc_home.stdout)
@@ -363,7 +375,7 @@ class CookiesCheckWorker(QThread):
 						if self.cookies_browser:
 							probe += ["--cookies-from-browser", self.cookies_browser]
 						probe += ["-J", "https://www.youtube.com/feed/you"]
-						proc2 = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+						proc2 = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, **_hidden_subprocess_kwargs())
 						signed_in = (proc2.returncode == 0 and (proc2.stdout or "").strip().startswith("{"))
 				msg = "Signed-in cookies detected" if signed_in else "Guest session (no account cookies)"
 				self.sig_done.emit(True, msg)
@@ -381,4 +393,3 @@ class CookiesCheckWorker(QThread):
 			self.sig_done.emit(False, "Cookie test timeout.")
 		except Exception as e:
 			self.sig_done.emit(False, str(e)[:160])
-
