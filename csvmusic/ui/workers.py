@@ -357,7 +357,14 @@ class CookiesCheckWorker(QThread):
 					if not account_hint:
 						try:
 							probe2 = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/"]
-						proc_home = subprocess.run(probe2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, **_hidden_subprocess_kwargs())
+							proc_home = subprocess.run(
+								probe2,
+								stdout=subprocess.PIPE,
+								stderr=subprocess.PIPE,
+								text=True,
+								timeout=12,
+								**_hidden_subprocess_kwargs(),
+							)
 							if proc_home.returncode == 0 and proc_home.stdout:
 								try:
 									obj2 = json.loads(proc_home.stdout)
