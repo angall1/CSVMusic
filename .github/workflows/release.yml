@@ -141,6 +141,8 @@ jobs:
           import pathlib
           import zipfile
           import shutil
+          import sys
+          import stat
 
           suffix = os.environ["PACKAGE_SUFFIX"]
           dist_dir = pathlib.Path("dist")
@@ -159,6 +161,35 @@ jobs:
                   raise SystemExit(
                       "Missing PyInstaller output: neither directory nor single-file bundle found"
                   )
+          # Ensure yt-dlp CLI is bundled alongside the app binary so runtime
+          # resolution in csvmusic.core.paths.ytdlp_path() can find it.
+          def _ensure_exec(p: pathlib.Path) -> None:
+              try:
+                  mode = p.stat().st_mode
+                  p.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+              except Exception:
+                  pass
+
+          plat_win = sys.platform.startswith("win")
+          ytdlp_name = "yt-dlp.exe" if plat_win else "yt-dlp"
+          exe = pathlib.Path(sys.executable).resolve()
+          candidates = [
+              exe.with_name(ytdlp_name),
+              exe.parent / ytdlp_name,
+          ]
+          if plat_win:
+              candidates += [exe.parent / "Scripts" / ytdlp_name]
+          else:
+              candidates += [exe.parent / "bin" / ytdlp_name]
+          which = shutil.which("yt-dlp")
+          if which:
+              candidates.append(pathlib.Path(which))
+          src_ytdlp = next((p for p in candidates if p.exists()), None)
+          if not src_ytdlp:
+              raise SystemExit("yt-dlp executable not found in environment; cannot bundle.")
+          dst_ytdlp = app_dir / ytdlp_name
+          shutil.copy2(src_ytdlp, dst_ytdlp)
+          _ensure_exec(dst_ytdlp)
           zip_path = dist_dir / f"CSVMusic-{suffix}.zip"
           with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
               zf.write(app_dir, app_dir.name + "/")
