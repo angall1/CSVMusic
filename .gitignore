@@ -23,6 +23,19 @@ dist/
 
 # Logs and reports
 *.log
+.coverage
+coverage.xml
+
+# Testing
+.pytest_cache/
+
+# Package managers
+uv.lock
+
+# Temporary files
+*.tmp
+*~
+/temp/
 
 # IDE and OS files
 .vscode/
