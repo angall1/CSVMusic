@@ -6,6 +6,8 @@ import sys, json
 import sqlite3
 from typing import List, Dict
 
+from ytmusicapi import YTMusic
+
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
 from csvmusic.core.log import log
 from csvmusic.core.ytmusic_match import find_best, RATE_LIMIT_S
@@ -73,6 +75,10 @@ class PipelineWorker(QThread):
 			matched = 0
 			skipped_count = 0
 			self.sig_match_stats.emit(matched, skipped_count)
+			try:
+				yt = YTMusic()
+			except Exception as exc:
+				raise RuntimeError(f"Failed to initialize YTMusic client: {exc}")
 			playlist_name = self.playlist or (tracks[0]["playlist"] if tracks else "Playlist")
 			if not playlist_name:
 				playlist_name = "Playlist"
@@ -94,7 +100,7 @@ class PipelineWorker(QThread):
 				match = None
 				confidence = 0.0
 				try:
-					match, confidence, options = find_best(t, self.yt_dlp_path)
+					match, confidence, options = find_best(yt, t)
 				except Exception as exc:
 					search_error = str(exc)
 				payload = {

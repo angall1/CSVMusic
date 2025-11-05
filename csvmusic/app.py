@@ -26,12 +26,14 @@ try:
 except Exception:
 	pass
 
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QIcon
-from qt_material import apply_stylesheet
+from PySide6.QtWidgets import QApplication, QSplashScreen
+from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtCore import Qt
 from csvmusic.core.paths import (
 	ffmpeg_path,
+	splash_image_path,
 	app_icon_path,
+	resource_base,
 )
 from csvmusic.core.log import log
 from csvmusic.version import APP_VERSION
@@ -60,6 +62,38 @@ def probe_ffmpeg() -> None:
 	except Exception:
 		pass
 
+def show_qt_splash(app: QApplication) -> QSplashScreen | None:
+	img_candidates: list[pathlib.Path] = []
+	primary = splash_image_path()
+	if primary:
+		img_candidates.append(primary)
+	base = resource_base()
+	for fallback_name in ("splash.png",):
+		candidate = base / fallback_name
+		if candidate not in img_candidates and candidate.exists():
+			img_candidates.append(candidate)
+	if not img_candidates:
+		log("Splash image missing; skipping Qt splash.")
+		return None
+	pixmap = QPixmap()
+	loaded_path = None
+	for path in img_candidates:
+		if pixmap.load(str(path)):
+			loaded_path = path
+			break
+	if loaded_path is None:
+		log("Splash image failed to load from candidates; skipping Qt splash.")
+		return None
+	log(f"Splash image loaded from {loaded_path}")
+	max_width = 720
+	max_height = 360
+	if pixmap.width() > max_width or pixmap.height() > max_height:
+		pixmap = pixmap.scaled(max_width, max_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+	splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+	splash.show()
+	app.processEvents()
+	return splash
+
 def main() -> int:
 	# Optional: update native bootloader splash text (if built with --splash)
 	pyi_splash = None
@@ -71,36 +105,6 @@ def main() -> int:
 		pyi_splash = None
 
 	app = QApplication(sys.argv)
-
-	# Apply qt-material dark theme (using dark_blue for standard look)
-	apply_stylesheet(app, theme='dark_blue.xml', extra={
-		'font_family': 'Segoe UI',
-		'font_size': '14px',
-		'danger': '#f44336',
-		'warning': '#ff9800',
-		'success': '#4caf50',
-		'density_scale': '0',
-	})
-
-	# Add custom CSS for destructive buttons and table cell coloring
-	app.setStyleSheet(app.styleSheet() + """
-		QPushButton#destructive {
-			background-color: #c62828;
-			color: white;
-			border: none;
-		}
-		QPushButton#destructive:hover {
-			background-color: #d32f2f;
-		}
-		QPushButton#destructive:pressed {
-			background-color: #b71c1c;
-		}
-		QPushButton#destructive:disabled {
-			background-color: #424242;
-			color: #757575;
-		}
-	""")
-
 	if _WINDOWS:
 		try:
 			import ctypes
@@ -113,13 +117,13 @@ def main() -> int:
 		log(f"Application icon set from {icon_path}")
 	else:
 		log("Application icon missing; using default.")
-
-	# Close PyInstaller splash if it exists
+	qt_splash = show_qt_splash(app)
 	if pyi_splash is not None:
 		try:
 			pyi_splash.close()
 		except Exception:
 			pass
+		pyi_splash = None
 
 	try:
 		probe_ffmpeg()
@@ -134,6 +138,14 @@ def main() -> int:
 		log("Main window icon fallback in use.")
 	w.setWindowTitle(f"CSVMusic — v{APP_VERSION}  [{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
 	w.show()
+	if qt_splash is not None:
+		qt_splash.finish(w)
+
+	if pyi_splash is not None:
+		try:
+			pyi_splash.close()
+		except Exception:
+			pass
 
 	return app.exec()
 

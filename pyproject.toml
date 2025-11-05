@@ -11,11 +11,10 @@ requires-python = ">=3.10"
 dependencies = [
 	"PySide6>=6.6",
 	"yt-dlp>=2025.1.1",
+	"ytmusicapi>=1.7.4",
 	"mutagen>=1.47.0",
 	"requests>=2.32.0",
 	"pandas>=2.2.0",
-	"qt-material>=2.14",
-	"qtawesome>=1.2.0",
 ]
 
 [tool.setuptools]

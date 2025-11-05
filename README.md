@@ -7,7 +7,9 @@
   </tr>
 </table>
 
-CSVMusic is a Windows desktop app that turns the playlist CSV files you export from TuneMyMusic into ready-to-play, fully tagged audio. Point the app at a TuneMyMusic CSV and it handles YouTube search via `yt-dlp`, intelligent matching, downloads, and FFmpeg processing automatically.
+<p align="center"><a href="https://buymeacoffee.com/agalli">Enjoying CSVMusic? Buy me a coffee ☕</a></p>
+
+CSVMusic is a Windows desktop app that turns the playlist CSV files you export from TuneMyMusic into ready-to-play, fully tagged audio. Point the app at a TuneMyMusic CSV and it handles YouTube Music lookup, `yt-dlp` downloads, and FFmpeg processing automatically.
 
 ## Quick Start
 - Download the latest release zip and extract it.
@@ -16,21 +18,15 @@ CSVMusic is a Windows desktop app that turns the playlist CSV files you export f
 
 ## Highlights
 - Accepts TuneMyMusic exports sourced from Spotify, Apple Music, YouTube, Deezer, and more.
-- Intelligently searches and matches tracks on YouTube with confidence scoring.
+- Chooses the best YouTube Music match before downloading.
 - Writes ID3/M4A tags and embeds artwork so files drop straight into any library.
 
 ## Notes
 - Keep the extracted folder together; the app expects FFmpeg alongside the executable.
-- CSV data stays on the machine—only YouTube is contacted for searching and audio streams.
+- CSV data stays on the machine—only YouTube Music is contacted for audio streams.
 - Rich metadata included by TuneMyMusic (duration, ISRC) helps improve matching accuracy.
 
-## Legal Notice
-
-Users are solely responsible for their actions and any legal consequences thereof. We do not endorse copyright infringement and disclaim all liability for user actions.
-
 ## Contributing
-
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style guidelines, and how to submit changes or report issues.
 
 ## Release Automation
 - Create and push a Git tag for the commit you want to ship.
@@ -42,21 +38,3 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for developmen
 Developers can run the source version by creating a virtual environment, installing with `pip install -e .`, and launching `python -m csvmusic.app`. See `AGENTS.md` for repo guidelines if you plan to contribute changes.
 
 Enjoy building a local library from any streaming service!
-
----
-
-## Support the Project
-
-If you find CSVMusic useful, please consider giving it a star ⭐ on GitHub or buying me a coffee!
-
-<p align="center">
-  <a href="https://github.com/angall1/CSVMusic/stargazers">
-    <img src="https://img.shields.io/github/stars/angall1/CSVMusic?style=for-the-badge&logo=github" alt="GitHub Stars">
-  </a>
-  <a href="https://github.com/angall1/CSVMusic/blob/main/UNLICENSE">
-    <img src="https://img.shields.io/github/license/angall1/CSVMusic?style=for-the-badge" alt="License">
-  </a>
-  <a href="https://buymeacoffee.com/agalli">
-    <img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow?style=for-the-badge&logo=buy-me-a-coffee" alt="Buy Me A Coffee">
-  </a>
-</p>
