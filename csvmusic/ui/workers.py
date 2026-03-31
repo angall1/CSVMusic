@@ -2,9 +2,9 @@
 from PySide6.QtCore import QObject, Signal, QThread
 import pathlib, traceback, time
 import subprocess
+import sys, json
 import sqlite3
 from typing import List, Dict
-import json
 
 from ytmusicapi import YTMusic
 
@@ -15,6 +15,16 @@ from csvmusic.core.downloader import (
 	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name
 )
 from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp
+
+_WINDOWS = sys.platform.startswith("win")
+
+def _hidden_subprocess_kwargs() -> dict:
+	if not _WINDOWS:
+		return {}
+	startupinfo = subprocess.STARTUPINFO()
+	startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+	flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+	return {"startupinfo": startupinfo, "creationflags": flags}
 
 class PipelineWorker(QThread):
 	sig_log = Signal(str)                       # log strings
@@ -303,6 +313,7 @@ class CookiesCheckWorker(QThread):
 				stderr=subprocess.PIPE,
 				text=True,
 				timeout=12,
+				**_hidden_subprocess_kwargs()
 			)
 			if proc.returncode == 0:
 				# Even on success, detect cookie DB issues from logs
@@ -313,7 +324,7 @@ class CookiesCheckWorker(QThread):
 					return
 				# Determine signed-in state
 				signed_in = False
-				account_hint = None
+				# No account name probing; keep it lightweight
 				if self.cookies_file:
 					try:
 						with open(self.cookies_file, "r", encoding="utf-8", errors="ignore") as f:
@@ -333,11 +344,33 @@ class CookiesCheckWorker(QThread):
 						pass
 					# Try to extract account hint via yt-dlp JSON of feed/you
 					probe = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/feed/you"]
-					proc_acc = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+					proc_acc = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, **_hidden_subprocess_kwargs())
 					if proc_acc.returncode == 0 and proc_acc.stdout:
 						try:
 							obj = json.loads(proc_acc.stdout)
 							account_hint = self._extract_account_hint(obj)
+						except Exception:
+							pass
+						if not account_hint:
+							account_hint = self._extract_account_hint_text(proc_acc.stdout)
+					# Fallback: probe homepage for hints
+					if not account_hint:
+						try:
+							probe2 = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/"]
+							proc_home = subprocess.run(
+								probe2,
+								stdout=subprocess.PIPE,
+								stderr=subprocess.PIPE,
+								text=True,
+								timeout=12,
+								**_hidden_subprocess_kwargs(),
+							)
+							if proc_home.returncode == 0 and proc_home.stdout:
+								try:
+									obj2 = json.loads(proc_home.stdout)
+									account_hint = self._extract_account_hint(obj2) or self._extract_account_hint_text(proc_home.stdout)
+								except Exception:
+									account_hint = self._extract_account_hint_text(proc_home.stdout)
 						except Exception:
 							pass
 				else:
@@ -349,16 +382,9 @@ class CookiesCheckWorker(QThread):
 						if self.cookies_browser:
 							probe += ["--cookies-from-browser", self.cookies_browser]
 						probe += ["-J", "https://www.youtube.com/feed/you"]
-						proc2 = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+						proc2 = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, **_hidden_subprocess_kwargs())
 						signed_in = (proc2.returncode == 0 and (proc2.stdout or "").strip().startswith("{"))
-						if signed_in and proc2.stdout:
-							try:
-								obj = json.loads(proc2.stdout)
-								account_hint = self._extract_account_hint(obj)
-							except Exception:
-								pass
-				msg = (f"Signed in as {account_hint}" if (signed_in and account_hint)
-					else ("Signed-in cookies detected" if signed_in else "Guest session (no account cookies)"))
+				msg = "Signed-in cookies detected" if signed_in else "Guest session (no account cookies)"
 				self.sig_done.emit(True, msg)
 				return
 			stderr = (proc.stderr or "")
@@ -374,27 +400,3 @@ class CookiesCheckWorker(QThread):
 			self.sig_done.emit(False, "Cookie test timeout.")
 		except Exception as e:
 			self.sig_done.emit(False, str(e)[:160])
-
-	def _extract_account_hint(self, obj: object) -> str | None:
-		try:
-			if isinstance(obj, dict):
-				# Direct keys first
-				cand = obj.get("accountName") or obj.get("ownerChannelName") or obj.get("uploader")
-				if isinstance(cand, str) and cand.strip():
-					return cand.strip()
-				if isinstance(obj.get("accountName"), dict):
-					st = obj["accountName"].get("simpleText")
-					if isinstance(st, str) and st.strip():
-						return st.strip()
-				for v in obj.values():
-					h = self._extract_account_hint(v)
-					if h:
-						return h
-			elif isinstance(obj, list):
-				for it in obj:
-					h = self._extract_account_hint(it)
-					if h:
-						return h
-		except Exception:
-			return None
-		return None
