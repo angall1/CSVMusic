@@ -13,10 +13,10 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiAppl
 
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
 from csvmusic.core.settings import load_settings, save_settings
-from csvmusic.core.downloader import sanitize_name
+from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation
 from csvmusic.core.preflight import run_preflight_checks
 from csvmusic.core.paths import app_icon_path, resource_base
-from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker
+from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker, AlternativesFetchWorker
 from csvmusic.core.browsers import list_profiles, list_available_browsers
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
@@ -45,6 +45,17 @@ class MainWindow(QMainWindow):
 		icon_p = app_icon_path()
 		if icon_p:
 			self.setWindowIcon(QIcon(str(icon_p)))
+		self._row_icon_size = self._px(28)
+		self._default_track_icon = QIcon()
+		if icon_p:
+			pm = QPixmap(str(icon_p))
+			if not pm.isNull():
+				self._default_track_icon = QIcon(pm.scaled(
+					self._row_icon_size,
+					self._row_icon_size,
+					Qt.KeepAspectRatio,
+					Qt.SmoothTransformation
+				))
 
 		root = QWidget(self); self.setCentralWidget(root)
 		vl = QVBoxLayout(root)
@@ -349,8 +360,8 @@ class MainWindow(QMainWindow):
 		self.rb_m4a = QRadioButton("m4a (AAC, preferred)"); self.rb_m4a.setChecked(True)
 		self.rb_mp3 = QRadioButton("mp3")
 		self.grp_fmt = QButtonGroup(self); self.grp_fmt.addButton(self.rb_m4a); self.grp_fmt.addButton(self.rb_mp3)
-		self.cb_m3u8 = QCheckBox("Write .m3u8"); self.cb_m3u8.setChecked(True)
-		self.cb_m3u_plain = QCheckBox("Write .m3u")
+		self.cb_m3u8 = QCheckBox("Write .m3u8")
+		self.cb_m3u_plain = QCheckBox("Write .m3u"); self.cb_m3u_plain.setChecked(True)
 		self.cb_album_art = QCheckBox("Embed album art"); self.cb_album_art.setChecked(True)
 		controls_font = QFont(retro_font_family, default_pt + 2)
 		for w in (self.rb_m4a, self.rb_mp3, self.cb_m3u8, self.cb_m3u_plain, self.cb_album_art):
@@ -383,6 +394,7 @@ class MainWindow(QMainWindow):
 		# ── Table ─────────────────────────────────────────────────────────────────
 		self.table = QTableWidget(0, 4)
 		self.table.setHorizontalHeaderLabels(["#", "Title", "Status", "Actions"])
+		self.table.verticalHeader().setVisible(False)
 		self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
 		self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
 		self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
@@ -711,6 +723,16 @@ class MainWindow(QMainWindow):
 		if not self.tracks:
 			QMessageBox.information(self, "No Tracks", "No tracks found in the CSV.")
 			return
+		batch_policy = youtube_batch_mitigation(len(self.tracks), using_cookies=bool(self._cookies_browser() or self._cookies_file()))
+		if batch_policy.warning:
+			msg = batch_policy.warning
+			if batch_policy.reason:
+				msg += f"\n\nReason: {batch_policy.reason.capitalize()}."
+			msg += "\n\nContinue with automatic throttling enabled?"
+			choice = QMessageBox.question(self, "YouTube risk warning", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+			if choice != QMessageBox.Yes:
+				self.lbl_log.setText("Start cancelled after YouTube risk warning.")
+				return
 
 		self.track_results = {}
 		self.action_buttons = {}
@@ -718,8 +740,12 @@ class MainWindow(QMainWindow):
 		self.table.setRowCount(len(self.tracks))
 		for i, t in enumerate(self.tracks):
 			self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
-			self.table.setItem(i, 1, QTableWidgetItem(f"{t['artists']} — {t['title']}"))
+			title_item = QTableWidgetItem(f"{t['artists']} — {t['title']}")
+			if not self._default_track_icon.isNull():
+				title_item.setIcon(self._default_track_icon)
+			self.table.setItem(i, 1, title_item)
 			self.table.setItem(i, 2, QTableWidgetItem("Queued"))
+			self.table.setRowHeight(i, self._row_icon_size + self._px(8))
 			btn_alt = QPushButton("Alternatives")
 			btn_alt.setEnabled(False)
 			btn_alt.clicked.connect(partial(self.on_open_alternatives, i))
@@ -745,6 +771,7 @@ class MainWindow(QMainWindow):
 		# playlist=None → worker picks a default name internally
 		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, yt_override, ff_override, cookies_browser, self._cookies_file(), self)
 		self.worker.sig_log.connect(self.lbl_log.setText)
+		self.worker.sig_warning.connect(lambda msg: QMessageBox.warning(self, "YouTube throttling detected", msg))
 		self.worker.sig_total.connect(lambda n: self.lbl_log.setText(f"Queued {n} tracks…"))
 		self.worker.sig_match_stats.connect(lambda m, s: self.lbl_log.setText(f"Matched: {m} | Skipped: {s}"))
 		self.worker.sig_row_status.connect(self.on_row_status)
@@ -767,9 +794,30 @@ class MainWindow(QMainWindow):
 		track = payload.get("track")
 		if track and 0 <= row_idx < len(self.tracks):
 			self.tracks[row_idx] = track
+		self._update_track_icon(row_idx, payload.get("cover_bytes"))
 		playlist_name = payload.get("playlist_name")
 		if playlist_name:
 			self.last_playlist_name = playlist_name
+
+	def _update_track_icon(self, row_idx: int, cover_bytes: bytes | None) -> None:
+		if not (0 <= row_idx < self.table.rowCount()):
+			return
+		item = self.table.item(row_idx, 1)
+		if item is None:
+			return
+		if cover_bytes:
+			pm = QPixmap()
+			pm.loadFromData(cover_bytes)
+			if not pm.isNull():
+				item.setIcon(QIcon(pm.scaled(
+					self._row_icon_size,
+					self._row_icon_size,
+					Qt.KeepAspectRatioByExpanding,
+					Qt.SmoothTransformation
+				)))
+				return
+		if not self._default_track_icon.isNull():
+			item.setIcon(self._default_track_icon)
 
 	def on_open_alternatives(self, row_idx: int) -> None:
 		info = self.track_results.get(row_idx)
@@ -780,15 +828,21 @@ class MainWindow(QMainWindow):
 		if not track:
 			QMessageBox.warning(self, "Unavailable", "Track metadata is missing for this row.")
 			return
+		for other_row in list(self.resolve_items.keys()):
+			if other_row != row_idx:
+				self.on_resolution_close(other_row)
 		options = info.get("options") or []
 		self.on_resolution_options(row_idx, track, options)
+		record = self.resolve_items.get(row_idx)
+		if record and not record.get("loaded_more"):
+			self.on_refresh_alternatives(row_idx)
 
 	def on_clear(self):
 		if self.worker:
 			return
 		for info in self.resolve_items.values():
-			worker = info.get("worker")
-			if worker and worker.isRunning():
+			download_worker = info.get("download_worker")
+			if download_worker and download_worker.isRunning():
 				QMessageBox.information(self, "Busy", "Wait for in-progress manual downloads to finish before clearing.")
 				return
 		self.tracks = []
@@ -875,13 +929,13 @@ class MainWindow(QMainWindow):
 	def on_resolution_options(self, row_idx: int, track: dict, options: list) -> None:
 		record = self.resolve_items.get(row_idx)
 		if record:
-			record["options"] = self._merge_options(record.get("options", []), options)
+			record["all_options"] = self._merge_options(record.get("all_options", []), options)
 			self._refresh_option_combo(record)
 		else:
 			record = self._create_resolution_item(row_idx, track, options or [])
 			self.resolve_items[row_idx] = record
 			self.resolve_items_layout.addWidget(record["widget"])
-		self.track_results.setdefault(row_idx, {"track": track})["options"] = record.get("options", [])
+		self.track_results.setdefault(row_idx, {"track": track})["options"] = record.get("all_options", [])
 		self.resolve_box.setVisible(True)
 
 	def _merge_options(self, existing: list, new_opts: list) -> list:
@@ -901,14 +955,18 @@ class MainWindow(QMainWindow):
 			if isinstance(cur_data, dict):
 				current_vid = cur_data.get("videoId")
 		combo.clear()
-		options = record.get("options", [])
+		options = record.get("all_options", [])
+		record["visible_options"] = options
+		status = record["status_label"]
 		if not options:
-			combo.addItem("No matches yet", None)
+			combo.addItem("No matches found yet", None)
 			record["btn_download"].setEnabled(False)
+			status.setText("No matches found yet.")
 		else:
 			record["btn_download"].setEnabled(True)
 			for opt in options:
 				combo.addItem(self._format_option(opt), opt)
+			status.setText(f"Showing {len(options)} result(s).")
 		if current_vid:
 			for idx in range(combo.count()):
 				data = combo.itemData(idx)
@@ -925,6 +983,9 @@ class MainWindow(QMainWindow):
 		title = QLabel(f"{track.get('artists','')} — {track.get('title','')}")
 		title.setWordWrap(True)
 		layout.addWidget(title)
+		status_label = QLabel("Loading more choices when opened.")
+		status_label.setWordWrap(True)
+		layout.addWidget(status_label)
 		combo = QComboBox()
 		combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
 		layout.addWidget(combo)
@@ -944,13 +1005,17 @@ class MainWindow(QMainWindow):
 		record = {
 			"widget": widget,
 			"track": track,
-			"options": options,
+			"all_options": options,
+			"visible_options": [],
 			"combo": combo,
+			"status_label": status_label,
 			"btn_download": btn_download,
 			"btn_skip": btn_skip,
 			"btn_close": btn_close,
 			"row_idx": row_idx,
-			"worker": None
+			"download_worker": None,
+			"alt_worker": None,
+			"loaded_more": False
 		}
 		self._refresh_option_combo(record)
 		btn_download.clicked.connect(partial(self.on_resolution_download, row_idx))
@@ -965,7 +1030,37 @@ class MainWindow(QMainWindow):
 		dur = option.get("duration_seconds") or 0
 		mins = dur // 60
 		secs = dur % 60
-		return f"{score:.2f} • {title} ({author}) [{mins}:{secs:02d}]"
+		source = "Official Song" if option.get("source") == "music" else "YouTube Result"
+		return f"[{source}] {score:.2f} • {title} ({author}) [{mins}:{secs:02d}]"
+
+	def on_refresh_alternatives(self, row_idx: int) -> None:
+		record = self.resolve_items.get(row_idx)
+		if not record:
+			return
+		worker = record.get("alt_worker")
+		if worker and worker.isRunning():
+			return
+		exclude_ids = {opt.get("videoId") for opt in record.get("all_options", []) if opt.get("videoId")}
+		record["status_label"].setText("Looking for more choices…")
+		worker = AlternativesFetchWorker(row_idx, record["track"], exclude_ids, self)
+		record["alt_worker"] = worker
+		worker.sig_done.connect(self.on_alternatives_fetched)
+		worker.start()
+
+	def on_alternatives_fetched(self, row_idx: int, options: list, error: str) -> None:
+		record = self.resolve_items.get(row_idx)
+		if not record:
+			return
+		record["alt_worker"] = None
+		record["loaded_more"] = True
+		if error:
+			record["status_label"].setText(f"Could not refresh alternatives: {error}")
+			return
+		if options:
+			record["all_options"] = self._merge_options(record.get("all_options", []), options)
+			self.track_results.setdefault(row_idx, {"track": record["track"]})["options"] = record.get("all_options", [])
+		record["status_label"].setText("Updated with more choices.")
+		self._refresh_option_combo(record)
 
 	def on_resolution_download(self, row_idx: int) -> None:
 		record = self.resolve_items.get(row_idx)
@@ -996,7 +1091,7 @@ class MainWindow(QMainWindow):
 			self._cookies_file(),
 			self
 		)
-		record["worker"] = worker
+		record["download_worker"] = worker
 		worker.sig_status.connect(self.on_row_status)
 		worker.sig_finished.connect(self.on_resolution_finished)
 		worker.start()
@@ -1006,6 +1101,11 @@ class MainWindow(QMainWindow):
 		record = self.resolve_items.pop(row_idx, None)
 		if not record:
 			return
+		for key in ("download_worker", "alt_worker"):
+			worker = record.get(key)
+			if worker and worker.isRunning():
+				worker.quit()
+				worker.wait(1000)
 		self.lbl_log.setText(f"Skipped track: {record['track'].get('artists','')} — {record['track'].get('title','')}")
 		self.on_row_status(row_idx, "Skipped (removed)")
 		info = self.track_results.get(row_idx)
@@ -1030,6 +1130,11 @@ class MainWindow(QMainWindow):
 		record = self.resolve_items.pop(row_idx, None)
 		if not record:
 			return
+		for key in ("download_worker", "alt_worker"):
+			worker = record.get(key)
+			if worker and worker.isRunning():
+				worker.quit()
+				worker.wait(1000)
 		record["widget"].setParent(None)
 		record["widget"].deleteLater()
 		if not self.resolve_items:
@@ -1038,7 +1143,7 @@ class MainWindow(QMainWindow):
 	def on_resolution_finished(self, row_idx: int, payload: dict) -> None:
 		record = self.resolve_items.get(row_idx)
 		if record:
-			record["worker"] = None
+			record["download_worker"] = None
 			record["btn_download"].setEnabled(True)
 			record["btn_skip"].setEnabled(True)
 			record["btn_close"].setEnabled(True)
@@ -1116,15 +1221,17 @@ class MainWindow(QMainWindow):
 		else:
 			self._remove_playlist_file(out_root, playlist_name, ".m3u8")
 		if write_m3u_plain:
-			self._write_playlist_file(out_root, playlist_name, entries_resolved, ext, ".m3u", "cp1252")
+			self._write_playlist_file(out_root, playlist_name, entries_resolved, ext, ".m3u", "utf-8-sig")
 		else:
 			self._remove_playlist_file(out_root, playlist_name, ".m3u")
 
 	def _write_playlist_file(self, out_root: pathlib.Path, playlist_name: str, entries: list[tuple[dict, pathlib.Path]], ext: str, suffix: str, encoding: str) -> None:
-		file_path = out_root / f"{sanitize_name(playlist_name)}{suffix}"
+		playlist_dir = out_root / sanitize_name(playlist_name)
+		playlist_dir.mkdir(parents=True, exist_ok=True)
+		file_path = playlist_dir / f"{sanitize_name(playlist_name)}{suffix}"
 		try:
 			lines = ["#EXTM3U", f"#EXTPLAYLIST:{playlist_name}"]
-			root_resolved = out_root.resolve()
+			root_resolved = playlist_dir.resolve()
 			for track, abs_path in entries:
 				duration = int(round((track.get("duration_ms") or 0) / 1000))
 				artists = track.get("artists", "")
@@ -1132,7 +1239,7 @@ class MainWindow(QMainWindow):
 				lines.append(f"#EXTINF:{duration},{artists} - {title}")
 				abs_path = abs_path.resolve()
 				try:
-					path_obj = root_resolved / abs_path.relative_to(root_resolved)
+					path_obj = abs_path.relative_to(root_resolved)
 				except ValueError:
 					path_obj = abs_path
 				path_str = str(path_obj)
@@ -1144,7 +1251,7 @@ class MainWindow(QMainWindow):
 			self.lbl_log.setText(f"Failed to update playlists: {exc}")
 
 	def _remove_playlist_file(self, out_root: pathlib.Path, playlist_name: str, suffix: str) -> None:
-		file_path = out_root / f"{sanitize_name(playlist_name)}{suffix}"
+		file_path = out_root / sanitize_name(playlist_name) / f"{sanitize_name(playlist_name)}{suffix}"
 		if file_path.exists():
 			try:
 				file_path.unlink()
@@ -1161,9 +1268,10 @@ class MainWindow(QMainWindow):
 
 		# Stop resolution workers if running
 		for record in list(self.resolve_items.values()):
-			worker = record.get("worker")
-			if worker and worker.isRunning():
-				worker.quit()
-				worker.wait(1000)
+			for key in ("download_worker", "alt_worker"):
+				worker = record.get(key)
+				if worker and worker.isRunning():
+					worker.quit()
+					worker.wait(1000)
 
 		event.accept()

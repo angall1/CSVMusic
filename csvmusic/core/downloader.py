@@ -1,5 +1,6 @@
 # tabs only
 import os, pathlib, subprocess, requests, io, contextlib
+from dataclasses import dataclass
 from typing import Dict, Optional, List
 import re, sys
 from mutagen.easyid3 import EasyID3
@@ -11,8 +12,65 @@ from csvmusic.core.log import log
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
 YT_URL = "https://www.youtube.com/watch?v={vid}"
 YOUTUBE_CLIENTS: list[str] = ["ios", "tv_embedded", "webremix"]
+_YOUTUBE_RISK_PATTERNS: tuple[tuple[str, str], ...] = (
+	("http error 429", "YouTube returned HTTP 429"),
+	("too many requests", "YouTube is rate limiting requests"),
+	("sign in to confirm you're not a bot", "YouTube asked for bot verification"),
+	("sign in to confirm you’re not a bot", "YouTube asked for bot verification"),
+	("confirm you’re not a bot", "YouTube asked for bot verification"),
+	("confirm you're not a bot", "YouTube asked for bot verification"),
+	("this content isn't available, try again later", "YouTube temporarily blocked the session"),
+	("unable to download video data: http error 403", "YouTube rejected the download request"),
+)
+_YOUTUBE_LARGE_BATCH_THRESHOLD = 250
+_YOUTUBE_EXTREME_BATCH_THRESHOLD = 500
 
 class DownloadError(Exception): pass
+
+
+@dataclass(frozen=True)
+class YouTubeMitigationProfile:
+	label: str
+	track_sleep_s: float = 0.0
+	request_sleep_s: float = 0.0
+	sleep_interval_s: float = 0.0
+	max_sleep_interval_s: float = 0.0
+	limit_rate: str | None = None
+	warning: str | None = None
+	reason: str | None = None
+
+	@property
+	def active(self) -> bool:
+		return any((
+			self.track_sleep_s > 0,
+			self.request_sleep_s > 0,
+			self.sleep_interval_s > 0,
+			self.max_sleep_interval_s > 0,
+			bool(self.limit_rate),
+		))
+
+
+YOUTUBE_MITIGATION_NONE = YouTubeMitigationProfile(label="normal")
+YOUTUBE_MITIGATION_LARGE_BATCH = YouTubeMitigationProfile(
+	label="large-batch",
+	track_sleep_s=2.0,
+	request_sleep_s=0.75,
+	sleep_interval_s=5.0,
+	max_sleep_interval_s=10.0,
+	limit_rate="1.5M",
+	warning="Large YouTube batch detected. Downloads will be paced to reduce rate-limit risk.",
+	reason="large playlist size",
+)
+YOUTUBE_MITIGATION_AGGRESSIVE = YouTubeMitigationProfile(
+	label="aggressive",
+	track_sleep_s=6.0,
+	request_sleep_s=1.25,
+	sleep_interval_s=8.0,
+	max_sleep_interval_s=15.0,
+	limit_rate="900K",
+	warning="YouTube started throttling or blocking requests. Applying slower download pacing automatically.",
+	reason="YouTube rate-limit response",
+)
 
 _WINDOWS = sys.platform.startswith("win")
 
@@ -81,6 +139,37 @@ def _summarize_tool_output(stderr: str, stdout: str) -> str:
 	msg = " | ".join(interesting)
 	msg = re.sub(r"\s+", " ", msg).strip()
 	return msg[:280]
+
+
+def youtube_batch_mitigation(track_count: int, *, using_cookies: bool) -> YouTubeMitigationProfile:
+	if track_count >= _YOUTUBE_EXTREME_BATCH_THRESHOLD:
+		return YOUTUBE_MITIGATION_AGGRESSIVE
+	if track_count >= _YOUTUBE_LARGE_BATCH_THRESHOLD and not using_cookies:
+		return YOUTUBE_MITIGATION_LARGE_BATCH
+	return YOUTUBE_MITIGATION_NONE
+
+
+def detect_youtube_risk(detail: str) -> str | None:
+	text = (detail or "").lower()
+	for pattern, reason in _YOUTUBE_RISK_PATTERNS:
+		if pattern in text:
+			return reason
+	return None
+
+
+def build_ytdlp_mitigation_args(profile: YouTubeMitigationProfile | None) -> list[str]:
+	if not profile or not profile.active:
+		return []
+	args: list[str] = []
+	if profile.request_sleep_s > 0:
+		args += ["--sleep-requests", f"{profile.request_sleep_s:g}"]
+	if profile.sleep_interval_s > 0:
+		args += ["--sleep-interval", f"{profile.sleep_interval_s:g}"]
+	if profile.max_sleep_interval_s > 0:
+		args += ["--max-sleep-interval", f"{profile.max_sleep_interval_s:g}"]
+	if profile.limit_rate:
+		args += ["--limit-rate", profile.limit_rate]
+	return args
 
 def _strip_cookie_args(cmd: list[str]) -> list[str]:
 	new: list[str] = []
@@ -429,17 +518,18 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	return dst
 
 def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict], ext: str, *, suffix: str = ".m3u8", encoding: str = "utf-8") -> pathlib.Path:
-	fp = out_dir / f"{_safe(playlist_name)}{suffix}"
+	playlist_dir = out_dir / _safe(playlist_name)
+	playlist_dir.mkdir(parents=True, exist_ok=True)
+	fp = playlist_dir / f"{_safe(playlist_name)}{suffix}"
 	with fp.open("w", encoding=encoding, errors="ignore") as f:
 		f.write("#EXTM3U\n")
 		f.write(f"#EXTPLAYLIST:{playlist_name}\n")
 		for t in tracks_done:
 			title = t["title"]; artists = t["artists"]; album = t["album"]
-			rel = pathlib.Path(_safe(playlist_name)) / f"{_safe(artists)} - {_safe(title)}.{ext}"
+			rel = pathlib.Path(f"{_safe(artists)} - {_safe(title)}.{ext}")
 			dur = int(round((t.get("duration_ms") or 0)/1000))
 			f.write(f"#EXTINF:{dur},{artists} - {title}\n")
 			if t.get("isrc"): f.write(f"#EXTISRC:{t['isrc']}\n")
 			f.write(f"#EXTALBUM:{album}\n")
-			if t.get("sp_id"): f.write(f"#EXTSPOTIFYID:{t['sp_id']}\n")
 			f.write(str(rel.as_posix()) + "\n")
 	return fp

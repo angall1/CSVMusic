@@ -1,14 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
-import pathlib, sys
 
-# Include resources (icons, ffmpeg binaries) and licenses as data
 datas = [('resources', 'resources'), ('licenses', 'licenses')]
-
-# Let PyInstaller auto-collect binary deps from libraries; avoid hardcoding a
-# Windows-only ffmpeg path to keep the spec portable across OSes.
-binaries = []
-
+binaries = [('resources\\ffmpeg\\windows\\ffmpeg.exe', 'ffmpeg\\windows')]
 hiddenimports = []
 tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -24,7 +18,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 a = Analysis(
     ['csvmusic\\app.py'],
-    pathex=['C:\\Users\\austin\\Desktop\\CSVMusic'],
+    pathex=['C:\\users\\austin\\desktop\\csvmusic'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

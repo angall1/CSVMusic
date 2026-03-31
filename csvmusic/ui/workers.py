@@ -10,9 +10,11 @@ from ytmusicapi import YTMusic
 
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
 from csvmusic.core.log import log
-from csvmusic.core.ytmusic_match import find_best, RATE_LIMIT_S
+from csvmusic.core.ytmusic_match import find_best, more_candidates, RATE_LIMIT_S
 from csvmusic.core.downloader import (
-	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name
+	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name,
+	youtube_batch_mitigation, build_ytdlp_mitigation_args, detect_youtube_risk,
+	YOUTUBE_MITIGATION_NONE, YOUTUBE_MITIGATION_AGGRESSIVE, YouTubeMitigationProfile
 )
 from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp
 
@@ -28,6 +30,7 @@ def _hidden_subprocess_kwargs() -> dict:
 
 class PipelineWorker(QThread):
 	sig_log = Signal(str)                       # log strings
+	sig_warning = Signal(str)                   # warning dialog text
 	sig_total = Signal(int)                     # total tracks queued
 	sig_match_stats = Signal(int, int)          # matched, skipped
 	sig_row_status = Signal(int, str)           # row_index, status text
@@ -57,9 +60,32 @@ class PipelineWorker(QThread):
 		self.cookies_browser = cookies_browser
 		self.cookies_file = cookies_file
 		self._stop = False
+		self._mitigation = YOUTUBE_MITIGATION_NONE
 
 	def stop(self):
 		self._stop = True
+
+	def _download_with_profile(self, vid: str, dest_dir: pathlib.Path, base: str, profile: YouTubeMitigationProfile):
+		extra_args: list[str] = []
+		if self.cookies_file:
+			extra_args += ["--cookies", self.cookies_file]
+		elif self.cookies_browser:
+			extra_args += ["--cookies-from-browser", self.cookies_browser]
+		extra_args += build_ytdlp_mitigation_args(profile)
+		if self.fmt == "m4a":
+			return download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None)
+		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None)
+
+	def _apply_mitigation(self, profile: YouTubeMitigationProfile, reason: str | None = None) -> None:
+		if profile.label == self._mitigation.label:
+			return
+		self._mitigation = profile
+		if profile.warning:
+			msg = profile.warning
+			if reason:
+				msg = f"{msg}\n\nDetected: {reason}"
+			self.sig_log.emit(f"[warn] {msg}")
+			self.sig_warning.emit(msg)
 
 	def run(self):
 		try:
@@ -71,6 +97,9 @@ class PipelineWorker(QThread):
 				return
 			total = len(tracks)
 			self.sig_total.emit(total)
+			self._mitigation = youtube_batch_mitigation(total, using_cookies=bool(self.cookies_file or self.cookies_browser))
+			if self._mitigation.warning:
+				self.sig_log.emit(f"[warn] {self._mitigation.warning}")
 			self.sig_log.emit("[match] searching on YouTube Music…")
 			matched = 0
 			skipped_count = 0
@@ -112,7 +141,8 @@ class PipelineWorker(QThread):
 					"error": None,
 					"playlist_name": playlist_name,
 					"file_path": None,
-					"downloaded": False
+					"downloaded": False,
+					"cover_bytes": None
 				}
 
 				if match is None:
@@ -143,27 +173,40 @@ class PipelineWorker(QThread):
 
 				try:
 					base = f"{artists} - {title}"
-					if self.cookies_file:
-						cookies_args = ["--cookies", self.cookies_file]
-					elif self.cookies_browser:
-						cookies_args = ["--cookies-from-browser", self.cookies_browser]
-					else:
-						cookies_args = None
-					if self.fmt == "m4a":
-						fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
-					else:
-						fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
+					fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
 					self.sig_row_status.emit(idx, "Tagging…")
-					cover = yt_thumbnail_bytes(vid) if self.embed_art else None
-					tag_file(fp, t, cover)
+					cover = yt_thumbnail_bytes(vid)
+					if self.embed_art:
+						tag_file(fp, t, cover)
+					else:
+						tag_file(fp, t, None)
 					self.sig_row_status.emit(idx, f"Done → {fp.name}")
 					done_tracks.append(t)
 				except Exception as e:
 					err = str(e)
-					log(f"download failure: playlist='{playlist_name}' track='{artists} — {title}' fmt={self.fmt} error={err}")
-					self.sig_row_status.emit(idx, f"Fail: {err[:120]}")
-					failed_tracks.append({"track": t, "error": err})
-					error_msg = err
+					risk_reason = detect_youtube_risk(err)
+					retried = False
+					if risk_reason and self._mitigation.label != YOUTUBE_MITIGATION_AGGRESSIVE.label:
+						self._apply_mitigation(YOUTUBE_MITIGATION_AGGRESSIVE, risk_reason)
+						try:
+							self.sig_row_status.emit(idx, "Retrying with YouTube safe mode…")
+							fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
+							self.sig_row_status.emit(idx, "Tagging…")
+							cover = yt_thumbnail_bytes(vid)
+							if self.embed_art:
+								tag_file(fp, t, cover)
+							else:
+								tag_file(fp, t, None)
+							self.sig_row_status.emit(idx, f"Done → {fp.name}")
+							done_tracks.append(t)
+							retried = True
+						except Exception as retry_exc:
+							err = str(retry_exc)
+					if not retried:
+						log(f"download failure: playlist='{playlist_name}' track='{artists} — {title}' fmt={self.fmt} error={err}")
+						self.sig_row_status.emit(idx, f"Fail: {err[:120]}")
+						failed_tracks.append({"track": t, "error": err})
+						error_msg = err
 				finally:
 					processed += 1
 					self.sig_progress.emit(processed, total)
@@ -172,9 +215,10 @@ class PipelineWorker(QThread):
 				if error_msg is None:
 					payload["downloaded"] = True
 					payload["file_path"] = str(fp)
+					payload["cover_bytes"] = cover
 				self.sig_track_result.emit(idx, payload)
 				if not self._stop and idx < total - 1:
-					time.sleep(RATE_LIMIT_S)
+					time.sleep(max(RATE_LIMIT_S, self._mitigation.track_sleep_s))
 				time.sleep(0.02)
 			if done_tracks:
 				ext = "m4a" if self.fmt == "m4a" else "mp3"
@@ -182,7 +226,7 @@ class PipelineWorker(QThread):
 					m3u = write_m3u(self.out_dir, playlist_name, done_tracks, ext, suffix=".m3u8", encoding="utf-8")
 					self.sig_log.emit(f"[m3u] wrote: {m3u}")
 				if self.write_m3u_plain:
-					m3u_plain = write_m3u(self.out_dir, playlist_name, done_tracks, ext, suffix=".m3u", encoding="cp1252")
+					m3u_plain = write_m3u(self.out_dir, playlist_name, done_tracks, ext, suffix=".m3u", encoding="utf-8-sig")
 					self.sig_log.emit(f"[m3u] wrote: {m3u_plain}")
 			msg = "All tasks finished."
 			if self._stop:
@@ -237,8 +281,11 @@ class SingleDownloadWorker(QThread):
 			else:
 				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
 			self.sig_status.emit(self.row_idx, "Tagging…")
-			cover = yt_thumbnail_bytes(vid) if self.embed_art else None
-			tag_file(fp, self.track, cover)
+			cover = yt_thumbnail_bytes(vid)
+			if self.embed_art:
+				tag_file(fp, self.track, cover)
+			else:
+				tag_file(fp, self.track, None)
 			self.sig_status.emit(self.row_idx, f"Done → {fp.name}")
 			payload = {
 				"track": self.track,
@@ -246,7 +293,8 @@ class SingleDownloadWorker(QThread):
 				"file_path": str(fp),
 				"downloaded": True,
 				"error": None,
-				"playlist_name": self.playlist_name
+				"playlist_name": self.playlist_name,
+				"cover_bytes": cover
 			}
 			self.sig_finished.emit(self.row_idx, payload)
 		except Exception as e:
@@ -262,6 +310,24 @@ class SingleDownloadWorker(QThread):
 				"playlist_name": self.playlist_name
 			}
 			self.sig_finished.emit(self.row_idx, payload)
+
+
+class AlternativesFetchWorker(QThread):
+	sig_done = Signal(int, list, str)
+
+	def __init__(self, row_idx: int, track: Dict, exclude_ids: set[str] | None = None, parent: QObject | None = None):
+		super().__init__(parent)
+		self.row_idx = row_idx
+		self.track = track
+		self.exclude_ids = set(exclude_ids or set())
+
+	def run(self):
+		try:
+			options = more_candidates(self.track, exclude_ids=self.exclude_ids, source_mode="all")
+			self.sig_done.emit(self.row_idx, options, "")
+		except Exception as exc:
+			log(f"alternatives fetch failure: track='{self.track.get('artists','')} — {self.track.get('title','')}' error={exc}")
+			self.sig_done.emit(self.row_idx, [], str(exc))
 
 
 class CookiesCheckWorker(QThread):

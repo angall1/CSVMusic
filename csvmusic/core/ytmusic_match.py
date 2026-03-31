@@ -1,10 +1,11 @@
 # tabs only
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple, Set, Literal
 import re, time
 from ytmusicapi import YTMusic
 
 CONFIDENCE_MIN = 0.6
 SEARCH_LIMIT = 12
+ALT_SEARCH_LIMIT = 24
 RATE_LIMIT_S = 0.35
 
 _PENALTY_TERMS = {"live","remix","cover","sped","slowed","nightcore","8d","reverb","extended","mashup","edit","karaoke","instrumental","demo"}
@@ -129,38 +130,43 @@ def _query_variants(track: Dict) -> List[str]:
 			out.append(qq)
 	return out
 
-def _search(yt: YTMusic, q: str, limit: int = SEARCH_LIMIT) -> List[Dict]:
-	# Primary: songs; Fallback: videos (still on music domain results)
-	res = yt.search(q, filter="songs", limit=limit) or []
+SearchSource = Literal["music", "videos", "all"]
+
+
+def _search_filter(yt: YTMusic, q: str, search_filter: str, limit: int) -> List[Dict]:
+	res = yt.search(q, filter=search_filter, limit=limit) or []
 	cands: List[Dict] = []
+	source = "music" if search_filter == "songs" else "videos"
 	for r in res:
 		vid = r.get("videoId")
-		if not vid: continue
+		if not vid:
+			continue
+		artists = r.get("artists")
 		cands.append({
 			"videoId": vid,
 			"title": r.get("title"),
-			"artists": r.get("artists"),
-			"author": (r.get("artists")[0]["name"] if r.get("artists") else r.get("author") or ""),
-			"duration_seconds": r.get("duration_seconds") or 0
+			"artists": artists if search_filter == "songs" else None,
+			"author": (artists[0]["name"] if artists and search_filter == "songs" else r.get("author") or ""),
+			"duration_seconds": r.get("duration_seconds") or 0,
+			"source": source,
 		})
-	if not cands:
-		res = yt.search(q, filter="videos", limit=limit) or []
-		for r in res:
-			vid = r.get("videoId")
-			if not vid: continue
-			cands.append({
-				"videoId": vid,
-				"title": r.get("title"),
-				"artists": None,
-				"author": r.get("author") or "",
-				"duration_seconds": r.get("duration_seconds") or 0
-			})
 	return cands
-def _rank_candidates(yt: YTMusic, track: Dict, limit: int = SEARCH_LIMIT) -> List[Dict]:
+
+
+def _search(yt: YTMusic, q: str, limit: int = SEARCH_LIMIT, source_mode: SearchSource = "all") -> List[Dict]:
+	cands: List[Dict] = []
+	if source_mode in ("music", "all"):
+		cands.extend(_search_filter(yt, q, "songs", limit))
+	if source_mode in ("videos", "all"):
+		cands.extend(_search_filter(yt, q, "videos", limit))
+	return cands
+
+
+def _rank_candidates(yt: YTMusic, track: Dict, limit: int = SEARCH_LIMIT, source_mode: SearchSource = "all") -> List[Dict]:
 	seen_vids: Set[str] = set()
 	all_cands: List[Dict] = []
 	for q in _query_variants(track):
-		cands = _search(yt, q, limit)
+		cands = _search(yt, q, limit, source_mode)
 		for cand in cands:
 			vid = cand.get("videoId")
 			if not vid or vid in seen_vids:
@@ -175,7 +181,7 @@ def _rank_candidates(yt: YTMusic, track: Dict, limit: int = SEARCH_LIMIT) -> Lis
 		item["score"] = s
 		scored.append(item)
 
-	return sorted(scored, key=lambda c: c["score"], reverse=True)
+	return sorted(scored, key=lambda c: (c["score"], 1 if c.get("source") == "music" else 0), reverse=True)
 
 def find_best(yt: YTMusic, track: Dict) -> Tuple[Optional[Dict], float, List[Dict]]:
 	options = _rank_candidates(yt, track)
@@ -184,10 +190,10 @@ def find_best(yt: YTMusic, track: Dict) -> Tuple[Optional[Dict], float, List[Dic
 	best = options[0]
 	return (best if best["score"] >= CONFIDENCE_MIN else None, best["score"], options)
 
-def more_candidates(track: Dict, exclude_ids: Set[str] | None = None, limit: int = SEARCH_LIMIT * 2) -> List[Dict]:
+def more_candidates(track: Dict, exclude_ids: Set[str] | None = None, limit: int = ALT_SEARCH_LIMIT, source_mode: SearchSource = "all") -> List[Dict]:
 	exclude = set(exclude_ids or [])
 	yt = YTMusic()
-	options = _rank_candidates(yt, track, limit)
+	options = _rank_candidates(yt, track, limit, source_mode)
 	return [opt for opt in options if opt.get("videoId") not in exclude]
 
 def batch_match(tracks: List[Dict]) -> List[Dict]:
