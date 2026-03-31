@@ -1258,20 +1258,48 @@ class MainWindow(QMainWindow):
 			except Exception:
 				pass
 
+	def _shutdown_thread(self, thread, *, wait_ms: int = 1500) -> None:
+		if not thread:
+			return
+		try:
+			if hasattr(thread, "stop"):
+				thread.stop()
+		except Exception:
+			pass
+		try:
+			thread.requestInterruption()
+		except Exception:
+			pass
+		try:
+			thread.quit()
+		except Exception:
+			pass
+		try:
+			if thread.isRunning():
+				thread.wait(wait_ms)
+		except Exception:
+			pass
+		try:
+			if thread.isRunning():
+				thread.terminate()
+				thread.wait(1000)
+		except Exception:
+			pass
+
 	def closeEvent(self, event):
 		"""Ensure all threads are stopped before closing"""
 		# Stop main worker if running
-		if self.worker and self.worker.isRunning():
-			self.worker.stop()
-			self.worker.quit()
-			self.worker.wait(3000)  # wait up to 3 seconds
+		self._shutdown_thread(self.worker, wait_ms=3000)
+		self.worker = None
+
+		# Stop cookie check worker if running
+		self._shutdown_thread(self.cookie_check_worker, wait_ms=500)
+		self.cookie_check_worker = None
 
 		# Stop resolution workers if running
 		for record in list(self.resolve_items.values()):
 			for key in ("download_worker", "alt_worker"):
-				worker = record.get(key)
-				if worker and worker.isRunning():
-					worker.quit()
-					worker.wait(1000)
+				self._shutdown_thread(record.get(key), wait_ms=1000)
+				record[key] = None
 
 		event.accept()
