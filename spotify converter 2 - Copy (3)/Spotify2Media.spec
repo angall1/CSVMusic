@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('resources', 'resources'), ('licenses', 'licenses')]
+datas = []
 binaries = [('resources\\ffmpeg\\windows\\ffmpeg.exe', 'ffmpeg\\windows')]
 hiddenimports = []
 tmp_ret = collect_all('PySide6')
@@ -17,8 +17,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['csvmusic\\app.py'],
-    pathex=['C:\\Users\\austin\\Desktop\\CSVMusic'],
+    ['spotify2media\\app.py'],
+    pathex=['C:\\Users\\ermah\\Desktop\\spotify converter 2'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -30,12 +30,23 @@ a = Analysis(
     optimize=0,
 )
 pyz = PYZ(a.pure)
+splash = Splash(
+    'resources\\splash.png',
+    binaries=a.binaries,
+    datas=a.datas,
+    text_pos=None,
+    text_size=12,
+    minify_script=True,
+    always_on_top=True,
+)
 
 exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
     a.datas,
+    splash,
+    splash.binaries,
     [],
     name='CSVMusic',
     debug=False,
@@ -50,5 +61,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['resources\\app.ico'],
 )

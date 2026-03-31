@@ -2,12 +2,10 @@
 from dataclasses import dataclass
 import shutil, subprocess, sys
 from typing import Dict, List
-import pathlib
-import os
 
 import requests
 
-from csvmusic.core.paths import ffmpeg_path, ytdlp_path, INTERNAL_YTDLP
+from spotify2media.core.paths import ffmpeg_path
 
 _WINDOWS = sys.platform.startswith("win")
 
@@ -28,32 +26,10 @@ class PreflightCheckResult:
 	details: Dict[str, str]
 
 
-
-def _valid_executable(path: pathlib.Path) -> bool:
-	return path.exists() and path.is_file() and os.access(path, os.X_OK)
-
-
-def _check_yt_dlp(errors: List[str], warnings: List[str], details: Dict[str, str], override: str | None = None) -> None:
-	bin_path: str | None = None
-	if override:
-		over = pathlib.Path(override)
-		if _valid_executable(over):
-			bin_path = str(over)
-		else:
-			errors.append(f"yt-dlp override invalid: {override}")
-			return
-	if bin_path is None:
-		try:
-			bin_path = ytdlp_path()
-		except Exception as exc:
-			errors.append(str(exc))
-			return
-	if bin_path == INTERNAL_YTDLP:
-		try:
-			from yt_dlp.version import __version__
-			details["yt-dlp"] = f"bundled module ({__version__})"
-		except Exception as exc:
-			warnings.append(f"Failed to query bundled yt-dlp version: {exc}")
+def _check_yt_dlp(errors: List[str], warnings: List[str], details: Dict[str, str]) -> None:
+	bin_path = shutil.which("yt-dlp")
+	if not bin_path:
+		errors.append("yt-dlp not found in PATH. Install it so downloads can run.")
 		return
 	try:
 		proc = subprocess.run(
@@ -72,16 +48,9 @@ def _check_yt_dlp(errors: List[str], warnings: List[str], details: Dict[str, str
 		warnings.append(f"Failed to query yt-dlp version: {exc}")
 
 
-def _check_ffmpeg(errors: List[str], warnings: List[str], details: Dict[str, str], override: str | None = None) -> None:
+def _check_ffmpeg(errors: List[str], warnings: List[str], details: Dict[str, str]) -> None:
 	try:
-		if override:
-			ov = pathlib.Path(override)
-			if not _valid_executable(ov):
-				errors.append(f"ffmpeg override invalid: {override}")
-				return
-			path = str(ov)
-		else:
-			path = ffmpeg_path()
+		path = ffmpeg_path()
 		details["ffmpeg"] = path
 		proc = subprocess.run(
 			[path, "-version"],
@@ -109,12 +78,11 @@ def _check_network(warnings: List[str], details: Dict[str, str]) -> None:
 		warnings.append(f"Could not reach {url}: {exc}")
 
 
-def run_preflight_checks(yt_dlp_override: str | None = None, ffmpeg_override: str | None = None, *, skip_network: bool = False) -> PreflightCheckResult:
+def run_preflight_checks() -> PreflightCheckResult:
 	errors: List[str] = []
 	warnings: List[str] = []
 	details: Dict[str, str] = {}
-	_check_yt_dlp(errors, warnings, details, yt_dlp_override)
-	_check_ffmpeg(errors, warnings, details, ffmpeg_override)
-	if not skip_network:
-		_check_network(warnings, details)
+	_check_yt_dlp(errors, warnings, details)
+	_check_ffmpeg(errors, warnings, details)
+	_check_network(warnings, details)
 	return PreflightCheckResult(errors=errors, warnings=warnings, details=details)

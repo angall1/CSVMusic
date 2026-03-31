@@ -1,5 +1,5 @@
 # tabs only
-import os, sys, shutil, pathlib, stat
+import os, sys, shutil, pathlib, stat, importlib.util
 from typing import Iterable
 
 try:
@@ -16,6 +16,7 @@ def _debug(msg: str) -> None:
 		pass
 
 _FFMPEG_CACHE: pathlib.Path | None = None
+INTERNAL_YTDLP = "__internal_yt_dlp__"
 
 
 def _meipass_dir() -> pathlib.Path | None:
@@ -247,12 +248,16 @@ def _ytdlp_candidates() -> list[pathlib.Path]:
 def ytdlp_path() -> str:
 	"""
 	Resolve a usable yt-dlp binary path.
-	Order: env override -> nearby venv locations -> PATH.
+	Order: env override -> nearby venv locations -> PATH -> bundled Python module.
 	Raises RuntimeError if not found.
 	"""
 	override = os.environ.get("YTDLP_BIN") or os.environ.get("YT_DLP_BIN")
-	if override and shutil.which(override):
-		return override
+	if override:
+		override_path = pathlib.Path(override)
+		if override_path.exists() and override_path.is_file():
+			return str(override_path)
+		if shutil.which(override):
+			return override
 	for cand in _ytdlp_candidates():
 		try:
 			if cand.exists() and cand.is_file() and os.access(cand, os.X_OK):
@@ -263,4 +268,9 @@ def ytdlp_path() -> str:
 	which = shutil.which("yt-dlp")
 	if which:
 		return which
+	try:
+		if importlib.util.find_spec("yt_dlp") is not None:
+			return INTERNAL_YTDLP
+	except Exception:
+		pass
 	raise RuntimeError("yt-dlp binary not found (venv or system PATH).")

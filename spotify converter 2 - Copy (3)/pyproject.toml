@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotify2media"
+version = "0.1.0"
+description = "Convert Spotify playlists to MP3/M4A via YouTube Music (packaged, no extra installs)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+	"PySide6>=6.6",
+	"yt-dlp>=2025.1.1",
+	"ytmusicapi>=1.7.4",
+	"mutagen>=1.47.0",
+	"requests>=2.32.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+include-package-data = true
+packages = ["spotify2media", "spotify2media.core", "spotify2media.ui"]
+
+[tool.setuptools.package-data]
+spotify2media = [
+	"../resources/ffmpeg/darwin/ffmpeg",
+	"../resources/ffmpeg/linux/ffmpeg",
+	"../resources/ffmpeg/windows/ffmpeg.exe",
+	"../licenses/*"
+]
+

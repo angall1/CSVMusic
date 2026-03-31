@@ -1,11 +1,11 @@
 # tabs only
-import os, pathlib, subprocess, requests
+import os, pathlib, subprocess, requests, io, contextlib
 from typing import Dict, Optional, List
 import re, sys
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4, MP4Cover
-from csvmusic.core.paths import ffmpeg_path, ytdlp_path
+from csvmusic.core.paths import ffmpeg_path, ytdlp_path, INTERNAL_YTDLP
 from csvmusic.core.log import log
 
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
@@ -25,18 +25,62 @@ def _hidden_subprocess_kwargs() -> dict:
 	return {"startupinfo": startupinfo, "creationflags": flags}
 
 def _run(cmd: list[str]) -> int:
-	proc = subprocess.run(
+	proc = _run_capture(cmd)
+	if proc.returncode != 0:
+		err = (proc.stderr or "").strip()
+		out = (proc.stdout or "").strip()
+		log(f"yt-dlp command failed rc={proc.returncode} cmd={' '.join(cmd)} stderr={err[:500]} stdout={out[:200]}")
+	return proc.returncode
+
+def _run_capture(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
 		cmd,
 		stdout=subprocess.PIPE,
 		stderr=subprocess.PIPE,
 		text=True,
 		**_hidden_subprocess_kwargs()
 	)
-	if proc.returncode != 0:
-		err = (proc.stderr or "").strip()
-		out = (proc.stdout or "").strip()
-		log(f"yt-dlp command failed rc={proc.returncode} cmd={' '.join(cmd)} stderr={err[:500]} stdout={out[:200]}")
-	return proc.returncode
+
+def _run_ytdlp_module(args: list[str]) -> tuple[int, str, str]:
+	stdout_buf = io.StringIO()
+	stderr_buf = io.StringIO()
+	try:
+		from yt_dlp import main as yt_dlp_main
+	except Exception as exc:
+		return 1, "", f"failed to import yt_dlp module: {exc}"
+	with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+		try:
+			rc = yt_dlp_main(args)
+		except SystemExit as exc:
+			code = exc.code
+			if isinstance(code, int):
+				rc = code
+			elif code is None:
+				rc = 0
+			else:
+				rc = 1
+		except Exception as exc:
+			return 1, stdout_buf.getvalue(), f"{stderr_buf.getvalue()}\n{exc}".strip()
+	return int(rc or 0), stdout_buf.getvalue(), stderr_buf.getvalue()
+
+def _summarize_tool_output(stderr: str, stdout: str) -> str:
+	def _clean_lines(text: str) -> list[str]:
+		lines: list[str] = []
+		for raw in text.splitlines():
+			line = raw.strip()
+			if not line:
+				continue
+			if line.startswith("[download]") or line.startswith("\r[download]"):
+				continue
+			lines.append(line)
+		return lines
+	lines = _clean_lines(stderr) + _clean_lines(stdout)
+	if not lines:
+		return "no diagnostic output"
+	interesting = lines[-3:]
+	msg = " | ".join(interesting)
+	msg = re.sub(r"\s+", " ", msg).strip()
+	return msg[:280]
 
 def _strip_cookie_args(cmd: list[str]) -> list[str]:
 	new: list[str] = []
@@ -59,38 +103,77 @@ def _run_ytdlp(cmd: list[str]) -> int:
 	issues (common when Chrome/Edge is running or profiles are locked), retry
 	once without the cookies flag so public videos can still be fetched.
 	"""
-	proc = subprocess.run(
-		cmd,
-		stdout=subprocess.PIPE,
-		stderr=subprocess.PIPE,
-		text=True,
-		**_hidden_subprocess_kwargs()
-	)
-	if proc.returncode == 0:
+	if cmd and cmd[0] == INTERNAL_YTDLP:
+		rc, stdout, stderr = _run_ytdlp_module(cmd[1:])
+	else:
+		proc = subprocess.run(
+			cmd,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE,
+			text=True,
+			**_hidden_subprocess_kwargs()
+		)
+		rc = proc.returncode
+		stdout = proc.stdout or ""
+		stderr = proc.stderr or ""
+	if rc == 0:
 		return 0
-	stderr = (proc.stderr or "")
-	stdout = (proc.stdout or "")
-	log(f"yt-dlp command failed rc={proc.returncode} cmd={' '.join(cmd)} stderr={stderr[:500]} stdout={stdout[:200]}")
+	log(f"yt-dlp command failed rc={rc} cmd={' '.join(cmd)} stderr={stderr[:500]} stdout={stdout[:200]}")
 	# Detect cookie DB copy failure and retry without cookies
 	if any(t.startswith("--cookies-from-browser") or t == "--cookies-from-browser" for t in cmd):
 		lower_err = stderr.lower()
 		if "could not copy" in lower_err and "cookie" in lower_err:
 			no_cookie_cmd = _strip_cookie_args(cmd)
 			log("yt-dlp retrying without browser cookies due to cookie DB copy error")
-			proc2 = subprocess.run(
-				no_cookie_cmd,
-				stdout=subprocess.PIPE,
-				stderr=subprocess.PIPE,
-				text=True,
-				**_hidden_subprocess_kwargs()
-			)
-			if proc2.returncode != 0:
-				stderr2 = (proc2.stderr or "")
-				stdout2 = (proc2.stdout or "")
-				log(f"yt-dlp retry (no-cookies) failed rc={proc2.returncode} cmd={' '.join(no_cookie_cmd)} stderr={stderr2[:500]} stdout={stdout2[:200]}")
-				return proc2.returncode
+			if no_cookie_cmd and no_cookie_cmd[0] == INTERNAL_YTDLP:
+				rc2, stdout2, stderr2 = _run_ytdlp_module(no_cookie_cmd[1:])
+			else:
+				proc2 = subprocess.run(
+					no_cookie_cmd,
+					stdout=subprocess.PIPE,
+					stderr=subprocess.PIPE,
+					text=True,
+					**_hidden_subprocess_kwargs()
+				)
+				rc2 = proc2.returncode
+				stdout2 = proc2.stdout or ""
+				stderr2 = proc2.stderr or ""
+			if rc2 != 0:
+				log(f"yt-dlp retry (no-cookies) failed rc={rc2} cmd={' '.join(no_cookie_cmd)} stderr={stderr2[:500]} stdout={stdout2[:200]}")
+				return rc2
 			return 0
-	return proc.returncode
+	return rc
+
+def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
+	if cmd and cmd[0] == INTERNAL_YTDLP:
+		rc, stdout, stderr = _run_ytdlp_module(cmd[1:])
+	else:
+		proc = _run_capture(cmd)
+		rc = proc.returncode
+		stdout = proc.stdout or ""
+		stderr = proc.stderr or ""
+	if rc == 0:
+		return 0, ""
+	detail = _summarize_tool_output(stderr, stdout)
+	log(f"yt-dlp detail rc={rc} cmd={' '.join(cmd)} detail={detail}")
+	if any(t.startswith("--cookies-from-browser") or t == "--cookies-from-browser" for t in cmd):
+		lower_err = stderr.lower()
+		if "could not copy" in lower_err and "cookie" in lower_err:
+			no_cookie_cmd = _strip_cookie_args(cmd)
+			log("yt-dlp retrying without browser cookies due to cookie DB copy error")
+			if no_cookie_cmd and no_cookie_cmd[0] == INTERNAL_YTDLP:
+				rc2, stdout2, stderr2 = _run_ytdlp_module(no_cookie_cmd[1:])
+			else:
+				proc2 = _run_capture(no_cookie_cmd)
+				rc2 = proc2.returncode
+				stdout2 = proc2.stdout or ""
+				stderr2 = proc2.stderr or ""
+			if rc2 == 0:
+				return 0, ""
+			detail2 = _summarize_tool_output(stderr2, stdout2)
+			log(f"yt-dlp retry detail rc={rc2} cmd={' '.join(no_cookie_cmd)} detail={detail2}")
+			return rc2, detail2
+	return rc, detail
 
 def sanitize_name(name: str) -> str:
 	return re.sub(r'[\\/:*?"<>|]+', "_", name or "").strip()
@@ -195,20 +278,25 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		"--socket-timeout", "30",
 	]
 	success = False
+	last_detail = "no yt-dlp attempts recorded"
 	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
 			cmd_primary = primary_base + extractor_args + cookies_args + ["-o", out_tpl, base_url]
-			if _run_ytdlp(cmd_primary) == 0:
+			rc, detail = _run_ytdlp_detail(cmd_primary)
+			if rc == 0:
 				success = True
 				log(f"download_m4a: primary succeeded video_id={video_id} client={client} url={base_url}")
 				break
+			last_detail = detail
 			log(f"download_m4a: primary failed video_id={video_id} client={client} url={base_url}")
 			cmd_fallback = fallback_base + extractor_args + cookies_args + ["-o", out_tpl, base_url]
-			if _run_ytdlp(cmd_fallback) == 0:
+			rc, detail = _run_ytdlp_detail(cmd_fallback)
+			if rc == 0:
 				success = True
 				log(f"download_m4a: fallback succeeded video_id={video_id} client={client} url={base_url}")
 				break
+			last_detail = detail
 			log(f"download_m4a: fallback failed video_id={video_id} client={client} url={base_url}")
 		if success:
 			break
@@ -217,14 +305,16 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
 			cmd_search = primary_base + extractor_args + cookies_args + ["-o", out_tpl, search_url]
-			if _run_ytdlp(cmd_search) == 0:
+			rc, detail = _run_ytdlp_detail(cmd_search)
+			if rc == 0:
 				success = True
 				log(f"download_m4a: search fallback succeeded query='{base_name}' client={client}")
 				break
+			last_detail = detail
 			log(f"download_m4a: search fallback failed query='{base_name}' client={client}")
 	if not success:
 		log(f"download_m4a: all extractor clients failed video_id={video_id} base='{base_name}'")
-		raise DownloadError("yt-dlp failed for m4a")
+		raise DownloadError(f"yt-dlp failed for m4a: {last_detail}")
 
 	# What got written?
 	cands = _list_downloads(dst_dir, safe_base)
@@ -242,19 +332,22 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 
 	# 1) Remux (copy AAC out of MP4/MOV containers)
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
-	rc = _run([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "copy", str(dst)])
+	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "copy", str(dst)])
+	rc = proc.returncode
 	if rc == 0 and dst.exists():
 		try: src.unlink()
 		except Exception: pass
 		return dst
 
 	# 2) Transcode (e.g., Opus/WebM → AAC)
-	rc = _run([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "aac", "-b:a", "192k", str(dst)])
+	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "aac", "-b:a", "192k", str(dst)])
+	rc = proc.returncode
+	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
 	try: src.unlink()
 	except Exception: pass
 	if rc != 0 or not dst.exists():
 		log(f"download_m4a: ffmpeg conversion failed video_id={video_id} src='{src.name}' dst='{dst.name}' rc={rc}")
-		raise DownloadError("failed to produce .m4a (remux and transcode failed)")
+		raise DownloadError(f"failed to produce .m4a: {detail}")
 	return dst
 
 def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
@@ -277,14 +370,17 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		"--socket-timeout", "30",
 	]
 	success = False
+	last_detail = "no yt-dlp attempts recorded"
 	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
 			cmd = cmd_base + extractor_args + cookies_args + ["-o", str(tmp), base_url]
-			if _run_ytdlp(cmd) == 0:
+			rc, detail = _run_ytdlp_detail(cmd)
+			if rc == 0:
 				success = True
 				log(f"download_mp3: yt-dlp succeeded video_id={video_id} client={client} url={base_url}")
 				break
+			last_detail = detail
 			log(f"download_mp3: yt-dlp attempt failed video_id={video_id} client={client} url={base_url}")
 		if success:
 			break
@@ -293,14 +389,16 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
 			cmd = cmd_base + extractor_args + cookies_args + ["-o", str(tmp), search_url]
-			if _run_ytdlp(cmd) == 0:
+			rc, detail = _run_ytdlp_detail(cmd)
+			if rc == 0:
 				success = True
 				log(f"download_mp3: search fallback succeeded query='{base_name}' client={client}")
 				break
+			last_detail = detail
 			log(f"download_mp3: search fallback failed query='{base_name}' client={client}")
 	if not success:
 		log(f"download_mp3: yt-dlp initial fetch failed video_id={video_id} base='{base_name}'")
-		raise DownloadError("yt-dlp failed for mp3 temp")
+		raise DownloadError(f"yt-dlp failed for mp3 temp: {last_detail}")
 
 	# yt-dlp may append extension to .tmp; find it
 	src = None
@@ -320,12 +418,14 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	else:
 		args += ["-codec:a","libmp3lame","-q:a","0"]  # V0
 	args += [str(dst)]
-	rc = _run(args)
+	proc = _run_capture(args)
+	rc = proc.returncode
+	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
 	try: src.unlink()
 	except Exception: pass
 	if rc != 0 or not dst.exists():
 		log(f"download_mp3: ffmpeg transcode failed video_id={video_id} dst='{dst.name}' rc={rc}")
-		raise DownloadError("ffmpeg mp3 transcode failed")
+		raise DownloadError(f"ffmpeg mp3 transcode failed: {detail}")
 	return dst
 
 def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict], ext: str, *, suffix: str = ".m3u8", encoding: str = "utf-8") -> pathlib.Path:

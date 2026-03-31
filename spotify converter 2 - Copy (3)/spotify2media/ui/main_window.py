@@ -1,23 +1,22 @@
 # tabs only
 import pathlib
 from functools import partial
-from typing import List, Tuple
+from typing import List
 from PySide6.QtWidgets import (
 	QMainWindow, QWidget, QFileDialog, QMessageBox,
 	QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
 	QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox,
 	QRadioButton, QButtonGroup, QProgressBar, QToolButton, QSizePolicy, QFrame, QComboBox
 )
-from PySide6.QtCore import Qt, QSignalBlocker
-from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase
 
-from csvmusic.core.csv_import import load_csv, tracks_from_csv
-from csvmusic.core.settings import load_settings, save_settings
-from csvmusic.core.downloader import sanitize_name
-from csvmusic.core.preflight import run_preflight_checks
-from csvmusic.core.paths import app_icon_path, resource_base
-from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker
-from csvmusic.core.browsers import list_profiles, list_available_browsers
+from spotify2media.core.csv_import import load_csv, tracks_from_csv
+from spotify2media.core.settings import load_settings, save_settings
+from spotify2media.core.downloader import sanitize_name
+from spotify2media.core.preflight import run_preflight_checks
+from spotify2media.core.paths import app_icon_path, resource_base
+from spotify2media.ui.workers import PipelineWorker, SingleDownloadWorker
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
 RED = QColor(255, 205, 210)      # soft red
@@ -26,12 +25,8 @@ GREEN = QColor(200, 230, 201)    # soft green
 class MainWindow(QMainWindow):
 	def __init__(self):
 		super().__init__()
-		self._scale = self._compute_scale_factor()
 		self.setWindowTitle("CSVMusic")
-		min_w, min_h = self._clamp_to_screen(760, 520)
-		self.setMinimumSize(min_w, min_h)
-		init_w, init_h = self._clamp_to_screen(self._px(980), self._px(640))
-		self.resize(max(min_w, init_w), max(min_h, init_h))
+		self.setMinimumSize(980, 640)
 
 		self.worker: PipelineWorker | None = None
 		self.tracks: list[dict] = []
@@ -40,15 +35,13 @@ class MainWindow(QMainWindow):
 		self.action_buttons: dict[int, QPushButton] = {}
 		self.resolve_items: dict[int, dict] = {}
 		self.last_playlist_name: str | None = None
-		self._allow_path_persist = False
-		self.cookie_check_worker: CookiesCheckWorker | None = None
 		icon_p = app_icon_path()
 		if icon_p:
 			self.setWindowIcon(QIcon(str(icon_p)))
 
 		root = QWidget(self); self.setCentralWidget(root)
 		vl = QVBoxLayout(root)
-		vl.setSpacing(self._px(8))
+		vl.setSpacing(8)
 		win_base = "#c0c0c0"
 		win_panel = "#d4d0c8"
 		win_text = "#000000"
@@ -78,40 +71,40 @@ class MainWindow(QMainWindow):
 			QLineEdit, QComboBox, QTableWidget {{
 				background-color: {win_panel};
 				color: {win_text};
-				border-top: {self._px(2)}px solid {win_light};
-				border-left: {self._px(2)}px solid {win_light};
-				border-right: {self._px(2)}px solid {win_shadow};
-				border-bottom: {self._px(2)}px solid {win_shadow};
+				border-top: 2px solid {win_light};
+				border-left: 2px solid {win_light};
+				border-right: 2px solid {win_shadow};
+				border-bottom: 2px solid {win_shadow};
 				selection-background-color: #000080;
 				selection-color: #ffffff;
 			}}
 			QTableWidget QHeaderView::section {{
 				background-color: {win_panel};
 				color: {win_text};
-				border: {self._px(1)}px solid {win_shadow};
+				border: 1px solid {win_shadow};
 			}}
 			QScrollBar {{ background: {win_panel}; }}
 			QPushButton {{
 				background-color: {win_panel};
 				color: {win_text};
-				border-top: {self._px(2)}px solid {win_light};
-				border-left: {self._px(2)}px solid {win_light};
-				border-right: {self._px(2)}px solid {win_dark};
-				border-bottom: {self._px(2)}px solid {win_dark};
-				padding: {self._px(4)}px {self._px(12)}px;
+				border-top: 2px solid {win_light};
+				border-left: 2px solid {win_light};
+				border-right: 2px solid {win_dark};
+				border-bottom: 2px solid {win_dark};
+				padding: 4px 12px;
 			}}
 			QPushButton:disabled {{
 				color: #808080;
-				border-top: {self._px(2)}px solid {win_light};
-				border-left: {self._px(2)}px solid {win_light};
-				border-right: {self._px(2)}px solid {win_shadow};
-				border-bottom: {self._px(2)}px solid {win_shadow};
+				border-top: 2px solid {win_light};
+				border-left: 2px solid {win_light};
+				border-right: 2px solid {win_shadow};
+				border-bottom: 2px solid {win_shadow};
 			}}
 			QPushButton:pressed {{
-				border-top: {self._px(2)}px solid {win_dark};
-				border-left: {self._px(2)}px solid {win_dark};
-				border-right: {self._px(2)}px solid {win_light};
-				border-bottom: {self._px(2)}px solid {win_light};
+				border-top: 2px solid {win_dark};
+				border-left: 2px solid {win_dark};
+				border-right: 2px solid {win_light};
+				border-bottom: 2px solid {win_light};
 			}}
 			QToolButton {{
 				color: {win_text};
@@ -122,11 +115,11 @@ class MainWindow(QMainWindow):
 			QProgressBar {{
 				background-color: {win_panel};
 				color: {win_text};
-				border-top: {self._px(2)}px solid {win_light};
-				border-left: {self._px(2)}px solid {win_light};
-				border-right: {self._px(2)}px solid {win_shadow};
-				border-bottom: {self._px(2)}px solid {win_shadow};
-				height: {self._px(18)}px;
+				border-top: 2px solid {win_light};
+				border-left: 2px solid {win_light};
+				border-right: 2px solid {win_shadow};
+				border-bottom: 2px solid {win_shadow};
+				height: 18px;
 			}}
 			QProgressBar::chunk {{
 				background-color: {progress_chunk};
@@ -140,12 +133,12 @@ class MainWindow(QMainWindow):
 		if icon_path:
 			pm = QPixmap(str(icon_path))
 			if not pm.isNull():
-				logo_size = self._px(56)
+				logo_size = 72
 				logo.setPixmap(pm.scaled(logo_size, logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 				logo.setFixedSize(logo_size, logo_size)
 				logo.setStyleSheet("background: transparent;")
 		else:
-			logo.setFixedSize(self._px(56), self._px(56))
+			logo.setFixedSize(72, 72)
 		logo.setAlignment(Qt.AlignCenter)
 		title_label = QLabel("CSVMusic")
 		title_font = QFont(retro_font_family, default_pt + 10, QFont.Bold)
@@ -153,7 +146,7 @@ class MainWindow(QMainWindow):
 		title_label.setStyleSheet("color: #000000;")
 		title_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 		title_row.addWidget(logo)
-		title_row.addSpacing(self._px(12))
+		title_row.addSpacing(12)
 		title_row.addWidget(title_label)
 		title_row.addStretch(1)
 		vl.addLayout(title_row)
@@ -161,7 +154,7 @@ class MainWindow(QMainWindow):
 		# ── Top help row: link + collapsible instructions ─────────────────────────
 		top = QHBoxLayout()
 		lbl_link = QLabel('<a href="https://www.tunemymusic.com/home">TuneMyMusic (export CSV)</a>')
-		link_font = QFont(retro_font_family, default_pt + 3, QFont.Bold)
+		link_font = QFont(retro_font_family, default_pt + 1, QFont.Bold)
 		lbl_link.setFont(link_font)
 		lbl_link.setOpenExternalLinks(True)
 		lbl_link.setTextInteractionFlags(Qt.TextBrowserInteraction)
@@ -176,20 +169,11 @@ class MainWindow(QMainWindow):
 		self._button_font = btn_font
 		top.addStretch(1)
 		top.addWidget(btn_help)
-		btn_adv = QToolButton()
-		btn_adv.setText("Advanced Settings ▸")
-		btn_adv.setCheckable(True)
-		btn_adv.setToolButtonStyle(Qt.ToolButtonTextOnly)
-		btn_adv.setFont(btn_font)
-		self.btn_advanced = btn_adv
-		top.addWidget(btn_adv)
 		vl.addLayout(top)
 
 		self.help_panel = QFrame()
 		self.help_panel.setFrameShape(QFrame.StyledPanel)
 		help_layout = QVBoxLayout(self.help_panel)
-		help_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
-		help_layout.setSpacing(self._px(6))
 		help_text = QLabel(
 			"Instructions:\n"
 			"1) Click the link above → select your music platform\n"
@@ -199,9 +183,8 @@ class MainWindow(QMainWindow):
 			"\n"
 			"Save the exported CSV (e.g., 'My Spotify Library.csv'), then select it below."
 		)
-		help_text.setFont(QFont(retro_font_family, default_pt + 3))
+		help_text.setFont(QFont(retro_font_family, default_pt + 1))
 		help_text.setWordWrap(True)
-		help_text.setMinimumHeight(self._px(160))
 		help_layout.addWidget(help_text)
 		self.help_panel.setVisible(False)
 		vl.addWidget(self.help_panel)
@@ -209,118 +192,6 @@ class MainWindow(QMainWindow):
 			self.help_panel.setVisible(checked)
 			btn_help.setText("How to export CSV ▾" if checked else "How to export CSV ▸")
 		btn_help.toggled.connect(_toggle_help)
-
-		self.advanced_panel = QFrame()
-		self.advanced_panel.setFrameShape(QFrame.StyledPanel)
-		adv_layout = QVBoxLayout(self.advanced_panel)
-		adv_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
-		adv_layout.setSpacing(self._px(8))
-		# Darker background for clarity
-		self.advanced_panel.setStyleSheet("background-color: #bcb7ae;")
-		note = QLabel("These overrides are optional. Leave blank to use bundled tools.")
-		note.setWordWrap(True)
-		note.setFont(QFont(retro_font_family, default_pt))
-		adv_layout.addWidget(note)
-		row_ytdlp = QHBoxLayout()
-		lbl_ytdlp = QLabel("yt-dlp path:")
-		lbl_ytdlp.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
-		self.ed_ytdlp = QLineEdit()
-		self.ed_ytdlp.setPlaceholderText("Auto-detect from PATH")
-		self.ed_ytdlp.setFont(QFont(retro_font_family, default_pt + 1))
-		self.ed_ytdlp.textChanged.connect(lambda _=None: self._persist_settings())
-		btn_ytdlp = QPushButton("Browse…")
-		btn_ytdlp.setFont(btn_font)
-		btn_ytdlp.clicked.connect(self.on_browse_ytdlp)
-		btn_ytdlp_clear = QPushButton("Clear")
-		btn_ytdlp_clear.setFont(btn_font)
-		btn_ytdlp_clear.clicked.connect(self.on_clear_ytdlp)
-		row_ytdlp.addWidget(lbl_ytdlp)
-		row_ytdlp.addWidget(self.ed_ytdlp, 1)
-		row_ytdlp.addWidget(btn_ytdlp)
-		row_ytdlp.addWidget(btn_ytdlp_clear)
-		adv_layout.addLayout(row_ytdlp)
-		row_ffmpeg = QHBoxLayout()
-		lbl_ffmpeg = QLabel("FFmpeg path:")
-		lbl_ffmpeg.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
-		self.ed_ffmpeg = QLineEdit()
-		self.ed_ffmpeg.setPlaceholderText("Uses bundled binary by default")
-		self.ed_ffmpeg.setFont(QFont(retro_font_family, default_pt + 1))
-		self.ed_ffmpeg.textChanged.connect(lambda _=None: self._persist_settings())
-		btn_ffmpeg = QPushButton("Browse…")
-		btn_ffmpeg.setFont(btn_font)
-		btn_ffmpeg.clicked.connect(self.on_browse_ffmpeg)
-		btn_ffmpeg_clear = QPushButton("Clear")
-		btn_ffmpeg_clear.setFont(btn_font)
-		btn_ffmpeg_clear.clicked.connect(self.on_clear_ffmpeg)
-		row_ffmpeg.addWidget(lbl_ffmpeg)
-		row_ffmpeg.addWidget(self.ed_ffmpeg, 1)
-		row_ffmpeg.addWidget(btn_ffmpeg)
-		row_ffmpeg.addWidget(btn_ffmpeg_clear)
-		adv_layout.addLayout(row_ffmpeg)
-		# Cookies-from-browser (optional)
-		row_cookies = QHBoxLayout()
-		lbl_cookies = QLabel("Use browser cookies:")
-		lbl_cookies.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
-		self.combo_cookies = QComboBox()
-		self.combo_cookies.setEditable(False)
-		self.combo_cookies.addItem("Disabled", "")
-		for b in list_available_browsers():
-			self.combo_cookies.addItem(b.capitalize(), b)
-		self.combo_cookies.currentIndexChanged.connect(self.on_cookies_browser_changed)
-		row_cookies.addWidget(lbl_cookies)
-		row_cookies.addWidget(self.combo_cookies, 1)
-		adv_layout.addLayout(row_cookies)
-		# Browser profile (appears after a browser is selected)
-		self.profile_panel = QFrame()
-		self.profile_panel.setFrameShape(QFrame.NoFrame)
-		self.profile_panel.setVisible(False)
-		row_prof = QHBoxLayout(self.profile_panel)
-		row_prof.setContentsMargins(0, 0, 0, 0)
-		lbl_profile = QLabel("Profile:")
-		lbl_profile.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
-		self.combo_profile = QComboBox()
-		self.combo_profile.setEditable(False)
-		self.combo_profile.currentIndexChanged.connect(self.on_profile_changed)
-		row_prof.addWidget(lbl_profile)
-		row_prof.addWidget(self.combo_profile, 1)
-		adv_layout.addWidget(self.profile_panel)
-		# Tip: Firefox avoids DPAPI on Windows
-		lbl_ff_tip = QLabel("Tip: For reliable cookies on Windows, use Firefox or export a cookies.txt. <a href=\"https://www.mozilla.org/firefox/download/\">Get Firefox</a>")
-		lbl_ff_tip.setOpenExternalLinks(True)
-		lbl_ff_tip.setTextInteractionFlags(Qt.TextBrowserInteraction)
-		lbl_ff_tip.setFont(QFont(retro_font_family, default_pt))
-		adv_layout.addWidget(lbl_ff_tip)
-		# Cookies file alternative
-		row_cookie_file = QHBoxLayout()
-		lbl_cookie_file = QLabel("Cookies file (.txt):")
-		lbl_cookie_file.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
-		self.ed_cookies_file = QLineEdit()
-		self.ed_cookies_file.setPlaceholderText("Optional: Netscape cookies.txt (YouTube domain)")
-		self.ed_cookies_file.setFont(QFont(retro_font_family, default_pt + 1))
-		self.ed_cookies_file.textChanged.connect(self.on_cookies_file_changed)
-		btn_cookie_file = QPushButton("Browse...")
-		btn_cookie_file.setFont(btn_font)
-		btn_cookie_file.clicked.connect(self.on_browse_cookies_file)
-		btn_cookie_file_clear = QPushButton("Clear")
-		btn_cookie_file_clear.setFont(btn_font)
-		btn_cookie_file_clear.clicked.connect(self.on_clear_cookies_file)
-		row_cookie_file.addWidget(lbl_cookie_file)
-		row_cookie_file.addWidget(self.ed_cookies_file, 1)
-		row_cookie_file.addWidget(btn_cookie_file)
-		row_cookie_file.addWidget(btn_cookie_file_clear)
-		adv_layout.addLayout(row_cookie_file)
-		# Cookie check status label
-		self.lbl_cookie_status = QLabel("")
-		self.lbl_cookie_status.setVisible(False)
-		self.lbl_cookie_status.setFont(QFont(retro_font_family, max(default_pt - 1, 8)))
-		adv_layout.addWidget(self.lbl_cookie_status)
-		self.advanced_panel.setVisible(False)
-		vl.addWidget(self.advanced_panel)
-
-		def _toggle_advanced(checked: bool):
-			self.advanced_panel.setVisible(checked)
-			btn_adv.setText("Advanced Settings ▾" if checked else "Advanced Settings ▸")
-		btn_adv.toggled.connect(_toggle_advanced)
 
 		# ── CSV picker ─────────────────────────────────────────────────────────────
 		row1 = QHBoxLayout()
@@ -357,10 +228,10 @@ class MainWindow(QMainWindow):
 			w.setFont(controls_font)
 		lbl_fmt = QLabel("Format & Options:"); lbl_fmt.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		row3.addWidget(lbl_fmt)
-		row3.addSpacing(self._px(8))
+		row3.addSpacing(8)
 		row3.addWidget(self.rb_m4a)
 		row3.addWidget(self.rb_mp3)
-		row3.addSpacing(self._px(16))
+		row3.addSpacing(16)
 		row3.addWidget(self.cb_m3u8)
 		row3.addWidget(self.cb_m3u_plain)
 		row3.addWidget(self.cb_album_art)
@@ -406,72 +277,30 @@ class MainWindow(QMainWindow):
 		self.resolve_box.setFrameShape(QFrame.StyledPanel)
 		self.resolve_box.setVisible(False)
 		res_layout = QVBoxLayout(self.resolve_box)
-		res_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
-		res_layout.setSpacing(self._px(6))
+		res_layout.setContentsMargins(12, 10, 12, 10)
+		res_layout.setSpacing(6)
 		self.resolve_header = QLabel("Alternative matches pending")
 		res_layout.addWidget(self.resolve_header)
 		self.resolve_items_layout = QVBoxLayout()
-		self.resolve_items_layout.setSpacing(self._px(8))
+		self.resolve_items_layout.setSpacing(8)
 		res_layout.addLayout(self.resolve_items_layout)
 		vl.addWidget(self.resolve_box)
 
 		self._load_last_session()
-
-	def _compute_scale_factor(self) -> float:
-		screen = QGuiApplication.primaryScreen()
-		if screen is None:
-			return 1.0
-		dpi = screen.logicalDotsPerInch() or 96.0
-		scale = dpi / 96.0
-		return max(0.85, min(scale, 3.0))
-
-	def _px(self, value: int) -> int:
-		return max(1, int(round(value * self._scale)))
-
-	def _clamp_to_screen(self, width: int, height: int) -> Tuple[int, int]:
-		screen = QGuiApplication.primaryScreen()
-		if screen is None:
-			return int(width), int(height)
-		geo = screen.availableGeometry()
-		max_w = max(int(geo.width() * 0.95), 640)
-		max_h = max(int(geo.height() * 0.95), 480)
-		return min(int(width), max_w), min(int(height), max_h)
 
 	def on_browse_csv(self):
 		p, _ = QFileDialog.getOpenFileName(self, "Select CSV", "", "CSV files (*.csv);;All files (*)")
 		if p:
 			self.ed_csv.setText(p)
 			self.btn_clear.setEnabled(True)
-			self._allow_path_persist = True
-			self._persist_settings(include_paths=True)
+			self._persist_settings()
 
 	def on_browse_out(self):
 		p = QFileDialog.getExistingDirectory(self, "Select Output Folder", "")
 		if p:
 			self.ed_out.setText(p)
 			self.btn_clear.setEnabled(True)
-			self._allow_path_persist = True
-			self._persist_settings(include_paths=True)
-
-	def on_browse_ytdlp(self):
-		path, _ = QFileDialog.getOpenFileName(self, "Select yt-dlp executable", "", "Executables (*.exe *.bat *.cmd);;All files (*)")
-		if path:
-			self.ed_ytdlp.setText(path)
 			self._persist_settings()
-
-	def on_clear_ytdlp(self):
-		self.ed_ytdlp.clear()
-		self._persist_settings()
-
-	def on_browse_ffmpeg(self):
-		path, _ = QFileDialog.getOpenFileName(self, "Select FFmpeg executable", "", "Executables (*.exe);;All files (*)")
-		if path:
-			self.ed_ffmpeg.setText(path)
-			self._persist_settings()
-
-	def on_clear_ffmpeg(self):
-		self.ed_ffmpeg.clear()
-		self._persist_settings()
 
 	def on_open_output(self):
 		path = self.ed_out.text().strip()
@@ -490,187 +319,22 @@ class MainWindow(QMainWindow):
 		df = load_csv(self.ed_csv.text().strip())
 		return tracks_from_csv(df, None)  # use entire CSV
 
-	def _yt_dlp_override(self) -> str | None:
-		val = self.ed_ytdlp.text().strip()
-		return val or None
-
-	def _ffmpeg_override(self) -> str | None:
-		val = self.ed_ffmpeg.text().strip()
-		return val or None
-
-	def _cookies_browser(self) -> str | None:
-		b = self.combo_cookies.currentData()
-		if not isinstance(b, str) or not b.strip():
-			return None
-		browser = b.strip()
-		# Combine with selected profile if present
-		if self.profile_panel.isVisible() and self.combo_profile.count() > 0:
-			p = self.combo_profile.currentData()
-			if isinstance(p, str) and p.strip():
-				return f"{browser}:{p.strip()}"
-		return browser
-
-	def _cookies_file(self) -> str | None:
-		val = self.ed_cookies_file.text().strip()
-		return val or None
-
-	def _refresh_profiles(self, *, stored_profile: str | None = None) -> None:
-		# Populate profile list for the selected browser
-		b = self.combo_cookies.currentData()
-		self.combo_profile.clear()
-		if not isinstance(b, str) or not b:
-			self.profile_panel.setVisible(False)
-			return
-		profiles = list_profiles(b)
-		chromium_like = b in ("edge","chrome","brave","opera","vivaldi")
-		if not profiles:
-			if chromium_like:
-				# Chromium often has a Default profile
-				self.combo_profile.addItem("Default", "Default")
-				self.profile_panel.setVisible(True)
-			else:
-				# Firefox: if no profiles resolved, hide and let yt-dlp choose default
-				self.profile_panel.setVisible(False)
-				return
-		else:
-			for p in profiles:
-				self.combo_profile.addItem(p, p)
-			self.profile_panel.setVisible(True)
-		# Restore selection if available
-		if stored_profile:
-			for i in range(self.combo_profile.count()):
-				if self.combo_profile.itemData(i) == stored_profile:
-					self.combo_profile.setCurrentIndex(i)
-					break
-		# Kick off cookie check when profiles are ready
-		self._start_cookie_check()
-
-	def on_cookies_browser_changed(self) -> None:
-		# Toggle and populate profiles based on browser choice
-		self._refresh_profiles()
-		self._persist_settings()
-
-	def on_profile_changed(self) -> None:
-		self._persist_settings()
-		self._start_cookie_check()
-
-	def on_browse_cookies_file(self):
-		p, _ = QFileDialog.getOpenFileName(self, "Select cookies.txt", "", "Text files (*.txt);;All files (*)")
-		if p:
-			self.ed_cookies_file.setText(p)
-			self._persist_settings()
-
-	def on_clear_cookies_file(self):
-		self.ed_cookies_file.clear()
-		self._persist_settings()
-
-	def on_cookies_file_changed(self, _text: str) -> None:
-		# If a cookies file is provided, it takes precedence; still allow browser/profile selection
-		self._persist_settings()
-		self._start_cookie_check()
-
-	def _set_cookie_status(self, text: str, *, ok: bool | None) -> None:
-		self.lbl_cookie_status.setVisible(True)
-		self.lbl_cookie_status.setText(text)
-		if ok is True:
-			self.lbl_cookie_status.setStyleSheet("color: #006400")
-		elif ok is False:
-			self.lbl_cookie_status.setStyleSheet("color: #8B0000")
-		else:
-			self.lbl_cookie_status.setStyleSheet("color: #000000")
-
-	def _start_cookie_check(self) -> None:
-		# Only check when a browser is selected
-		cookies = self._cookies_browser()
-		import sys as _sys
-		if _sys.platform.startswith("win") and cookies and not self._cookies_file():
-			b = cookies.split(":", 1)[0].strip().lower()
-			if b in ("chrome", "edge", "brave", "vivaldi", "opera"):
-				self._set_cookie_status("On Windows, Chromium cookies require cookies.txt export.", ok=False)
-				return
-		if not cookies and not self._cookies_file():
-			self.lbl_cookie_status.setVisible(False)
-			return
-		self._set_cookie_status("Checking cookies…", ok=None)
-		# Cancel prior worker if any
-		if hasattr(self, "cookie_check_worker") and self.cookie_check_worker:
-			try:
-				self.cookie_check_worker.quit()
-				self.cookie_check_worker.wait(200)
-			except Exception:
-				pass
-		self.cookie_check_worker = CookiesCheckWorker(self._cookies_browser(), self._cookies_file(), self._yt_dlp_override(), self)
-		self.cookie_check_worker.sig_done.connect(lambda ok, msg: self._set_cookie_status(msg, ok=ok))
-		self.cookie_check_worker.start()
-
-	def _persist_settings(self, *, include_paths: bool = False) -> None:
-		def _norm(text: str) -> str | None:
-			value = text.strip()
-			return value or None
+	def _persist_settings(self) -> None:
 		cfg = {
-			"yt_dlp_path": _norm(self.ed_ytdlp.text()),
-			"ffmpeg_path": _norm(self.ed_ffmpeg.text()),
-			"cookies_browser": self._cookies_browser(),
-			"cookies_file": _norm(self.ed_cookies_file.text()),
+			"csv_path": self.ed_csv.text().strip(),
+			"output_dir": self.ed_out.text().strip()
 		}
-		if include_paths:
-			cfg["csv_path"] = _norm(self.ed_csv.text())
-			cfg["output_dir"] = _norm(self.ed_out.text())
 		save_settings(cfg)
 
 	def _load_last_session(self) -> None:
 		cfg = load_settings()
 		csv_path = cfg.get("csv_path") or ""
 		out_dir = cfg.get("output_dir") or ""
-		if csv_path and pathlib.Path(csv_path).exists():
-			self._allow_path_persist = True
-			blocker_csv = QSignalBlocker(self.ed_csv)
+		if csv_path:
 			self.ed_csv.setText(csv_path)
-			del blocker_csv
-		else:
-			self.ed_csv.clear()
-		if out_dir and pathlib.Path(out_dir).exists():
-			self._allow_path_persist = True
-			blocker_out = QSignalBlocker(self.ed_out)
+		if out_dir:
 			self.ed_out.setText(out_dir)
-			del blocker_out
-		else:
-			self.ed_out.clear()
-		yt_path = cfg.get("yt_dlp_path") or ""
-		blocker_yt = QSignalBlocker(self.ed_ytdlp)
-		self.ed_ytdlp.setText(yt_path)
-		del blocker_yt
-		ff_path = cfg.get("ffmpeg_path") or ""
-		blocker_ff = QSignalBlocker(self.ed_ffmpeg)
-		self.ed_ffmpeg.setText(ff_path)
-		del blocker_ff
-		stored_browser = str(cfg.get("cookies_browser") or "")
-		if stored_browser:
-			# Support optional profile: "browser[:profile]"
-			parts = stored_browser.split(":", 1)
-			sb = parts[0].strip()
-			sp = parts[1].strip() if len(parts) == 2 else None
-			# Set browser selection
-			for i in range(self.combo_cookies.count()):
-				if self.combo_cookies.itemData(i) == sb:
-					block_b = QSignalBlocker(self.combo_cookies)
-					self.combo_cookies.setCurrentIndex(i)
-					del block_b
-					# Populate profiles and set stored
-					self._refresh_profiles(stored_profile=sp)
-					break
-		else:
-			# Default to Disabled unless the user explicitly opts into cookies.
-			block_b = QSignalBlocker(self.combo_cookies)
-			self.combo_cookies.setCurrentIndex(0)
-			del block_b
-			self.profile_panel.setVisible(False)
-		# Load cookies file path
-		cookie_file = cfg.get("cookies_file") or ""
-		block_cf = QSignalBlocker(self.ed_cookies_file)
-		self.ed_cookies_file.setText(cookie_file)
-		del block_cf
-		self.btn_clear.setEnabled(bool(self.ed_csv.text().strip() or self.ed_out.text().strip()))
+		self.btn_clear.setEnabled(bool(csv_path or out_dir))
 
 	def on_start(self):
 		csv_path = self.ed_csv.text().strip()
@@ -681,9 +345,7 @@ class MainWindow(QMainWindow):
 		if not out_dir:
 			QMessageBox.warning(self, "Missing Output", "Please choose an output folder.")
 			return
-		yt_override = self._yt_dlp_override()
-		ff_override = self._ffmpeg_override()
-		result = run_preflight_checks(yt_override, ff_override, skip_network=False)
+		result = run_preflight_checks()
 		if result.errors:
 			lines = "\n - ".join(["Preflight failed due to:"] + result.errors)
 			QMessageBox.critical(self, "Preflight errors", lines)
@@ -699,8 +361,7 @@ class MainWindow(QMainWindow):
 		if result.details:
 			detail_lines = [f"{key}: {value}" for key, value in sorted(result.details.items())]
 			self.lbl_log.setText("; ".join(detail_lines))
-		self._allow_path_persist = True
-		self._persist_settings(include_paths=self._allow_path_persist)
+		self._persist_settings()
 
 		# Build table from all tracks in CSV
 		try:
@@ -735,7 +396,6 @@ class MainWindow(QMainWindow):
 		want_m3u8 = self.cb_m3u8.isChecked()
 		want_m3u_plain = self.cb_m3u_plain.isChecked()
 		embed_art = self.cb_album_art.isChecked()
-		cookies_browser = self._cookies_browser()
 
 		self.btn_start.setEnabled(False)
 		self.btn_stop.setEnabled(True)
@@ -743,7 +403,7 @@ class MainWindow(QMainWindow):
 		self.lbl_log.setText("Starting…")
 
 		# playlist=None → worker picks a default name internally
-		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, yt_override, ff_override, cookies_browser, self._cookies_file(), self)
+		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, self)
 		self.worker.sig_log.connect(self.lbl_log.setText)
 		self.worker.sig_total.connect(lambda n: self.lbl_log.setText(f"Queued {n} tracks…"))
 		self.worker.sig_match_stats.connect(lambda m, s: self.lbl_log.setText(f"Matched: {m} | Skipped: {s}"))
@@ -801,8 +461,7 @@ class MainWindow(QMainWindow):
 		self.btn_start.setEnabled(True)
 		self.btn_stop.setEnabled(False)
 		self.btn_clear.setEnabled(False)
-		self._allow_path_persist = False
-		self._persist_settings(include_paths=True)
+		self._persist_settings()
 		self.track_results = {}
 		self.action_buttons = {}
 		self._clear_resolution_panel()
@@ -831,7 +490,7 @@ class MainWindow(QMainWindow):
 		self.btn_stop.setEnabled(False)
 		self.btn_clear.setEnabled(True)
 		self.lbl_log.setText(msg)
-		self._persist_settings(include_paths=self._allow_path_persist)
+		self._persist_settings()
 		QApplication.beep()
 		if self.worker:
 			self.worker.quit()
@@ -920,8 +579,8 @@ class MainWindow(QMainWindow):
 		widget = QFrame()
 		widget.setFrameShape(QFrame.StyledPanel)
 		layout = QVBoxLayout(widget)
-		layout.setContentsMargins(self._px(8), self._px(6), self._px(8), self._px(6))
-		layout.setSpacing(self._px(4))
+		layout.setContentsMargins(8, 6, 8, 6)
+		layout.setSpacing(4)
 		title = QLabel(f"{track.get('artists','')} — {track.get('title','')}")
 		title.setWordWrap(True)
 		layout.addWidget(title)
@@ -929,7 +588,7 @@ class MainWindow(QMainWindow):
 		combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
 		layout.addWidget(combo)
 		btn_row = QHBoxLayout()
-		btn_row.setSpacing(self._px(6))
+		btn_row.setSpacing(6)
 		btn_download = QPushButton("Download")
 		btn_skip = QPushButton("Skip Song")
 		btn_close = QPushButton("Close")
@@ -983,19 +642,7 @@ class MainWindow(QMainWindow):
 		record["btn_download"].setEnabled(False)
 		record["btn_skip"].setEnabled(False)
 		record["btn_close"].setEnabled(False)
-		worker = SingleDownloadWorker(
-			row_idx,
-			record["track"],
-			option,
-			out_dir,
-			fmt,
-			self.cb_album_art.isChecked(),
-			self._yt_dlp_override(),
-			self._ffmpeg_override(),
-			self._cookies_browser(),
-			self._cookies_file(),
-			self
-		)
+		worker = SingleDownloadWorker(row_idx, record["track"], option, out_dir, fmt, self.cb_album_art.isChecked(), self)
 		record["worker"] = worker
 		worker.sig_status.connect(self.on_row_status)
 		worker.sig_finished.connect(self.on_resolution_finished)
@@ -1150,20 +797,3 @@ class MainWindow(QMainWindow):
 				file_path.unlink()
 			except Exception:
 				pass
-
-	def closeEvent(self, event):
-		"""Ensure all threads are stopped before closing"""
-		# Stop main worker if running
-		if self.worker and self.worker.isRunning():
-			self.worker.stop()
-			self.worker.quit()
-			self.worker.wait(3000)  # wait up to 3 seconds
-
-		# Stop resolution workers if running
-		for record in list(self.resolve_items.values()):
-			worker = record.get("worker")
-			if worker and worker.isRunning():
-				worker.quit()
-				worker.wait(1000)
-
-		event.accept()

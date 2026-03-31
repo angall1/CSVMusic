@@ -17,8 +17,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['csvmusic\\app.py'],
-    pathex=['C:\\Users\\austin\\Desktop\\CSVMusic'],
+    ['spotify2media\\app.py'],
+    pathex=['C:\\Users\\ermah\\Desktop\\spotify converter 2'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
