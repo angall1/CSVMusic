@@ -1,6 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_all
 
+project_root = Path(__file__).resolve().parent
 datas = [('resources', 'resources'), ('licenses', 'licenses')]
 binaries = [('resources\\ffmpeg\\windows\\ffmpeg.exe', 'ffmpeg\\windows')]
 hiddenimports = []
@@ -18,7 +21,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 a = Analysis(
     ['csvmusic\\app.py'],
-    pathex=['C:\\users\\austin\\desktop\\csvmusic'],
+    pathex=[str(project_root)],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
