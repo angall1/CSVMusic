@@ -9,7 +9,6 @@
 
 <p align="center"><a href="https://buymeacoffee.com/agalli">Enjoying CSVMusic? Buy me a coffee ☕</a></p>
 
-# CSVMusic
 
 **Convert playlists from any music service into fully tagged audio files.**
 
