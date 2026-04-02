@@ -9,32 +9,93 @@
 
 <p align="center"><a href="https://buymeacoffee.com/agalli">Enjoying CSVMusic? Buy me a coffee ☕</a></p>
 
-CSVMusic is a Windows desktop app that turns the playlist CSV files you export from TuneMyMusic into ready-to-play, fully tagged audio. Point the app at a TuneMyMusic CSV and it handles YouTube Music lookup, `yt-dlp` downloads, and FFmpeg processing automatically.
+# CSVMusic
 
-## Quick Start
-- Download the latest release zip and extract it.
-- Run `CSVMusic.exe` (all dependencies, including FFmpeg, are bundled).
-- Load your TuneMyMusic CSV and let the download queue finish.
+**Convert playlists from any music service into fully tagged audio files.**
 
-## Highlights
-- Accepts TuneMyMusic exports sourced from Spotify, Apple Music, YouTube, Deezer, and more.
-- Chooses the best YouTube Music match before downloading.
-- Writes ID3/M4A tags and embeds artwork so files drop straight into any library.
+CSVMusic takes a playlist (exported as CSV from TuneMyMusic) and automatically:
+- Finds the best match on YouTube Music  
+- Downloads the audio  
+- Adds proper metadata (artist, album, artwork, etc.)  
+- Outputs ready-to-use **M4A** or **MP3** files  
+- Optionally creates `.m3u` / `.m3u8` playlists  
 
-## Notes
-- Keep the extracted folder together; the app expects FFmpeg alongside the executable.
-- CSV data stays on the machine—only YouTube Music is contacted for audio streams.
-- Rich metadata included by TuneMyMusic (duration, ISRC) helps improve matching accuracy.
+---
 
-## Contributing
+# Download (Start Here)
 
-## Release Automation
-- Create and push a Git tag for the commit you want to ship.
-- Publish a GitHub release; the workflow builds Linux, macOS, and Windows bundles automatically (or trigger the `Release Builds` workflow manually with the release tag).
-- The Linux job also uploads the source tarball and wheel built via `python -m build`.
-- Each PyInstaller zip includes platform-specific FFmpeg binaries and `yt-dlp`, so the app runs out of the box.
-- Keep `resources/ffmpeg/**` and `CSVMusic.spec` updated if you change binary locations—releases depend on them.
+Go here:  
+https://github.com/angall1/CSVMusic/releases/tag/v1.2.4  
 
-Developers can run the source version by creating a virtual environment, installing with `pip install -e .`, and launching `python -m csvmusic.app`. See `AGENTS.md` for repo guidelines if you plan to contribute changes.
+Download one of the following based on your OS:
 
-Enjoy building a local library from any streaming service!
+### Windows
+https://github.com/angall1/CSVMusic/releases/download/v1.2.4/CSVMusic-windows.zip  
+
+### macOS
+https://github.com/angall1/CSVMusic/releases/download/v1.2.4/CSVMusic-macos.zip  
+
+### Linux
+https://github.com/angall1/CSVMusic/releases/download/v1.2.4/CSVMusic-linux.zip  
+
+Unzip the file and run the app.
+
+---
+
+# How It Works
+
+1. Open the app (first launch may take ~10–15 seconds)  
+2. Click the **TuneMyMusic link** in the top-left  
+3. Follow the steps on that site:
+   - Import your playlist (Spotify, Apple Music, etc.)
+   - Export to file → **CSV file**
+4. Back in CSVMusic:
+   - Load the CSV
+   - Choose an output folder
+   - Click **Start**
+5. Wait for downloads to finish  
+
+If a song can’t be matched well:
+- It will show up **highlighted in yellow**
+- Click **Alternatives** to pick a better version  
+
+---
+
+# What You Get
+
+- Audio files with:
+  - Correct artist/title
+  - Album info
+  - Embedded artwork  
+- Optional playlist files:
+  - `.m3u`
+  - `.m3u8`  
+
+Everything is ready to drop into iTunes, a phone, an MP3 player, etc.
+
+---
+
+# Important Notes
+
+- Keep all files in the extracted folder together  
+- The app includes:
+  - `ffmpeg`
+  - `yt-dlp`  
+
+Because of this, **some antivirus software may flag it**.  
+These are **false positives** due to bundled executables used for downloading and processing audio.
+
+- Your CSV stays local  
+- Only YouTube Music is contacted for downloading audio  
+
+---
+
+# Supported Sources (via TuneMyMusic)
+
+- Spotify  
+- Apple Music  
+- YouTube  
+- Deezer  
+- And most others  
+
+---
