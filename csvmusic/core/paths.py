@@ -248,7 +248,8 @@ def _ytdlp_candidates() -> list[pathlib.Path]:
 def ytdlp_path() -> str:
 	"""
 	Resolve a usable yt-dlp binary path.
-	Order: env override -> nearby venv locations -> PATH -> bundled Python module.
+	Order: env override -> bundled Python module in frozen app -> nearby venv
+	locations -> PATH -> bundled Python module.
 	Raises RuntimeError if not found.
 	"""
 	override = os.environ.get("YTDLP_BIN") or os.environ.get("YT_DLP_BIN")
@@ -258,6 +259,11 @@ def ytdlp_path() -> str:
 			return str(override_path)
 		if shutil.which(override):
 			return override
+	try:
+		if _is_frozen() and importlib.util.find_spec("yt_dlp") is not None:
+			return INTERNAL_YTDLP
+	except Exception:
+		pass
 	for cand in _ytdlp_candidates():
 		try:
 			if cand.exists() and cand.is_file() and os.access(cand, os.X_OK):
