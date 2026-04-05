@@ -10,6 +10,7 @@ import requests
 from csvmusic.core.paths import ffmpeg_path, ytdlp_path, INTERNAL_YTDLP
 
 _WINDOWS = sys.platform.startswith("win")
+_MACOS = sys.platform.startswith("darwin")
 
 
 def _hidden_subprocess_kwargs() -> dict:
@@ -31,6 +32,23 @@ class PreflightCheckResult:
 
 def _valid_executable(path: pathlib.Path) -> bool:
 	return path.exists() and path.is_file() and os.access(path, os.X_OK)
+
+
+def _ffmpeg_probe_timeout(path: str) -> int:
+	if _MACOS and "_MEI" in path:
+		return 20
+	return 5
+
+
+def _run_ffmpeg_version(path: str) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		[path, "-version"],
+		stdout=subprocess.PIPE,
+		stderr=subprocess.STDOUT,
+		text=True,
+		timeout=_ffmpeg_probe_timeout(path),
+		**_hidden_subprocess_kwargs()
+	)
 
 
 def _check_yt_dlp(errors: List[str], warnings: List[str], details: Dict[str, str], override: str | None = None) -> None:
@@ -83,16 +101,27 @@ def _check_ffmpeg(errors: List[str], warnings: List[str], details: Dict[str, str
 		else:
 			path = ffmpeg_path()
 		details["ffmpeg"] = path
-		proc = subprocess.run(
-			[path, "-version"],
-			stdout=subprocess.PIPE,
-			stderr=subprocess.STDOUT,
-			text=True,
-			timeout=5,
-			**_hidden_subprocess_kwargs()
-		)
+		proc = _run_ffmpeg_version(path)
 		if proc.returncode != 0:
 			errors.append("ffmpeg responded with a non-zero exit code. Verify the bundled binary works.")
+	except subprocess.TimeoutExpired as exc:
+		sys_ff = shutil.which("ffmpeg")
+		if sys_ff and sys_ff != details.get("ffmpeg"):
+			try:
+				proc = _run_ffmpeg_version(sys_ff)
+				details["ffmpeg"] = sys_ff
+				warnings.append(
+					f"Bundled ffmpeg timed out during preflight; using system ffmpeg at {sys_ff}."
+				)
+				if proc.returncode != 0:
+					errors.append("System ffmpeg responded with a non-zero exit code during fallback.")
+				return
+			except Exception as fallback_exc:
+				errors.append(
+					f"ffmpeg unavailable: bundled probe timed out and system fallback failed: {fallback_exc}"
+				)
+				return
+		errors.append(f"ffmpeg unavailable: {exc}")
 	except Exception as exc:
 		errors.append(f"ffmpeg unavailable: {exc}")
 
