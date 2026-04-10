@@ -24,18 +24,21 @@ CSVMusic takes a playlist (exported as CSV from TuneMyMusic) and automatically:
 # Download (Start Here)
 
 Go here:  
-https://github.com/angall1/CSVMusic/releases/tag/v1.2.7  
+https://github.com/angall1/CSVMusic/releases/tag/v1.2.9  
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.2.7/CSVMusic-windows.zip  
+https://github.com/angall1/CSVMusic/releases/download/v1.2.9/CSVMusic-windows.zip  
 
-### macOS
-https://github.com/angall1/CSVMusic/releases/download/v1.2.7/CSVMusic-macos.zip  
+### macOS (Apple Silicon)
+https://github.com/angall1/CSVMusic/releases/download/v1.2.9/CSVMusic-macos-arm64.zip  
+
+### macOS (Intel)
+https://github.com/angall1/CSVMusic/releases/download/v1.2.9/CSVMusic-macos-intel.zip  
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.2.7/CSVMusic-linux.zip  
+https://github.com/angall1/CSVMusic/releases/download/v1.2.9/CSVMusic-linux.zip  
 
 Unzip the file and run the app.
 

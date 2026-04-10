@@ -32,9 +32,14 @@ jobs:
             suffix: linux
             ffmpeg_platform: linux
             build_sdist: true
-          - os: macos-latest
+          - os: macos-15
             python_version: "3.11"
-            suffix: macos
+            suffix: macos-arm64
+            ffmpeg_platform: darwin
+            build_sdist: false
+          - os: macos-15-intel
+            python_version: "3.11"
+            suffix: macos-intel
             ffmpeg_platform: darwin
             build_sdist: false
           - os: windows-latest

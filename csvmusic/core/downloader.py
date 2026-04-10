@@ -285,6 +285,51 @@ def _cleanup_outputs(dir: pathlib.Path, base: str) -> None:
 		except Exception:
 			pass
 
+
+def _replace_file(src: pathlib.Path, dst: pathlib.Path) -> None:
+	if dst.exists():
+		try:
+			dst.unlink()
+		except Exception:
+			pass
+	src.replace(dst)
+
+
+def _normalize_to_m4a(src: pathlib.Path, dst: pathlib.Path, ffmpeg_bin: str, video_id: str) -> pathlib.Path:
+	tmp_dst = dst.with_name(dst.stem + ".normalized.m4a")
+	if tmp_dst.exists():
+		try:
+			tmp_dst.unlink()
+		except Exception:
+			pass
+
+	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "copy", str(tmp_dst)])
+	rc = proc.returncode
+	if rc == 0 and tmp_dst.exists():
+		if src != dst:
+			try: src.unlink()
+			except Exception: pass
+		_replace_file(tmp_dst, dst)
+		return dst
+
+	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "aac", "-b:a", "192k", str(tmp_dst)])
+	rc = proc.returncode
+	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
+	if rc == 0 and tmp_dst.exists():
+		if src != dst:
+			try: src.unlink()
+			except Exception: pass
+		_replace_file(tmp_dst, dst)
+		return dst
+
+	try:
+		if tmp_dst.exists():
+			tmp_dst.unlink()
+	except Exception:
+		pass
+	log(f"download_m4a: ffmpeg normalization failed video_id={video_id} src='{src.name}' dst='{dst.name}' rc={rc}")
+	raise DownloadError(f"failed to produce .m4a: {detail}")
+
 def yt_thumbnail_bytes(video_id: str) -> Optional[bytes]:
 	# Best-effort cover from YouTube thumbnails
 	for quality in ("maxresdefault","sddefault","hqdefault","mqdefault","default"):
@@ -410,34 +455,10 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	if not cands:
 		raise DownloadError("downloaded file not found")
 
-	# Already m4a?
-	for p in cands:
-		if p.suffix.lower() == ".m4a":
-			return p
-
-	# Remux/transcode to .m4a
 	src = cands[0]
 	dst = dst_dir / (safe_base + ".m4a")
-
-	# 1) Remux (copy AAC out of MP4/MOV containers)
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
-	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "copy", str(dst)])
-	rc = proc.returncode
-	if rc == 0 and dst.exists():
-		try: src.unlink()
-		except Exception: pass
-		return dst
-
-	# 2) Transcode (e.g., Opus/WebM → AAC)
-	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "aac", "-b:a", "192k", str(dst)])
-	rc = proc.returncode
-	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
-	try: src.unlink()
-	except Exception: pass
-	if rc != 0 or not dst.exists():
-		log(f"download_m4a: ffmpeg conversion failed video_id={video_id} src='{src.name}' dst='{dst.name}' rc={rc}")
-		raise DownloadError(f"failed to produce .m4a: {detail}")
-	return dst
+	return _normalize_to_m4a(src, dst, ffmpeg_bin, video_id)
 
 def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
 	dst_dir.mkdir(parents=True, exist_ok=True)
