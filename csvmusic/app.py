@@ -95,15 +95,6 @@ def show_qt_splash(app: QApplication) -> QSplashScreen | None:
 	return splash
 
 def main() -> int:
-	# Optional: update native bootloader splash text (if built with --splash)
-	pyi_splash = None
-	try:
-		import pyi_splash as _ps
-		pyi_splash = _ps
-		pyi_splash.update_text(f"Loading CSVMusic v{APP_VERSION}…")
-	except Exception:
-		pyi_splash = None
-
 	app = QApplication(sys.argv)
 	if _WINDOWS:
 		try:
@@ -118,12 +109,6 @@ def main() -> int:
 	else:
 		log("Application icon missing; using default.")
 	qt_splash = show_qt_splash(app)
-	if pyi_splash is not None:
-		try:
-			pyi_splash.close()
-		except Exception:
-			pass
-		pyi_splash = None
 
 	try:
 		probe_ffmpeg()
@@ -140,12 +125,6 @@ def main() -> int:
 	w.show()
 	if qt_splash is not None:
 		qt_splash.finish(w)
-
-	if pyi_splash is not None:
-		try:
-			pyi_splash.close()
-		except Exception:
-			pass
 
 	return app.exec()
 
