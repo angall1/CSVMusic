@@ -148,6 +148,7 @@ jobs:
           import shutil
           import sys
           import stat
+          import subprocess
 
           suffix = os.environ["PACKAGE_SUFFIX"]
           dist_dir = pathlib.Path("dist")
@@ -188,8 +189,10 @@ jobs:
                       raise SystemExit(
                           "Missing PyInstaller output: neither directory nor single-file bundle found"
                       )
-          # Ensure yt-dlp CLI is bundled alongside the app binary so runtime
-          # resolution in csvmusic.core.paths.ytdlp_path() can find it.
+          # Ensure yt-dlp CLI is bundled alongside the app binary on platforms
+          # that still use it. macOS frozen builds prefer the bundled yt_dlp
+          # Python module; adding an executable inside the .app after build can
+          # invalidate the bundle signature and trigger Finder's "damaged" UI.
           def _ensure_exec(p: pathlib.Path) -> None:
               try:
                   mode = p.stat().st_mode
@@ -198,30 +201,36 @@ jobs:
                   pass
 
           plat_win = sys.platform.startswith("win")
-          ytdlp_name = "yt-dlp.exe" if plat_win else "yt-dlp"
-          # Determine where the app's executable lives so yt-dlp sits alongside it
-          bin_dir = app_dir
-          if app_dir.suffix == ".app":
-              cand = app_dir / "Contents" / "MacOS"
-              if cand.exists():
-                  bin_dir = cand
-          elif (app_dir / "CSVMusic").exists() or (app_dir / "CSVMusic.exe").exists():
+          plat_mac = sys.platform.startswith("darwin")
+          if not plat_mac:
+              ytdlp_name = "yt-dlp.exe" if plat_win else "yt-dlp"
+              # Determine where the app's executable lives so yt-dlp sits alongside it
               bin_dir = app_dir
-          # Always fetch official standalone yt-dlp for portability
-          dst_ytdlp = bin_dir / ytdlp_name
-          url = (
-              "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" if plat_win else
-              ("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" if sys.platform.startswith("darwin") else
-               "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux")
-          )
-          try:
-              import urllib.request
-              with urllib.request.urlopen(url) as r, open(dst_ytdlp, "wb") as f:
-                  shutil.copyfileobj(r, f)
-          except Exception as e:
-              raise SystemExit(f"Failed to download yt-dlp from {url}: {e}")
-          _ensure_exec(dst_ytdlp)
+              if (app_dir / "CSVMusic").exists() or (app_dir / "CSVMusic.exe").exists():
+                  bin_dir = app_dir
+              # Always fetch official standalone yt-dlp for portability
+              dst_ytdlp = bin_dir / ytdlp_name
+              url = (
+                  "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" if plat_win else
+                  "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
+              )
+              try:
+                  import urllib.request
+                  with urllib.request.urlopen(url) as r, open(dst_ytdlp, "wb") as f:
+                      shutil.copyfileobj(r, f)
+              except Exception as e:
+                  raise SystemExit(f"Failed to download yt-dlp from {url}: {e}")
+              _ensure_exec(dst_ytdlp)
+          if plat_mac:
+              subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app_dir)], check=True)
+              subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app_dir)], check=True)
           zip_path = dist_dir / f"CSVMusic-{suffix}.zip"
+          if plat_mac:
+              subprocess.run(
+                  ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app_dir), str(zip_path)],
+                  check=True,
+              )
+              raise SystemExit(0)
           with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
               zf.write(app_dir, app_dir.name + "/")
               for path in sorted(app_dir.rglob("*")):
