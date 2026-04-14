@@ -7,35 +7,70 @@ CONFIDENCE_MIN = 0.6
 SEARCH_LIMIT = 12
 ALT_SEARCH_LIMIT = 24
 RATE_LIMIT_S = 0.35
+DURATION_TOLERANCE_RATIO = 0.10
 
-_PENALTY_TERMS = {"live","remix","cover","sped","slowed","nightcore","8d","reverb","extended","mashup","edit","karaoke","instrumental","demo"}
+_PENALTY_TERMS = {"live","remix","cover","sped","slowed","nightcore","8d","reverb","extended","mashup","edit","karaoke","instrumental","demo","tribute","soundalike"}
+_CAST_PENALTY_TERMS = {"cast","original cast","tribute band","musical","orchestra"}
 
 def _toks(s: str) -> set:
 	return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
 
-def _duration_s(d: Optional[int]) -> int:
+def _candidate_artist_text(cand: Dict) -> str:
+	if cand.get("artists"):
+		try:
+			return ", ".join(a.get("name", "") for a in cand["artists"])
+		except Exception:
+			pass
+	return cand.get("author", "") or ""
+
+def _overlap_ratio(needle: set, haystack: set) -> float:
+	return len(needle & haystack) / max(1, len(needle))
+
+def _duration_s(d: Optional[int | str]) -> int:
 	try:
-		return int(d) if d is not None else 0
+		if d is None:
+			return 0
+		if isinstance(d, str):
+			text = d.strip()
+			if not text:
+				return 0
+			if ":" in text:
+				total = 0
+				for part in text.split(":"):
+					total = total * 60 + int(part)
+				return total
+			return int(float(text))
+		return int(d)
 	except Exception:
 		return 0
 
+def _track_duration_s(track: Dict) -> int:
+	try:
+		return int(round((track.get("duration_ms") or 0) / 1000))
+	except Exception:
+		return 0
+
+def _duration_within_tolerance(track: Dict, cand: Dict) -> bool:
+	track_s = _track_duration_s(track)
+	cand_s = _duration_s(cand.get("duration_seconds"))
+	if track_s <= 0 or cand_s <= 0:
+		return True
+	return abs(track_s - cand_s) <= max(1.0, track_s * DURATION_TOLERANCE_RATIO)
+
 def _score(track: Dict, cand: Dict) -> float:
-	# title/artist overlap
-	track_tokens = _toks(track.get("title","")) | _toks(track.get("artists",""))
+	# Score title and artist separately so "tribute to ARTIST" in the title
+	# does not masquerade as an actual artist match.
+	track_title_tokens = _toks(track.get("title",""))
+	track_artist_tokens = _toks(track.get("artists",""))
 	cand_title = cand.get("title") or ""
-	cand_art = ""
-	if cand.get("artists"):
-		try:
-			cand_art = ", ".join(a.get("name","") for a in cand["artists"])
-		except Exception:
-			pass
-	if not cand_art:
-		cand_art = cand.get("author","") or ""
-	cand_tokens = _toks(cand_title) | _toks(cand_art)
-	overlap = len(track_tokens & cand_tokens) / max(1, len(track_tokens))
+	cand_art = _candidate_artist_text(cand)
+	cand_title_tokens = _toks(cand_title)
+	cand_artist_tokens = _toks(cand_art)
+	title_overlap = _overlap_ratio(track_title_tokens, cand_title_tokens)
+	artist_overlap = _overlap_ratio(track_artist_tokens, cand_artist_tokens)
 
 	# duration (CSV may not have; cand might)
-	sp_s = int(round((track.get("duration_ms") or 0) / 1000))
+	sp_s = _track_duration_s(track)
 	yt_s = _duration_s(cand.get("duration_seconds"))
 	if sp_s > 0 and yt_s > 0:
 		delta = abs(sp_s - yt_s)
@@ -61,11 +96,17 @@ def _score(track: Dict, cand: Dict) -> float:
 	p_pen = 0.0
 	for t in _PENALTY_TERMS:
 		if t in titleblob:
-			p_pen += 0.07
+			p_pen += 0.10
+	if artist_overlap == 0.0:
+		for t in _CAST_PENALTY_TERMS:
+			if t in titleblob:
+				p_pen += 0.18
+	if "tribute" in titleblob and artist_overlap < 0.5:
+		p_pen += 0.25
 	if "remaster" in titleblob:
 		p_pen *= 0.6
 
-	total = max(0.0, d_score * 0.5 + overlap * 0.45 + ch_boost - p_pen)
+	total = max(0.0, d_score * 0.35 + title_overlap * 0.35 + artist_overlap * 0.25 + ch_boost - p_pen)
 	return min(total, 0.99)
 
 def _clean_title_artist(title: str, artists: str) -> str:
@@ -147,7 +188,7 @@ def _search_filter(yt: YTMusic, q: str, search_filter: str, limit: int) -> List[
 			"title": r.get("title"),
 			"artists": artists if search_filter == "songs" else None,
 			"author": (artists[0]["name"] if artists and search_filter == "songs" else r.get("author") or ""),
-			"duration_seconds": r.get("duration_seconds") or 0,
+			"duration_seconds": _duration_s(r.get("duration_seconds") or r.get("duration")),
 			"source": source,
 		})
 	return cands
@@ -176,6 +217,8 @@ def _rank_candidates(yt: YTMusic, track: Dict, limit: int = SEARCH_LIMIT, source
 
 	scored: List[Dict] = []
 	for cand in all_cands:
+		if not _duration_within_tolerance(track, cand):
+			continue
 		s = _score(track, cand)
 		item = dict(cand)
 		item["score"] = s
