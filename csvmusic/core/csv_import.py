@@ -17,8 +17,10 @@ _CANON = {
 	"duration (ms)": "Duration (ms)",
 }
 
-# Minimum set required to build track entries (we do NOT require "Type")
-_REQUIRED = ["Track name", "Artist name", "Album", "Playlist name", "ISRC", "Spotify - id"]
+# Minimum set required to build track entries. External IDs and ISRC are useful
+# hints when present, but downloads only need title/artist/playlist metadata.
+_REQUIRED = ["Track name", "Artist name", "Playlist name"]
+_OPTIONAL_TEXT = ["Album", "ISRC", "Spotify - id"]
 
 def _read_csv_robust(path: pathlib.Path) -> pd.DataFrame:
 	"""
@@ -81,6 +83,9 @@ def load_csv(path: Union[str, pathlib.Path]) -> pd.DataFrame:
 	# Normalize key columns to strings (avoid NaN weirdness later)
 	for c in _REQUIRED:
 		df[c] = df[c].astype(str).fillna("").str.strip()
+	for c in _OPTIONAL_TEXT:
+		if c in df.columns:
+			df[c] = df[c].astype(str).fillna("").str.strip()
 
 	# If present, normalize optional columns
 	if "Type" in df.columns:
@@ -102,12 +107,11 @@ def list_playlists(df: pd.DataFrame) -> List[str]:
 
 def _is_valid_track_row(row: pd.Series) -> bool:
 	"""
-	Heuristic: treat as a track if there's a non-empty Track name OR a Spotify id.
-	We DO NOT rely on 'Type' (exports vary).
+	Heuristic: treat as a track if there's a non-empty Track name.
+	We do not rely on source-specific IDs or 'Type' because exports vary.
 	"""
 	title = str(row.get("Track name", "")).strip()
-	spid = str(row.get("Spotify - id", "")).strip()
-	return (len(title) > 0) or (len(spid) > 0)
+	return len(title) > 0
 
 def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Dict]:
 	"""
