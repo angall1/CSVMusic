@@ -295,7 +295,42 @@ def _replace_file(src: pathlib.Path, dst: pathlib.Path) -> None:
 	src.replace(dst)
 
 
-def _normalize_to_m4a(src: pathlib.Path, dst: pathlib.Path, ffmpeg_bin: str, video_id: str) -> pathlib.Path:
+def _audio_processing_enabled(audio_processing: Dict | None) -> bool:
+	if not audio_processing:
+		return False
+	return (
+		bool(audio_processing.get("normalize"))
+		or int(audio_processing.get("bass_gain", 0) or 0) != 0
+		or int(audio_processing.get("treble_gain", 0) or 0) != 0
+		or int(audio_processing.get("volume_gain", 0) or 0) != 0
+	)
+
+
+def _audio_filter_chain(audio_processing: Dict | None) -> str | None:
+	if not _audio_processing_enabled(audio_processing):
+		return None
+	filters: list[str] = []
+	bass_gain = int(audio_processing.get("bass_gain", 0) or 0) if audio_processing else 0
+	treble_gain = int(audio_processing.get("treble_gain", 0) or 0) if audio_processing else 0
+	volume_gain = int(audio_processing.get("volume_gain", 0) or 0) if audio_processing else 0
+	if bass_gain:
+		filters.append(f"bass=g={bass_gain}:f=110:w=0.6")
+	if treble_gain:
+		filters.append(f"treble=g={treble_gain}:f=6000:w=0.6")
+	if audio_processing and audio_processing.get("normalize"):
+		filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+	if volume_gain:
+		filters.append(f"volume={volume_gain}dB")
+	return ",".join(filters) if filters else None
+
+
+def _append_audio_filter(args: list[str], audio_processing: Dict | None) -> None:
+	filter_chain = _audio_filter_chain(audio_processing)
+	if filter_chain:
+		args += ["-af", filter_chain]
+
+
+def _normalize_to_m4a(src: pathlib.Path, dst: pathlib.Path, ffmpeg_bin: str, video_id: str, audio_processing: Dict | None = None) -> pathlib.Path:
 	tmp_dst = dst.with_name(dst.stem + ".normalized.m4a")
 	if tmp_dst.exists():
 		try:
@@ -303,16 +338,20 @@ def _normalize_to_m4a(src: pathlib.Path, dst: pathlib.Path, ffmpeg_bin: str, vid
 		except Exception:
 			pass
 
-	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "copy", str(tmp_dst)])
-	rc = proc.returncode
-	if rc == 0 and tmp_dst.exists():
-		if src != dst:
-			try: src.unlink()
-			except Exception: pass
-		_replace_file(tmp_dst, dst)
-		return dst
+	if not _audio_processing_enabled(audio_processing):
+		proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "copy", str(tmp_dst)])
+		rc = proc.returncode
+		if rc == 0 and tmp_dst.exists():
+			if src != dst:
+				try: src.unlink()
+				except Exception: pass
+			_replace_file(tmp_dst, dst)
+			return dst
 
-	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "aac", "-b:a", "192k", str(tmp_dst)])
+	args = [ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn"]
+	_append_audio_filter(args, audio_processing)
+	args += ["-c:a", "aac", "-b:a", "192k", str(tmp_dst)]
+	proc = _run_capture(args)
 	rc = proc.returncode
 	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
 	if rc == 0 and tmp_dst.exists():
@@ -376,7 +415,7 @@ def _extractor_args(client: str) -> list[str]:
 	return ["--extractor-args", f"youtube:player_client={client}"]
 
 
-def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
+def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None) -> pathlib.Path:
 	"""
 	YT Music only. Save using a sanitized stem so our search matches what yt-dlp writes.
 	- If output is already .m4a → done.
@@ -458,9 +497,9 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	src = cands[0]
 	dst = dst_dir / (safe_base + ".m4a")
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
-	return _normalize_to_m4a(src, dst, ffmpeg_bin, video_id)
+	return _normalize_to_m4a(src, dst, ffmpeg_bin, video_id, audio_processing)
 
-def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
+def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None) -> pathlib.Path:
 	dst_dir.mkdir(parents=True, exist_ok=True)
 	safe_base = _safe(base_name)
 	tmp = dst_dir / (safe_base + ".tmp")
@@ -523,6 +562,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	dst = dst_dir / (safe_base + ".mp3")
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
 	args = [ffmpeg_bin, "-y", "-i", str(src)]
+	_append_audio_filter(args, audio_processing)
 	if cbr_320:
 		args += ["-codec:a","libmp3lame","-b:a","320k"]
 	else:

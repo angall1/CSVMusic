@@ -6,7 +6,8 @@ from PySide6.QtWidgets import (
 	QMainWindow, QWidget, QFileDialog, QMessageBox,
 	QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
 	QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox,
-	QRadioButton, QButtonGroup, QProgressBar, QToolButton, QSizePolicy, QFrame, QComboBox
+	QRadioButton, QButtonGroup, QProgressBar, QToolButton, QSizePolicy, QFrame,
+	QComboBox, QSlider
 )
 from PySide6.QtCore import Qt, QSignalBlocker
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication
@@ -187,6 +188,13 @@ class MainWindow(QMainWindow):
 		self._button_font = btn_font
 		top.addStretch(1)
 		top.addWidget(btn_help)
+		btn_eq = QToolButton()
+		btn_eq.setText("EQUALIZER ▸")
+		btn_eq.setCheckable(True)
+		btn_eq.setToolButtonStyle(Qt.ToolButtonTextOnly)
+		btn_eq.setFont(btn_font)
+		self.btn_equalizer = btn_eq
+		top.addWidget(btn_eq)
 		btn_adv = QToolButton()
 		btn_adv.setText("Advanced Settings ▸")
 		btn_adv.setCheckable(True)
@@ -220,6 +228,48 @@ class MainWindow(QMainWindow):
 			self.help_panel.setVisible(checked)
 			btn_help.setText("How to export CSV ▾" if checked else "How to export CSV ▸")
 		btn_help.toggled.connect(_toggle_help)
+
+		self.equalizer_panel = QFrame()
+		self.equalizer_panel.setFrameShape(QFrame.StyledPanel)
+		self.equalizer_panel.setStyleSheet("background-color: #bcb7ae;")
+		eq_layout = QVBoxLayout(self.equalizer_panel)
+		eq_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		eq_layout.setSpacing(self._px(8))
+		eq_note = QLabel("Optional FFmpeg audio processing. EQ is applied before loudness normalization.")
+		eq_note.setWordWrap(True)
+		eq_note.setFont(QFont(retro_font_family, default_pt))
+		eq_layout.addWidget(eq_note)
+		self.cb_eq_enabled = QCheckBox("Equalizer ON")
+		self.cb_eq_enabled.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
+		self.cb_eq_enabled.toggled.connect(self._set_equalizer_controls_enabled)
+		self.cb_eq_enabled.toggled.connect(lambda _=None: self._persist_settings())
+		eq_layout.addWidget(self.cb_eq_enabled)
+		self.cb_eq_normalize = QCheckBox("Normalize sound level")
+		self.cb_eq_normalize.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_eq_normalize.toggled.connect(lambda _=None: self._persist_settings())
+		eq_layout.addWidget(self.cb_eq_normalize)
+		self.slider_volume, self.lbl_volume_value, self.lbl_volume = self._make_eq_slider(eq_layout, "Output Gain", retro_font_family, default_pt)
+		self.slider_bass, self.lbl_bass_value, self.lbl_bass = self._make_eq_slider(eq_layout, "Bass", retro_font_family, default_pt)
+		self.slider_treble, self.lbl_treble_value, self.lbl_treble = self._make_eq_slider(eq_layout, "Treble", retro_font_family, default_pt)
+		self._equalizer_child_controls = [
+			self.cb_eq_normalize,
+			self.lbl_volume,
+			self.slider_volume,
+			self.lbl_volume_value,
+			self.lbl_bass,
+			self.slider_bass,
+			self.lbl_bass_value,
+			self.lbl_treble,
+			self.slider_treble,
+			self.lbl_treble_value,
+		]
+		self._set_equalizer_controls_enabled(False)
+		self.equalizer_panel.setVisible(False)
+		vl.addWidget(self.equalizer_panel)
+		def _toggle_equalizer(checked: bool):
+			self.equalizer_panel.setVisible(checked)
+			btn_eq.setText("EQUALIZER ▾" if checked else "EQUALIZER ▸")
+		btn_eq.toggled.connect(_toggle_equalizer)
 
 		self.advanced_panel = QFrame()
 		self.advanced_panel.setFrameShape(QFrame.StyledPanel)
@@ -360,6 +410,7 @@ class MainWindow(QMainWindow):
 		self.rb_m4a = QRadioButton("m4a (AAC, preferred)"); self.rb_m4a.setChecked(True)
 		self.rb_mp3 = QRadioButton("mp3")
 		self.grp_fmt = QButtonGroup(self); self.grp_fmt.addButton(self.rb_m4a); self.grp_fmt.addButton(self.rb_mp3)
+		self.grp_fmt.buttonToggled.connect(lambda _button, checked: self._persist_settings() if checked else None)
 		self.cb_m3u8 = QCheckBox("Write .m3u8")
 		self.cb_m3u_plain = QCheckBox("Write .m3u"); self.cb_m3u_plain.setChecked(True)
 		self.cb_album_art = QCheckBox("Embed album art"); self.cb_album_art.setChecked(True)
@@ -439,6 +490,44 @@ class MainWindow(QMainWindow):
 
 	def _px(self, value: int) -> int:
 		return max(1, int(round(value * self._scale)))
+
+	def _make_eq_slider(self, parent_layout: QVBoxLayout, label: str, font_family: str, default_pt: int) -> tuple[QSlider, QLabel, QLabel]:
+		row = QHBoxLayout()
+		lbl = QLabel(f"{label}:")
+		lbl.setFont(QFont(font_family, default_pt + 1, QFont.Bold))
+		slider = QSlider(Qt.Horizontal)
+		slider.setRange(-15, 15)
+		slider.setValue(0)
+		slider.setTickInterval(1)
+		slider.setTickPosition(QSlider.TicksBelow)
+		value_label = QLabel("0 dB")
+		value_label.setMinimumWidth(self._px(52))
+		value_label.setFont(QFont(font_family, default_pt + 1))
+		def _on_change(value: int) -> None:
+			value_label.setText(f"{value:+d} dB" if value else "0 dB")
+			self._persist_settings()
+		slider.valueChanged.connect(_on_change)
+		row.addWidget(lbl)
+		row.addWidget(slider, 1)
+		row.addWidget(value_label)
+		parent_layout.addLayout(row)
+		return slider, value_label, lbl
+
+	def _set_equalizer_controls_enabled(self, enabled: bool) -> None:
+		self.cb_eq_enabled.setText("Equalizer ON" if enabled else "Equalizer OFF")
+		for widget in getattr(self, "_equalizer_child_controls", []):
+			widget.setEnabled(enabled)
+
+	def _audio_processing_options(self) -> dict:
+		if not self.cb_eq_enabled.isChecked():
+			return {}
+		return {
+			"enabled": True,
+			"normalize": self.cb_eq_normalize.isChecked(),
+			"volume_gain": self.slider_volume.value(),
+			"bass_gain": self.slider_bass.value(),
+			"treble_gain": self.slider_treble.value(),
+		}
 
 	def _clamp_to_screen(self, width: int, height: int) -> Tuple[int, int]:
 		screen = QGuiApplication.primaryScreen()
@@ -624,6 +713,12 @@ class MainWindow(QMainWindow):
 			"ffmpeg_path": _norm(self.ed_ffmpeg.text()),
 			"cookies_browser": self._cookies_browser(),
 			"cookies_file": _norm(self.ed_cookies_file.text()),
+			"eq_enabled": self.cb_eq_enabled.isChecked(),
+			"eq_normalize": self.cb_eq_normalize.isChecked(),
+			"eq_volume_gain": self.slider_volume.value(),
+			"eq_bass_gain": self.slider_bass.value(),
+			"eq_treble_gain": self.slider_treble.value(),
+			"format": "m4a" if self.rb_m4a.isChecked() else "mp3",
 		}
 		if include_paths:
 			cfg["csv_path"] = _norm(self.ed_csv.text())
@@ -682,6 +777,41 @@ class MainWindow(QMainWindow):
 		block_cf = QSignalBlocker(self.ed_cookies_file)
 		self.ed_cookies_file.setText(cookie_file)
 		del block_cf
+		eq_has_saved_values = bool(cfg.get("eq_normalize", False)) or any(
+			int(cfg.get(key, 0) or 0) != 0
+			for key in ("eq_volume_gain", "eq_bass_gain", "eq_treble_gain")
+		)
+		eq_enabled = bool(cfg.get("eq_enabled", eq_has_saved_values))
+		block_eq_enabled = QSignalBlocker(self.cb_eq_enabled)
+		self.cb_eq_enabled.setChecked(eq_enabled)
+		del block_eq_enabled
+		self._set_equalizer_controls_enabled(eq_enabled)
+		block_norm = QSignalBlocker(self.cb_eq_normalize)
+		self.cb_eq_normalize.setChecked(bool(cfg.get("eq_normalize", False)))
+		del block_norm
+		volume_gain = int(cfg.get("eq_volume_gain", 0) or 0)
+		bass_gain = int(cfg.get("eq_bass_gain", 0) or 0)
+		treble_gain = int(cfg.get("eq_treble_gain", 0) or 0)
+		block_volume = QSignalBlocker(self.slider_volume)
+		self.slider_volume.setValue(max(-15, min(15, volume_gain)))
+		del block_volume
+		self.lbl_volume_value.setText(f"{self.slider_volume.value():+d} dB" if self.slider_volume.value() else "0 dB")
+		block_bass = QSignalBlocker(self.slider_bass)
+		self.slider_bass.setValue(max(-15, min(15, bass_gain)))
+		del block_bass
+		self.lbl_bass_value.setText(f"{self.slider_bass.value():+d} dB" if self.slider_bass.value() else "0 dB")
+		block_treble = QSignalBlocker(self.slider_treble)
+		self.slider_treble.setValue(max(-15, min(15, treble_gain)))
+		del block_treble
+		self.lbl_treble_value.setText(f"{self.slider_treble.value():+d} dB" if self.slider_treble.value() else "0 dB")
+		stored_format = str(cfg.get("format") or "").lower()
+		if stored_format in ("m4a", "mp3"):
+			block_m4a = QSignalBlocker(self.rb_m4a)
+			block_mp3 = QSignalBlocker(self.rb_mp3)
+			self.rb_m4a.setChecked(stored_format == "m4a")
+			self.rb_mp3.setChecked(stored_format == "mp3")
+			del block_m4a
+			del block_mp3
 		self.btn_clear.setEnabled(bool(self.ed_csv.text().strip() or self.ed_out.text().strip()))
 
 	def on_start(self):
@@ -769,7 +899,7 @@ class MainWindow(QMainWindow):
 		self.lbl_log.setText("Starting…")
 
 		# playlist=None → worker picks a default name internally
-		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, yt_override, ff_override, cookies_browser, self._cookies_file(), self)
+		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, yt_override, ff_override, cookies_browser, self._cookies_file(), self._audio_processing_options(), self)
 		self.worker.sig_log.connect(self.lbl_log.setText)
 		self.worker.sig_warning.connect(lambda msg: QMessageBox.warning(self, "YouTube throttling detected", msg))
 		self.worker.sig_total.connect(lambda n: self.lbl_log.setText(f"Queued {n} tracks…"))
@@ -1089,6 +1219,7 @@ class MainWindow(QMainWindow):
 			self._ffmpeg_override(),
 			self._cookies_browser(),
 			self._cookies_file(),
+			self._audio_processing_options(),
 			self
 		)
 		record["download_worker"] = worker
