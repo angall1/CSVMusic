@@ -376,12 +376,48 @@ def yt_thumbnail_bytes(video_id: str) -> Optional[bytes]:
 		try:
 			r = requests.get(url, timeout=12)
 			if r.status_code == 200 and r.content and len(r.content) > 1024:
-				return r.content
+				return _square_cover_art_bytes(r.content) or r.content
 		except Exception:
 			pass
 	return None
 
+def _square_cover_art_bytes(cover_bytes: bytes, *, size: int = 600) -> Optional[bytes]:
+	"""
+	Normalize embedded artwork to a square JPEG without stretching.
+	Some older players assume cover art is square and distort non-square images.
+	The image is center-cropped instead of padded so players do not show borders.
+	"""
+	if not cover_bytes:
+		return None
+	try:
+		ffmpeg_bin = ffmpeg_path()
+		proc = subprocess.run(
+			[
+				ffmpeg_bin,
+				"-hide_banner",
+				"-loglevel", "error",
+				"-f", "image2pipe",
+				"-i", "pipe:0",
+				"-vf", f"scale={size}:{size}:force_original_aspect_ratio=increase,crop={size}:{size}",
+				"-frames:v", "1",
+				"-f", "image2pipe",
+				"-vcodec", "mjpeg",
+				"pipe:1",
+			],
+			input=cover_bytes,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE,
+			**_hidden_subprocess_kwargs()
+		)
+		if proc.returncode == 0 and proc.stdout and len(proc.stdout) > 1024:
+			return proc.stdout
+	except Exception as exc:
+		log(f"cover art square normalization skipped: {exc}")
+	return None
+
 def tag_file(path: pathlib.Path, meta: Dict, cover_bytes: Optional[bytes]) -> None:
+	if cover_bytes:
+		cover_bytes = _square_cover_art_bytes(cover_bytes) or cover_bytes
 	if path.suffix.lower() == ".mp3":
 		# ID3 (MP3)
 		try:
