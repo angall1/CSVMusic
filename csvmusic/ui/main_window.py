@@ -194,7 +194,7 @@ class MainWindow(QMainWindow):
 		lbl_link.setStyleSheet("a { color: #000080; text-decoration: none; }")
 		top.addWidget(lbl_link)
 		btn_help = QToolButton()
-		btn_help.setText("How to export CSV ▸")
+		btn_help.setText("TUTORIAL ▸")
 		btn_help.setCheckable(True)
 		btn_help.setToolButtonStyle(Qt.ToolButtonTextOnly)
 		btn_font = QFont(retro_font_family, default_pt + 1, QFont.Bold)
@@ -202,6 +202,13 @@ class MainWindow(QMainWindow):
 		self._button_font = btn_font
 		top.addStretch(1)
 		top.addWidget(btn_help)
+		btn_load = QToolButton()
+		btn_load.setText("LOAD PLAYLIST ▸")
+		btn_load.setCheckable(True)
+		btn_load.setToolButtonStyle(Qt.ToolButtonTextOnly)
+		btn_load.setFont(btn_font)
+		self.btn_load_existing = btn_load
+		top.addWidget(btn_load)
 		btn_eq = QToolButton()
 		btn_eq.setText("EQUALIZER ▸")
 		btn_eq.setCheckable(True)
@@ -210,7 +217,7 @@ class MainWindow(QMainWindow):
 		self.btn_equalizer = btn_eq
 		top.addWidget(btn_eq)
 		btn_adv = QToolButton()
-		btn_adv.setText("Advanced Settings ▸")
+		btn_adv.setText("SETTINGS ▸")
 		btn_adv.setCheckable(True)
 		btn_adv.setToolButtonStyle(Qt.ToolButtonTextOnly)
 		btn_adv.setFont(btn_font)
@@ -230,7 +237,12 @@ class MainWindow(QMainWindow):
 			"3) Choose destination\n"
 			"4) Export to file → CSV\n"
 			"\n"
-			"Save the exported CSV (e.g., 'My Spotify Library.csv'), then select it below."
+			"Save the exported CSV (e.g., 'My Spotify Library.csv'), then select it below.\n"
+			"\n"
+			"Tips:\n"
+			"• Use EQUALIZER if you want louder output, bass/treble changes, or track-to-track volume matching.\n"
+			"• Use LOAD PLAYLIST if you already have songs in a playlist folder and only want to download the new ones.\n"
+			"• LOAD PLAYLIST accepts the playlist CSV plus either the output folder, the playlist folder, or that playlist's .m3u/.m3u8 file."
 		)
 		help_text.setFont(QFont(retro_font_family, default_pt + 3))
 		help_text.setWordWrap(True)
@@ -240,8 +252,60 @@ class MainWindow(QMainWindow):
 		vl.addWidget(self.help_panel)
 		def _toggle_help(checked: bool):
 			self.help_panel.setVisible(checked)
-			btn_help.setText("How to export CSV ▾" if checked else "How to export CSV ▸")
+			btn_help.setText("TUTORIAL ▾" if checked else "TUTORIAL ▸")
 		btn_help.toggled.connect(_toggle_help)
+
+		self.load_panel = QFrame()
+		self.load_panel.setFrameShape(QFrame.StyledPanel)
+		self.load_panel.setStyleSheet("background-color: #bcb7ae;")
+		load_layout = QVBoxLayout(self.load_panel)
+		load_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		load_layout.setSpacing(self._px(8))
+		load_note = QLabel(
+			"Use this when you already have music in a playlist folder and want CSVMusic to skip files that are already there."
+		)
+		load_note.setWordWrap(True)
+		load_note.setFont(QFont(retro_font_family, default_pt))
+		load_layout.addWidget(load_note)
+		load_row_csv = QHBoxLayout()
+		lbl_load_csv = QLabel("Playlist CSV:")
+		lbl_load_csv.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.ed_load_csv = QLineEdit()
+		self.ed_load_csv.setPlaceholderText("CSV for the playlist you want to refresh")
+		self.ed_load_csv.setFont(QFont(retro_font_family, default_pt + 1))
+		btn_load_csv = QPushButton("Browse…")
+		btn_load_csv.setFont(btn_font)
+		btn_load_csv.clicked.connect(self.on_browse_load_csv)
+		load_row_csv.addWidget(lbl_load_csv)
+		load_row_csv.addWidget(self.ed_load_csv, 1)
+		load_row_csv.addWidget(btn_load_csv)
+		load_layout.addLayout(load_row_csv)
+		load_row_source = QHBoxLayout()
+		lbl_load_source = QLabel("Current music:")
+		lbl_load_source.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.ed_load_source = QLineEdit()
+		self.ed_load_source.setPlaceholderText("Playlist folder, output folder, or that playlist's .m3u/.m3u8 file")
+		self.ed_load_source.setFont(QFont(retro_font_family, default_pt + 1))
+		btn_load_source = QPushButton("Browse…")
+		btn_load_source.setFont(btn_font)
+		btn_load_source.clicked.connect(self.on_browse_load_source)
+		load_row_source.addWidget(lbl_load_source)
+		load_row_source.addWidget(self.ed_load_source, 1)
+		load_row_source.addWidget(btn_load_source)
+		load_layout.addLayout(load_row_source)
+		load_action_row = QHBoxLayout()
+		self.btn_scan_existing = QPushButton("Load Existing Playlist")
+		self.btn_scan_existing.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		self.btn_scan_existing.clicked.connect(self.on_load_playlist)
+		load_action_row.addWidget(self.btn_scan_existing)
+		load_action_row.addStretch(1)
+		load_layout.addLayout(load_action_row)
+		self.load_panel.setVisible(False)
+		vl.addWidget(self.load_panel)
+		def _toggle_load_panel(checked: bool):
+			self.load_panel.setVisible(checked)
+			btn_load.setText("LOAD PLAYLIST ▾" if checked else "LOAD PLAYLIST ▸")
+		btn_load.toggled.connect(_toggle_load_panel)
 
 		self.equalizer_panel = QFrame()
 		self.equalizer_panel.setFrameShape(QFrame.StyledPanel)
@@ -392,7 +456,7 @@ class MainWindow(QMainWindow):
 
 		def _toggle_advanced(checked: bool):
 			self.advanced_panel.setVisible(checked)
-			btn_adv.setText("Advanced Settings ▾" if checked else "Advanced Settings ▸")
+			btn_adv.setText("SETTINGS ▾" if checked else "SETTINGS ▸")
 		btn_adv.toggled.connect(_toggle_advanced)
 
 		# ── CSV picker ─────────────────────────────────────────────────────────────
@@ -454,9 +518,9 @@ class MainWindow(QMainWindow):
 
 		row4 = QHBoxLayout()
 		row4.setSpacing(self._px(8))
-		self.btn_start = QPushButton("Start"); self.btn_start.clicked.connect(self.on_start)
-		self.btn_stop = QPushButton("Stop"); self.btn_stop.setEnabled(False); self.btn_stop.clicked.connect(self.on_stop)
-		self.btn_clear = QPushButton("Clear"); self.btn_clear.setEnabled(False); self.btn_clear.clicked.connect(self.on_clear)
+		self.btn_start = QPushButton("START"); self.btn_start.clicked.connect(self.on_start)
+		self.btn_stop = QPushButton("STOP"); self.btn_stop.setEnabled(False); self.btn_stop.clicked.connect(self.on_stop)
+		self.btn_clear = QPushButton("CLEAR"); self.btn_clear.setEnabled(False); self.btn_clear.clicked.connect(self.on_clear)
 		for w in (self.btn_start, self.btn_stop, self.btn_clear):
 			w.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
 		row4.addWidget(self.btn_start)
@@ -596,12 +660,48 @@ class MainWindow(QMainWindow):
 			self._allow_path_persist = True
 			self._persist_settings(include_paths=True)
 
+	def on_browse_load_csv(self):
+		p, _ = QFileDialog.getOpenFileName(self, "Select Playlist CSV", "", "CSV files (*.csv);;All files (*)")
+		if p:
+			self.ed_load_csv.setText(p)
+			self._persist_settings(include_paths=True)
+
 	def on_browse_out(self):
 		p = QFileDialog.getExistingDirectory(self, "Select Output Folder", "")
 		if p:
 			self.ed_out.setText(p)
 			self.btn_clear.setEnabled(True)
 			self._allow_path_persist = True
+			self._persist_settings(include_paths=True)
+
+	def _prompt_load_source_path(self) -> pathlib.Path | None:
+		msg = QMessageBox(self)
+		msg.setWindowTitle("Current Music")
+		msg.setText("Choose what to browse.")
+		msg.setInformativeText("Select either the playlist folder/output folder, or the playlist's .m3u/.m3u8 file.")
+		folder_btn = msg.addButton("Choose Folder", QMessageBox.AcceptRole)
+		file_btn = msg.addButton("Choose Playlist File", QMessageBox.AcceptRole)
+		msg.addButton(QMessageBox.Cancel)
+		msg.exec()
+		clicked = msg.clickedButton()
+		initial = self.ed_load_source.text().strip() or self.ed_out.text().strip() or ""
+		if clicked == folder_btn:
+			path = QFileDialog.getExistingDirectory(self, "Select Playlist Folder or Output Folder", initial)
+			return pathlib.Path(path) if path else None
+		if clicked == file_btn:
+			path, _ = QFileDialog.getOpenFileName(
+				self,
+				"Select Playlist File",
+				initial,
+				"Playlist files (*.m3u *.m3u8);;All files (*)"
+			)
+			return pathlib.Path(path) if path else None
+		return None
+
+	def on_browse_load_source(self):
+		path = self._prompt_load_source_path()
+		if path:
+			self.ed_load_source.setText(str(path))
 			self._persist_settings(include_paths=True)
 
 	def on_browse_ytdlp(self):
@@ -637,9 +737,109 @@ class MainWindow(QMainWindow):
 		from PySide6.QtCore import QUrl
 		QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
 
-	def _collect_tracks_preview(self) -> List[dict]:
-		df = load_csv(self.ed_csv.text().strip())
+	def _collect_tracks_preview(self, csv_path: str | None = None) -> List[dict]:
+		target_csv = csv_path or self.ed_csv.text().strip()
+		df = load_csv(target_csv)
 		return tracks_from_csv(df, None)  # use entire CSV
+
+	def _set_row_highlight(self, row_idx: int, color: QColor | None) -> None:
+		if not (0 <= row_idx < self.table.rowCount()):
+			return
+		for col in (0, 1, 2):
+			item = self.table.item(row_idx, col)
+			if item is None:
+				continue
+			item.setBackground(color if color is not None else QColor(Qt.transparent))
+
+	def _playlist_dir_name(self, tracks: list[dict]) -> str:
+		playlist_name = tracks[0].get("playlist") or "Playlist"
+		return sanitize_name(playlist_name)
+
+	def _resolve_load_playlist_root(self, selected_path: pathlib.Path, tracks: list[dict]) -> pathlib.Path:
+		playlist_dir_name = self._playlist_dir_name(tracks)
+		if not selected_path.exists():
+			raise ValueError("The selected file or folder no longer exists. Choose the playlist folder or its .m3u/.m3u8 file again.")
+		if selected_path.is_file():
+			if selected_path.suffix.lower() not in (".m3u", ".m3u8"):
+				raise ValueError("Load Playlist only accepts a folder or a playlist file ending in .m3u or .m3u8.")
+			if selected_path.parent.name != playlist_dir_name:
+				raise ValueError(
+					f"This playlist file is not inside the expected playlist folder '{playlist_dir_name}'. "
+					f"Choose the '{playlist_dir_name}' folder or its .m3u/.m3u8 file."
+				)
+			return selected_path.parent.parent
+		if selected_path.is_dir():
+			if (selected_path / playlist_dir_name).is_dir():
+				return selected_path
+			if selected_path.name == playlist_dir_name:
+				return selected_path.parent
+			raise ValueError(
+				f"Could not find the playlist folder '{playlist_dir_name}' in that location. "
+				f"Choose the main output folder or the '{playlist_dir_name}' playlist folder."
+			)
+		raise ValueError("Load Playlist expects a folder or an .m3u/.m3u8 playlist file.")
+
+	def _expected_track_path(self, track: dict, out_root: pathlib.Path, fmt: str) -> pathlib.Path:
+		playlist_name = track.get("playlist") or "Playlist"
+		base = f"{track.get('artists','')} - {track.get('title','')}"
+		return out_root / sanitize_name(playlist_name) / f"{sanitize_name(base)}.{fmt}"
+
+	def _build_track_preview(self) -> tuple[list[dict], list[int]]:
+		csv_path = self.ed_csv.text().strip()
+		out_dir = self.ed_out.text().strip()
+		if not csv_path or not pathlib.Path(csv_path).exists():
+			raise FileNotFoundError("Please choose a valid CSV file.")
+		if not out_dir:
+			raise ValueError("Please choose an output folder.")
+		tracks = self._collect_tracks_preview()
+		if not tracks:
+			return [], []
+		fmt = "m4a" if self.rb_m4a.isChecked() else "mp3"
+		out_root = pathlib.Path(out_dir)
+		self.tracks = tracks
+		self.track_results = {}
+		self.action_buttons = {}
+		self._clear_resolution_panel()
+		self.table.setRowCount(len(tracks))
+		queued_rows: list[int] = []
+		for i, track in enumerate(tracks):
+			self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
+			title_item = QTableWidgetItem(f"{track['artists']} — {track['title']}")
+			if not self._default_track_icon.isNull():
+				title_item.setIcon(self._default_track_icon)
+			self.table.setItem(i, 1, title_item)
+			self.table.setRowHeight(i, self._row_icon_size + self._px(8))
+			btn_alt = QPushButton("Alternatives")
+			btn_alt.setEnabled(False)
+			btn_alt.clicked.connect(partial(self.on_open_alternatives, i))
+			self.table.setCellWidget(i, 3, btn_alt)
+			self.action_buttons[i] = btn_alt
+			expected_path = self._expected_track_path(track, out_root, fmt)
+			if expected_path.exists():
+				self.track_results[i] = {
+					"track": track,
+					"options": [],
+					"match": None,
+					"confidence": 1.0,
+					"skipped": False,
+					"error": None,
+					"playlist_name": track.get("playlist") or "Playlist",
+					"file_path": str(expected_path),
+					"downloaded": True,
+					"existing": True,
+					"cover_bytes": None,
+				}
+				self.on_row_status(i, f"Already downloaded → {expected_path.name}")
+				btn_alt.setEnabled(True)
+			else:
+				self.table.setItem(i, 2, QTableWidgetItem("Queued"))
+				self._set_row_highlight(i, YELLOW)
+				queued_rows.append(i)
+		self.total = len(tracks)
+		self.progress.setMaximum(max(len(queued_rows), 1))
+		self.progress.setValue(0)
+		self.last_playlist_name = tracks[0].get("playlist") or "Playlist"
+		return tracks, queued_rows
 
 	def _yt_dlp_override(self) -> str | None:
 		val = self.ed_ytdlp.text().strip()
@@ -801,6 +1001,8 @@ class MainWindow(QMainWindow):
 		if include_paths:
 			cfg["csv_path"] = _norm(self.ed_csv.text())
 			cfg["output_dir"] = _norm(self.ed_out.text())
+			cfg["load_csv_path"] = _norm(self.ed_load_csv.text())
+			cfg["load_source_path"] = _norm(self.ed_load_source.text())
 		save_settings(cfg)
 
 	def _load_last_session(self) -> None:
@@ -821,6 +1023,20 @@ class MainWindow(QMainWindow):
 			del blocker_out
 		else:
 			self.ed_out.clear()
+		load_csv_path = cfg.get("load_csv_path") or ""
+		if load_csv_path and pathlib.Path(load_csv_path).exists():
+			blocker_load_csv = QSignalBlocker(self.ed_load_csv)
+			self.ed_load_csv.setText(load_csv_path)
+			del blocker_load_csv
+		else:
+			self.ed_load_csv.clear()
+		load_source_path = cfg.get("load_source_path") or ""
+		if load_source_path and pathlib.Path(load_source_path).exists():
+			blocker_load_source = QSignalBlocker(self.ed_load_source)
+			self.ed_load_source.setText(load_source_path)
+			del blocker_load_source
+		else:
+			self.ed_load_source.clear()
 		yt_path = cfg.get("yt_dlp_path") or ""
 		blocker_yt = QSignalBlocker(self.ed_ytdlp)
 		self.ed_ytdlp.setText(yt_path)
@@ -923,14 +1139,19 @@ class MainWindow(QMainWindow):
 		self._allow_path_persist = True
 		self._persist_settings(include_paths=self._allow_path_persist)
 
-		# Build table from all tracks in CSV
 		try:
-			self.tracks = self._collect_tracks_preview()
+			self.tracks, queued_rows = self._build_track_preview()
 		except Exception as e:
 			QMessageBox.critical(self, "CSV Error", f"Failed to parse CSV:\n{e}")
 			return
 		if not self.tracks:
 			QMessageBox.information(self, "No Tracks", "No tracks found in the CSV.")
+			return
+		if not queued_rows:
+			self.btn_clear.setEnabled(True)
+			self.lbl_log.setText("Everything in this playlist is already downloaded.")
+			self._rewrite_playlists()
+			QMessageBox.information(self, "Nothing to Download", "Every track in this playlist is already present in the output folder.")
 			return
 		batch_policy = youtube_batch_mitigation(len(self.tracks), using_cookies=bool(self._cookies_browser() or self._cookies_file()))
 		if batch_policy.warning:
@@ -943,28 +1164,8 @@ class MainWindow(QMainWindow):
 				self.lbl_log.setText("Start cancelled after YouTube risk warning.")
 				return
 
-		self.track_results = {}
-		self.action_buttons = {}
-		self._clear_resolution_panel()
-		self.table.setRowCount(len(self.tracks))
-		for i, t in enumerate(self.tracks):
-			self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
-			title_item = QTableWidgetItem(f"{t['artists']} — {t['title']}")
-			if not self._default_track_icon.isNull():
-				title_item.setIcon(self._default_track_icon)
-			self.table.setItem(i, 1, title_item)
-			self.table.setItem(i, 2, QTableWidgetItem("Queued"))
-			self.table.setRowHeight(i, self._row_icon_size + self._px(8))
-			btn_alt = QPushButton("Alternatives")
-			btn_alt.setEnabled(False)
-			btn_alt.clicked.connect(partial(self.on_open_alternatives, i))
-			self.table.setCellWidget(i, 3, btn_alt)
-			self.action_buttons[i] = btn_alt
-
-		# Progress
 		self.progress.setValue(0)
-		self.progress.setMaximum(len(self.tracks))
-		self.total = len(self.tracks)
+		self.progress.setMaximum(len(queued_rows))
 
 		fmt = "m4a" if self.rb_m4a.isChecked() else "mp3"
 		want_m3u8 = self.cb_m3u8.isChecked()
@@ -972,13 +1173,32 @@ class MainWindow(QMainWindow):
 		embed_art = self.cb_album_art.isChecked()
 		cookies_browser = self._cookies_browser()
 
+		active_tracks = [self.tracks[i] for i in queued_rows]
+
+		self.btn_scan_existing.setEnabled(False)
 		self.btn_start.setEnabled(False)
 		self.btn_stop.setEnabled(True)
 		self.btn_clear.setEnabled(False)
-		self.lbl_log.setText("Starting…")
+		self.lbl_log.setText(f"Starting… {len(queued_rows)} new track(s) queued, {len(self.tracks) - len(queued_rows)} already in folder.")
 
 		# playlist=None → worker picks a default name internally
-		self.worker = PipelineWorker(csv_path, out_dir, None, fmt, want_m3u8, want_m3u_plain, embed_art, yt_override, ff_override, cookies_browser, self._cookies_file(), self._audio_processing_options(), self)
+		self.worker = PipelineWorker(
+			csv_path,
+			out_dir,
+			None,
+			fmt,
+			want_m3u8,
+			want_m3u_plain,
+			embed_art,
+			yt_override,
+			ff_override,
+			cookies_browser,
+			self._cookies_file(),
+			self._audio_processing_options(),
+			tracks_override=active_tracks,
+			row_indices=queued_rows,
+			parent=self,
+		)
 		self.worker.sig_log.connect(self.lbl_log.setText)
 		self.worker.sig_warning.connect(lambda msg: QMessageBox.warning(self, "YouTube throttling detected", msg))
 		self.worker.sig_total.connect(lambda n: self.lbl_log.setText(f"Queued {n} tracks…"))
@@ -994,6 +1214,48 @@ class MainWindow(QMainWindow):
 			self.worker.stop()
 			self.lbl_log.setText("Stopping…")
 			self.btn_clear.setEnabled(False)
+
+	def on_load_playlist(self):
+		try:
+			load_csv = self.ed_load_csv.text().strip()
+			if not load_csv or not pathlib.Path(load_csv).exists():
+				raise FileNotFoundError("Choose the playlist CSV in the Load Playlist panel first.")
+			tracks = self._collect_tracks_preview(load_csv)
+		except FileNotFoundError as e:
+			QMessageBox.warning(self, "Missing CSV", str(e))
+			return
+		except Exception as e:
+			QMessageBox.critical(self, "CSV Error", f"Failed to parse CSV:\n{e}")
+			return
+		if not tracks:
+			QMessageBox.information(self, "No Tracks", "No tracks found in the CSV.")
+			return
+		try:
+			selected_source = self.ed_load_source.text().strip()
+			if not selected_source:
+				raise ValueError("Choose the current music folder or a playlist .m3u/.m3u8 file in the Load Playlist panel first.")
+			resolved_out_root = self._resolve_load_playlist_root(pathlib.Path(selected_source), tracks)
+		except ValueError as e:
+			QMessageBox.warning(self, "Invalid Playlist Selection", str(e))
+			return
+		self.ed_csv.setText(load_csv)
+		self.ed_out.setText(str(resolved_out_root))
+		try:
+			tracks, queued_rows = self._build_track_preview()
+		except ValueError as e:
+			QMessageBox.warning(self, "Missing Output", str(e))
+			return
+		except Exception as e:
+			QMessageBox.critical(self, "Load Error", f"Failed to load the playlist:\n{e}")
+			return
+		self.btn_start.setEnabled(bool(queued_rows))
+		self.btn_stop.setEnabled(False)
+		self.btn_clear.setEnabled(True)
+		self.lbl_log.setText(
+			f"Loaded {len(tracks)} track(s): {len(queued_rows)} queued, {len(tracks) - len(queued_rows)} already downloaded."
+		)
+		self._allow_path_persist = True
+		self._persist_settings(include_paths=True)
 
 	def on_track_result(self, row_idx: int, payload: dict) -> None:
 		self.track_results[row_idx] = payload
@@ -1061,6 +1323,7 @@ class MainWindow(QMainWindow):
 		self.lbl_log.clear()
 		self.progress.setMaximum(0)
 		self.progress.setValue(0)
+		self.btn_scan_existing.setEnabled(True)
 		self.btn_start.setEnabled(True)
 		self.btn_stop.setEnabled(False)
 		self.btn_clear.setEnabled(False)
@@ -1074,14 +1337,16 @@ class MainWindow(QMainWindow):
 		if 0 <= row_idx < self.table.rowCount():
 			item = QTableWidgetItem(status)
 			if status.startswith("Fail"):
-				item.setBackground(RED)
-				self.table.item(row_idx, 1).setBackground(RED)
+				self._set_row_highlight(row_idx, RED)
 			elif status.startswith("Skipped"):
-				item.setBackground(YELLOW)
-				self.table.item(row_idx, 1).setBackground(YELLOW)
-			elif status.startswith("Done"):
-				item.setBackground(GREEN)
-				self.table.item(row_idx, 1).setBackground(GREEN)
+				self._set_row_highlight(row_idx, YELLOW)
+			elif status.startswith("Done") or status.startswith("Already downloaded"):
+				self._set_row_highlight(row_idx, GREEN)
+			elif status.startswith("Queued"):
+				self._set_row_highlight(row_idx, YELLOW)
+			else:
+				self._set_row_highlight(row_idx, None)
+			item.setBackground(self.table.item(row_idx, 1).background())
 			self.table.setItem(row_idx, 2, item)
 
 	def on_progress(self, processed: int, total: int):
@@ -1090,6 +1355,7 @@ class MainWindow(QMainWindow):
 
 	def on_done(self, msg: str, matched: list, skipped: list, failed: list):
 		from PySide6.QtWidgets import QApplication
+		self.btn_scan_existing.setEnabled(True)
 		self.btn_start.setEnabled(True)
 		self.btn_stop.setEnabled(False)
 		self.btn_clear.setEnabled(True)
@@ -1102,11 +1368,13 @@ class MainWindow(QMainWindow):
 			self.worker = None
 		self._rewrite_playlists()
 		requested = self.total or (len(matched) + len(skipped) + len(failed))
-		processed = len(matched) + len(skipped) + len(failed)
+		already_downloaded = sum(1 for info in self.track_results.values() if info.get("existing"))
+		processed = len(matched) + len(skipped) + len(failed) + already_downloaded
 		pending = max(requested - processed, 0)
 		lines = [
 			f"Tracks requested: {requested}",
 			f"Downloaded: {len(matched)}",
+			f"Already in folder: {already_downloaded}",
 			f"Skipped (no confident match): {len(skipped)}",
 			f"Failed (errors): {len(failed)}"
 		]

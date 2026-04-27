@@ -47,6 +47,8 @@ class PipelineWorker(QThread):
 	             cookies_browser: str | None,
 	             cookies_file: str | None,
 	             audio_processing: Dict | None = None,
+	             tracks_override: List[Dict] | None = None,
+	             row_indices: List[int] | None = None,
 	             parent: QObject | None = None):
 		super().__init__(parent)
 		self.csv_path = csv_path
@@ -61,6 +63,8 @@ class PipelineWorker(QThread):
 		self.cookies_browser = cookies_browser
 		self.cookies_file = cookies_file
 		self.audio_processing = audio_processing or {}
+		self.tracks_override = tracks_override
+		self.row_indices = row_indices or []
 		self._stop = False
 		self._mitigation = YOUTUBE_MITIGATION_NONE
 
@@ -92,8 +96,11 @@ class PipelineWorker(QThread):
 	def run(self):
 		try:
 			self.sig_log.emit("[csv] loading…")
-			df = load_csv(self.csv_path)
-			tracks = tracks_from_csv(df, self.playlist)
+			if self.tracks_override is not None:
+				tracks = list(self.tracks_override)
+			else:
+				df = load_csv(self.csv_path)
+				tracks = tracks_from_csv(df, self.playlist)
 			if not tracks:
 				self.sig_done.emit("No tracks selected.", [], [], [])
 				return
@@ -121,6 +128,7 @@ class PipelineWorker(QThread):
 			skipped_tracks: List[Dict] = []
 			processed = 0
 			for idx, track in enumerate(tracks):
+				row_idx = self.row_indices[idx] if idx < len(self.row_indices) else idx
 				if self._stop:
 					break
 				t = track
@@ -156,10 +164,10 @@ class PipelineWorker(QThread):
 					payload["error"] = search_error
 					reason = search_error or "No confident match"
 					skipped_tracks.append({"track": t, "reason": reason, "options": options})
-					self.sig_row_status.emit(idx, "Skipped (no good match)")
+					self.sig_row_status.emit(row_idx, "Skipped (no good match)")
 					processed += 1
 					self.sig_progress.emit(processed, total)
-					self.sig_track_result.emit(idx, payload)
+					self.sig_track_result.emit(row_idx, payload)
 					skipped_count += 1
 					self.sig_match_stats.emit(matched, skipped_count)
 					if not self._stop and idx < total - 1:
@@ -170,19 +178,19 @@ class PipelineWorker(QThread):
 				matched += 1
 				self.sig_match_stats.emit(matched, skipped_count)
 				vid = match["videoId"]
-				self.sig_row_status.emit(idx, f"Downloading ({self.fmt})…")
+				self.sig_row_status.emit(row_idx, f"Downloading ({self.fmt})…")
 				error_msg = None
 
 				try:
 					base = f"{artists} - {title}"
 					fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
-					self.sig_row_status.emit(idx, "Tagging…")
+					self.sig_row_status.emit(row_idx, "Tagging…")
 					cover = yt_thumbnail_bytes(vid)
 					if self.embed_art:
 						tag_file(fp, t, cover)
 					else:
 						tag_file(fp, t, None)
-					self.sig_row_status.emit(idx, f"Done → {fp.name}")
+					self.sig_row_status.emit(row_idx, f"Done → {fp.name}")
 					done_tracks.append(t)
 				except Exception as e:
 					err = str(e)
@@ -191,22 +199,22 @@ class PipelineWorker(QThread):
 					if risk_reason and self._mitigation.label != YOUTUBE_MITIGATION_AGGRESSIVE.label:
 						self._apply_mitigation(YOUTUBE_MITIGATION_AGGRESSIVE, risk_reason)
 						try:
-							self.sig_row_status.emit(idx, "Retrying with YouTube safe mode…")
+							self.sig_row_status.emit(row_idx, "Retrying with YouTube safe mode…")
 							fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
-							self.sig_row_status.emit(idx, "Tagging…")
+							self.sig_row_status.emit(row_idx, "Tagging…")
 							cover = yt_thumbnail_bytes(vid)
 							if self.embed_art:
 								tag_file(fp, t, cover)
 							else:
 								tag_file(fp, t, None)
-							self.sig_row_status.emit(idx, f"Done → {fp.name}")
+							self.sig_row_status.emit(row_idx, f"Done → {fp.name}")
 							done_tracks.append(t)
 							retried = True
 						except Exception as retry_exc:
 							err = str(retry_exc)
 					if not retried:
 						log(f"download failure: playlist='{playlist_name}' track='{artists} — {title}' fmt={self.fmt} error={err}")
-						self.sig_row_status.emit(idx, f"Fail: {err[:120]}")
+						self.sig_row_status.emit(row_idx, f"Fail: {err[:120]}")
 						failed_tracks.append({"track": t, "error": err})
 						error_msg = err
 				finally:
@@ -218,7 +226,7 @@ class PipelineWorker(QThread):
 					payload["downloaded"] = True
 					payload["file_path"] = str(fp)
 					payload["cover_bytes"] = cover
-				self.sig_track_result.emit(idx, payload)
+				self.sig_track_result.emit(row_idx, payload)
 				if not self._stop and idx < total - 1:
 					time.sleep(max(RATE_LIMIT_S, self._mitigation.track_sleep_s))
 				time.sleep(0.02)

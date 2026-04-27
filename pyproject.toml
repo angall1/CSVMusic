@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "csvmusic"
-version = "1.4.0"
+version = "1.4.1"
 description = "Convert Spotify playlists to MP3/M4A via YouTube Music (packaged, no extra installs)"
 readme = "README.md"
 requires-python = ">=3.10"
