@@ -1,5 +1,6 @@
 # tabs only
 import pathlib
+import sqlite3
 from functools import partial
 from typing import List, Tuple
 from PySide6.QtWidgets import (
@@ -18,7 +19,7 @@ from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation
 from csvmusic.core.preflight import run_preflight_checks
 from csvmusic.core.paths import app_icon_path, resource_base
 from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker, AlternativesFetchWorker
-from csvmusic.core.browsers import list_profiles, list_available_browsers
+from csvmusic.core.browsers import list_profiles
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
 RED = QColor(255, 205, 210)      # soft red
@@ -77,15 +78,15 @@ class MainWindow(QMainWindow):
 				families = QFontDatabase.applicationFontFamilies(font_id)
 				if families:
 					font_candidate = families[0]
-		retro_font_family = font_candidate if font_candidate in QFontDatabase().families() else "Tahoma"
-		default_pt = max(self.font().pointSize(), 9)
-		retro_font = QFont(retro_font_family, default_pt)
-		self.setFont(retro_font)
-		root.setStyleSheet(f"""
+		self._retro_font_family = font_candidate if font_candidate in QFontDatabase().families() else "Tahoma"
+		self._readable_font_family = self._pick_readable_font_family()
+		self._default_pt = max(self.font().pointSize(), 9)
+		self._root_widget = root
+		self._base_stylesheet_template = f"""
 			QWidget {{
 				background-color: {win_base};
 				color: {win_text};
-				font-family: '{retro_font_family}';
+				font-family: '__FONT_FAMILY__';
 			}}
 			QLineEdit, QComboBox, QTableWidget {{
 				background-color: {win_panel};
@@ -143,35 +144,48 @@ class MainWindow(QMainWindow):
 			QProgressBar::chunk {{
 				background-color: {progress_chunk};
 			}}
-		""")
+		"""
+		retro_font_family = self._retro_font_family
+		default_pt = self._default_pt
+		self._readability_mode = False
+		self.setFont(QFont(retro_font_family, default_pt))
+		self._root_widget.setStyleSheet(self._base_stylesheet_template.replace("__FONT_FAMILY__", retro_font_family))
 
 		# ── Title header: icon + name ────────────────────────────────────────────
 		title_row = QHBoxLayout()
+		title_row.setSpacing(self._px(8))
 		logo = QLabel()
 		icon_path = app_icon_path()
 		if icon_path:
 			pm = QPixmap(str(icon_path))
 			if not pm.isNull():
-				logo_size = self._px(56)
+				logo_size = self._px(40)
 				logo.setPixmap(pm.scaled(logo_size, logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 				logo.setFixedSize(logo_size, logo_size)
 				logo.setStyleSheet("background: transparent;")
 		else:
-			logo.setFixedSize(self._px(56), self._px(56))
+			logo.setFixedSize(self._px(40), self._px(40))
 		logo.setAlignment(Qt.AlignCenter)
+		title_block = QVBoxLayout()
+		title_block.setSpacing(0)
 		title_label = QLabel("CSVMusic")
-		title_font = QFont(retro_font_family, default_pt + 10, QFont.Bold)
+		title_font = QFont(retro_font_family, default_pt + 6, QFont.Bold)
 		title_label.setFont(title_font)
 		title_label.setStyleSheet("color: #000000;")
 		title_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+		tagline = QLabel("CSV playlist downloader")
+		tagline.setFont(QFont(retro_font_family, default_pt + 1))
+		tagline.setStyleSheet("color: #404040;")
+		title_block.addWidget(title_label)
+		title_block.addWidget(tagline)
 		title_row.addWidget(logo)
-		title_row.addSpacing(self._px(12))
-		title_row.addWidget(title_label)
+		title_row.addLayout(title_block)
 		title_row.addStretch(1)
 		vl.addLayout(title_row)
 
-		# ── Top help row: link + collapsible instructions ─────────────────────────
+		# ── Top help row: link + utility toggles ──────────────────────────────────
 		top = QHBoxLayout()
+		top.setSpacing(self._px(6))
 		lbl_link = QLabel('<a href="https://www.tunemymusic.com/home">TuneMyMusic (export CSV)</a>')
 		link_font = QFont(retro_font_family, default_pt + 3, QFont.Bold)
 		lbl_link.setFont(link_font)
@@ -183,7 +197,7 @@ class MainWindow(QMainWindow):
 		btn_help.setText("How to export CSV ▸")
 		btn_help.setCheckable(True)
 		btn_help.setToolButtonStyle(Qt.ToolButtonTextOnly)
-		btn_font = QFont(retro_font_family, default_pt + 2, QFont.Bold)
+		btn_font = QFont(retro_font_family, default_pt + 1, QFont.Bold)
 		btn_help.setFont(btn_font)
 		self._button_font = btn_font
 		top.addStretch(1)
@@ -235,7 +249,7 @@ class MainWindow(QMainWindow):
 		eq_layout = QVBoxLayout(self.equalizer_panel)
 		eq_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
 		eq_layout.setSpacing(self._px(8))
-		eq_note = QLabel("Optional FFmpeg audio processing. EQ is applied before loudness normalization.")
+		eq_note = QLabel("Optional FFmpeg audio processing. EQ is applied before track loudness leveling.")
 		eq_note.setWordWrap(True)
 		eq_note.setFont(QFont(retro_font_family, default_pt))
 		eq_layout.addWidget(eq_note)
@@ -244,7 +258,7 @@ class MainWindow(QMainWindow):
 		self.cb_eq_enabled.toggled.connect(self._set_equalizer_controls_enabled)
 		self.cb_eq_enabled.toggled.connect(lambda _=None: self._persist_settings())
 		eq_layout.addWidget(self.cb_eq_enabled)
-		self.cb_eq_normalize = QCheckBox("Normalize sound level")
+		self.cb_eq_normalize = QCheckBox("Match volume between tracks")
 		self.cb_eq_normalize.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
 		self.cb_eq_normalize.toggled.connect(lambda _=None: self._persist_settings())
 		eq_layout.addWidget(self.cb_eq_normalize)
@@ -318,35 +332,33 @@ class MainWindow(QMainWindow):
 		row_ffmpeg.addWidget(btn_ffmpeg)
 		row_ffmpeg.addWidget(btn_ffmpeg_clear)
 		adv_layout.addLayout(row_ffmpeg)
-		# Cookies-from-browser (optional)
-		row_cookies = QHBoxLayout()
-		lbl_cookies = QLabel("Use browser cookies:")
-		lbl_cookies.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
-		self.combo_cookies = QComboBox()
-		self.combo_cookies.setEditable(False)
-		self.combo_cookies.addItem("Disabled", "")
-		for b in list_available_browsers():
-			self.combo_cookies.addItem(b.capitalize(), b)
-		self.combo_cookies.currentIndexChanged.connect(self.on_cookies_browser_changed)
-		row_cookies.addWidget(lbl_cookies)
-		row_cookies.addWidget(self.combo_cookies, 1)
-		adv_layout.addLayout(row_cookies)
-		# Browser profile (appears after a browser is selected)
-		self.profile_panel = QFrame()
-		self.profile_panel.setFrameShape(QFrame.NoFrame)
-		self.profile_panel.setVisible(False)
-		row_prof = QHBoxLayout(self.profile_panel)
-		row_prof.setContentsMargins(0, 0, 0, 0)
-		lbl_profile = QLabel("Profile:")
-		lbl_profile.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
-		self.combo_profile = QComboBox()
-		self.combo_profile.setEditable(False)
-		self.combo_profile.currentIndexChanged.connect(self.on_profile_changed)
-		row_prof.addWidget(lbl_profile)
-		row_prof.addWidget(self.combo_profile, 1)
-		adv_layout.addWidget(self.profile_panel)
-		# Tip: Firefox avoids DPAPI on Windows
-		lbl_ff_tip = QLabel("Tip: For reliable cookies on Windows, use Firefox or export a cookies.txt. <a href=\"https://www.mozilla.org/firefox/download/\">Get Firefox</a>")
+		self.cb_readability_mode = QCheckBox("Readable text")
+		self.cb_readability_mode.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_readability_mode.toggled.connect(self.on_toggle_readability_mode)
+		adv_layout.addWidget(self.cb_readability_mode)
+		# Firefox is the only browser-cookie path reliable enough to expose directly.
+		self._detected_firefox_profile: str | None = None
+		self._cookies_test_ok = False
+		row_firefox = QHBoxLayout()
+		lbl_firefox = QLabel("YouTube login:")
+		lbl_firefox.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_use_cookies = QCheckBox("Use Cookies")
+		self.cb_use_cookies.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_use_cookies.setEnabled(False)
+		self.cb_use_cookies.toggled.connect(lambda _=None: self._persist_settings())
+		self.btn_detect_firefox_cookies = QPushButton("Detect Cookies from Firefox")
+		self.btn_detect_firefox_cookies.setFont(btn_font)
+		self.btn_detect_firefox_cookies.clicked.connect(self.on_detect_firefox_cookies)
+		self.btn_test_cookies = QPushButton("Test Cookies")
+		self.btn_test_cookies.setFont(btn_font)
+		self.btn_test_cookies.clicked.connect(self.on_test_cookies)
+		row_firefox.addWidget(lbl_firefox)
+		row_firefox.addWidget(self.cb_use_cookies)
+		row_firefox.addWidget(self.btn_detect_firefox_cookies)
+		row_firefox.addWidget(self.btn_test_cookies)
+		row_firefox.addStretch(1)
+		adv_layout.addLayout(row_firefox)
+		lbl_ff_tip = QLabel("Cookies help with age-restricted or sign-in-only YouTube results. Sign into YouTube in Firefox, click Detect, then Test. The Use Cookies checkbox unlocks only after the test passes. <a href=\"https://www.mozilla.org/firefox/download/\">Get Firefox</a>")
 		lbl_ff_tip.setOpenExternalLinks(True)
 		lbl_ff_tip.setTextInteractionFlags(Qt.TextBrowserInteraction)
 		lbl_ff_tip.setFont(QFont(retro_font_family, default_pt))
@@ -385,28 +397,35 @@ class MainWindow(QMainWindow):
 
 		# ── CSV picker ─────────────────────────────────────────────────────────────
 		row1 = QHBoxLayout()
-		self.ed_csv = QLineEdit(); self.ed_csv.setPlaceholderText("Path to 'My Spotify Library.csv'")
+		row1.setSpacing(self._px(6))
+		self.ed_csv = QLineEdit(); self.ed_csv.setPlaceholderText("Path to one playlist CSV file")
 		self.ed_csv.setFont(QFont(retro_font_family, default_pt + 1))
 		btn_csv = QPushButton("Browse…"); btn_csv.clicked.connect(self.on_browse_csv)
 		btn_csv.setFont(btn_font)
-		lbl_csv = QLabel("CSV:"); lbl_csv.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		lbl_csv = QLabel("CSV:")
+		lbl_csv.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		lbl_csv.setFixedWidth(self._px(78))
 		row1.addWidget(lbl_csv); row1.addWidget(self.ed_csv, 1); row1.addWidget(btn_csv)
 		vl.addLayout(row1)
 
 		# ── Output folder ─────────────────────────────────────────────────────────
 		row2 = QHBoxLayout()
+		row2.setSpacing(self._px(6))
 		self.ed_out = QLineEdit(); self.ed_out.setPlaceholderText("Output folder")
 		self.ed_out.setFont(QFont(retro_font_family, default_pt + 1))
 		btn_out = QPushButton("Choose…"); btn_out.clicked.connect(self.on_browse_out)
 		btn_out.setFont(btn_font)
 		btn_open_out = QPushButton("Open"); btn_open_out.clicked.connect(self.on_open_output)
 		btn_open_out.setFont(btn_font)
-		lbl_out = QLabel("Output:"); lbl_out.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		lbl_out = QLabel("Output:")
+		lbl_out.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		lbl_out.setFixedWidth(self._px(78))
 		row2.addWidget(lbl_out); row2.addWidget(self.ed_out, 1); row2.addWidget(btn_out); row2.addWidget(btn_open_out)
 		vl.addLayout(row2)
 
-		# ── Format + options (single line) ────────────────────────────────────────
+		# ── Format + options + actions ────────────────────────────────────────────
 		row3 = QHBoxLayout()
+		row3.setSpacing(self._px(10))
 		self.rb_m4a = QRadioButton("m4a (AAC, preferred)"); self.rb_m4a.setChecked(True)
 		self.rb_mp3 = QRadioButton("mp3")
 		self.grp_fmt = QButtonGroup(self); self.grp_fmt.addButton(self.rb_m4a); self.grp_fmt.addButton(self.rb_mp3)
@@ -417,20 +436,24 @@ class MainWindow(QMainWindow):
 		controls_font = QFont(retro_font_family, default_pt + 2)
 		for w in (self.rb_m4a, self.rb_mp3, self.cb_m3u8, self.cb_m3u_plain, self.cb_album_art):
 			w.setFont(controls_font)
-		lbl_fmt = QLabel("Format & Options:"); lbl_fmt.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		lbl_fmt = QLabel("Format:")
+		lbl_fmt.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		lbl_fmt.setFixedWidth(self._px(78))
 		row3.addWidget(lbl_fmt)
-		row3.addSpacing(self._px(8))
 		row3.addWidget(self.rb_m4a)
 		row3.addWidget(self.rb_mp3)
-		row3.addSpacing(self._px(16))
+		row3.addSpacing(self._px(12))
+		lbl_extras = QLabel("Extras:")
+		lbl_extras.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		row3.addWidget(lbl_extras)
 		row3.addWidget(self.cb_m3u8)
 		row3.addWidget(self.cb_m3u_plain)
 		row3.addWidget(self.cb_album_art)
 		row3.addStretch(1)
 		vl.addLayout(row3)
 
-		# ── Controls ──────────────────────────────────────────────────────────────
 		row4 = QHBoxLayout()
+		row4.setSpacing(self._px(8))
 		self.btn_start = QPushButton("Start"); self.btn_start.clicked.connect(self.on_start)
 		self.btn_stop = QPushButton("Stop"); self.btn_stop.setEnabled(False); self.btn_stop.clicked.connect(self.on_stop)
 		self.btn_clear = QPushButton("Clear"); self.btn_clear.setEnabled(False); self.btn_clear.clicked.connect(self.on_clear)
@@ -490,6 +513,33 @@ class MainWindow(QMainWindow):
 
 	def _px(self, value: int) -> int:
 		return max(1, int(round(value * self._scale)))
+
+	def _pick_readable_font_family(self) -> str:
+		families = set(QFontDatabase().families())
+		for candidate in ("Segoe UI", "Tahoma", "Verdana", "Arial", self.font().family()):
+			if candidate in families:
+				return candidate
+		return self.font().family()
+
+	def _swap_font_family(self, widget: QWidget, family: str) -> None:
+		font = widget.font()
+		font.setFamily(family)
+		widget.setFont(font)
+
+	def _apply_font_family(self, family: str) -> None:
+		self.setFont(QFont(family, self._default_pt))
+		self._root_widget.setStyleSheet(self._base_stylesheet_template.replace("__FONT_FAMILY__", family))
+		self._button_font = QFont(family, self._default_pt + 2, QFont.Bold)
+		self._swap_font_family(self, family)
+		for widget in self.findChildren(QWidget):
+			self._swap_font_family(widget, family)
+		self.table.horizontalHeader().setFont(QFont(family, self._default_pt + 2, QFont.Bold))
+
+	def on_toggle_readability_mode(self, checked: bool) -> None:
+		self._readability_mode = bool(checked)
+		family = self._readable_font_family if self._readability_mode else self._retro_font_family
+		self._apply_font_family(family)
+		self._persist_settings()
 
 	def _make_eq_slider(self, parent_layout: QVBoxLayout, label: str, font_family: str, default_pt: int) -> tuple[QSlider, QLabel, QLabel]:
 		row = QHBoxLayout()
@@ -600,75 +650,97 @@ class MainWindow(QMainWindow):
 		return val or None
 
 	def _cookies_browser(self) -> str | None:
-		b = self.combo_cookies.currentData()
-		if not isinstance(b, str) or not b.strip():
+		if not self.cb_use_cookies.isChecked():
 			return None
-		browser = b.strip()
-		# Combine with selected profile if present
-		if self.profile_panel.isVisible() and self.combo_profile.count() > 0:
-			p = self.combo_profile.currentData()
-			if isinstance(p, str) and p.strip():
-				return f"{browser}:{p.strip()}"
-		return browser
+		if self._detected_firefox_profile:
+			return f"firefox:{self._detected_firefox_profile}"
+		return None
 
 	def _cookies_file(self) -> str | None:
+		if not self.cb_use_cookies.isChecked():
+			return None
 		val = self.ed_cookies_file.text().strip()
 		return val or None
 
-	def _refresh_profiles(self, *, stored_profile: str | None = None) -> None:
-		# Populate profile list for the selected browser
-		b = self.combo_cookies.currentData()
-		self.combo_profile.clear()
-		if not isinstance(b, str) or not b:
-			self.profile_panel.setVisible(False)
-			return
-		profiles = list_profiles(b)
-		chromium_like = b in ("edge","chrome","brave","opera","vivaldi")
+	def _cookie_test_browser(self) -> str | None:
+		if self._detected_firefox_profile:
+			return f"firefox:{self._detected_firefox_profile}"
+		return None
+
+	def _cookie_test_file(self) -> str | None:
+		val = self.ed_cookies_file.text().strip()
+		return val or None
+
+	def _set_cookies_tested(self, ok: bool) -> None:
+		self._cookies_test_ok = ok
+		self.cb_use_cookies.setEnabled(ok)
+		block = QSignalBlocker(self.cb_use_cookies)
+		self.cb_use_cookies.setChecked(ok)
+		del block
+		self._persist_settings()
+
+	def _detect_firefox_profile(self) -> str | None:
+		profiles = list_profiles("firefox")
 		if not profiles:
-			if chromium_like:
-				# Chromium often has a Default profile
-				self.combo_profile.addItem("Default", "Default")
-				self.profile_panel.setVisible(True)
-			else:
-				# Firefox: if no profiles resolved, hide and let yt-dlp choose default
-				self.profile_panel.setVisible(False)
-				return
-		else:
-			for p in profiles:
-				self.combo_profile.addItem(p, p)
-			self.profile_panel.setVisible(True)
-		# Restore selection if available
-		if stored_profile:
-			for i in range(self.combo_profile.count()):
-				if self.combo_profile.itemData(i) == stored_profile:
-					self.combo_profile.setCurrentIndex(i)
-					break
-		# Kick off cookie check when profiles are ready
-		self._start_cookie_check()
+			return None
+		auth_cookie_names = ("__Secure-3PSID","__Secure-1PSID","SAPISID","APISID","SID","SSID","HSID")
+		fallback: str | None = None
+		for p in profiles:
+			db = pathlib.Path(p, "cookies.sqlite")
+			if not db.exists():
+				continue
+			if fallback is None:
+				fallback = p
+			try:
+				conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+				cur = conn.cursor()
+				cur.execute(
+					"SELECT name FROM moz_cookies WHERE (host LIKE '%youtube.com' OR host LIKE '%google.com') AND name IN (?,?,?,?,?,?,?) LIMIT 1",
+					auth_cookie_names
+				)
+				has_auth_cookie = cur.fetchone() is not None
+				conn.close()
+				if has_auth_cookie:
+					return p
+			except Exception:
+				pass
+		if fallback:
+			return fallback
+		for p in profiles:
+			if pathlib.Path(p).exists():
+				return p
+		return None
 
-	def on_cookies_browser_changed(self) -> None:
-		# Toggle and populate profiles based on browser choice
-		self._refresh_profiles()
+	def on_detect_firefox_cookies(self) -> None:
+		profile = self._detect_firefox_profile()
+		self._set_cookies_tested(False)
+		if not profile:
+			self._detected_firefox_profile = None
+			self._persist_settings()
+			self._set_cookie_status("Firefox cookies not found. Install Firefox and sign into YouTube first.", ok=False)
+			return
+		self._detected_firefox_profile = profile
 		self._persist_settings()
-
-	def on_profile_changed(self) -> None:
-		self._persist_settings()
-		self._start_cookie_check()
+		self._set_cookie_status(f"Firefox cookies detected: {pathlib.Path(profile).name}", ok=True)
 
 	def on_browse_cookies_file(self):
 		p, _ = QFileDialog.getOpenFileName(self, "Select cookies.txt", "", "Text files (*.txt);;All files (*)")
 		if p:
 			self.ed_cookies_file.setText(p)
+			self._set_cookies_tested(False)
 			self._persist_settings()
 
 	def on_clear_cookies_file(self):
 		self.ed_cookies_file.clear()
+		self._set_cookies_tested(False)
 		self._persist_settings()
 
 	def on_cookies_file_changed(self, _text: str) -> None:
-		# If a cookies file is provided, it takes precedence; still allow browser/profile selection
+		self._set_cookies_tested(False)
 		self._persist_settings()
-		self._start_cookie_check()
+
+	def on_test_cookies(self) -> None:
+		self._start_cookie_check(show_required=True)
 
 	def _set_cookie_status(self, text: str, *, ok: bool | None) -> None:
 		self.lbl_cookie_status.setVisible(True)
@@ -680,19 +752,18 @@ class MainWindow(QMainWindow):
 		else:
 			self.lbl_cookie_status.setStyleSheet("color: #000000")
 
-	def _start_cookie_check(self) -> None:
+	def _start_cookie_check(self, *, show_required: bool = False) -> None:
 		# Only check when a browser is selected
-		cookies = self._cookies_browser()
-		import sys as _sys
-		if _sys.platform.startswith("win") and cookies and not self._cookies_file():
-			b = cookies.split(":", 1)[0].strip().lower()
-			if b in ("chrome", "edge", "brave", "vivaldi", "opera"):
-				self._set_cookie_status("On Windows, Chromium cookies require cookies.txt export.", ok=False)
-				return
-		if not cookies and not self._cookies_file():
-			self.lbl_cookie_status.setVisible(False)
+		cookies = self._cookie_test_browser()
+		cookies_file = self._cookie_test_file()
+		if not cookies and not cookies_file:
+			if show_required:
+				self._set_cookie_status("Select Firefox cookies or a cookies.txt file first.", ok=False)
+			else:
+				self.lbl_cookie_status.setVisible(False)
 			return
 		self._set_cookie_status("Checking cookies…", ok=None)
+		self.btn_test_cookies.setEnabled(False)
 		# Cancel prior worker if any
 		if hasattr(self, "cookie_check_worker") and self.cookie_check_worker:
 			try:
@@ -700,8 +771,12 @@ class MainWindow(QMainWindow):
 				self.cookie_check_worker.wait(200)
 			except Exception:
 				pass
-		self.cookie_check_worker = CookiesCheckWorker(self._cookies_browser(), self._cookies_file(), self._yt_dlp_override(), self)
-		self.cookie_check_worker.sig_done.connect(lambda ok, msg: self._set_cookie_status(msg, ok=ok))
+		self.cookie_check_worker = CookiesCheckWorker(cookies, cookies_file, self._yt_dlp_override(), self)
+		def _finish_cookie_check(ok: bool, msg: str) -> None:
+			self.btn_test_cookies.setEnabled(True)
+			self._set_cookies_tested(ok)
+			self._set_cookie_status(msg, ok=ok)
+		self.cookie_check_worker.sig_done.connect(_finish_cookie_check)
 		self.cookie_check_worker.start()
 
 	def _persist_settings(self, *, include_paths: bool = False) -> None:
@@ -711,8 +786,11 @@ class MainWindow(QMainWindow):
 		cfg = {
 			"yt_dlp_path": _norm(self.ed_ytdlp.text()),
 			"ffmpeg_path": _norm(self.ed_ffmpeg.text()),
-			"cookies_browser": self._cookies_browser(),
+			"cookies_browser": f"firefox:{self._detected_firefox_profile}" if self._detected_firefox_profile else None,
 			"cookies_file": _norm(self.ed_cookies_file.text()),
+			"readability_mode": self._readability_mode,
+			"use_cookies": self.cb_use_cookies.isChecked(),
+			"cookies_test_ok": self._cookies_test_ok,
 			"eq_enabled": self.cb_eq_enabled.isChecked(),
 			"eq_normalize": self.cb_eq_normalize.isChecked(),
 			"eq_volume_gain": self.slider_volume.value(),
@@ -747,31 +825,32 @@ class MainWindow(QMainWindow):
 		blocker_yt = QSignalBlocker(self.ed_ytdlp)
 		self.ed_ytdlp.setText(yt_path)
 		del blocker_yt
+		block_readability = QSignalBlocker(self.cb_readability_mode)
+		self.cb_readability_mode.setChecked(bool(cfg.get("readability_mode", False)))
+		del block_readability
+		self._readability_mode = bool(cfg.get("readability_mode", False))
+		self._apply_font_family(self._readable_font_family if self._readability_mode else self._retro_font_family)
 		ff_path = cfg.get("ffmpeg_path") or ""
 		blocker_ff = QSignalBlocker(self.ed_ffmpeg)
 		self.ed_ffmpeg.setText(ff_path)
 		del blocker_ff
 		stored_browser = str(cfg.get("cookies_browser") or "")
-		if stored_browser:
-			# Support optional profile: "browser[:profile]"
-			parts = stored_browser.split(":", 1)
-			sb = parts[0].strip()
-			sp = parts[1].strip() if len(parts) == 2 else None
-			# Set browser selection
-			for i in range(self.combo_cookies.count()):
-				if self.combo_cookies.itemData(i) == sb:
-					block_b = QSignalBlocker(self.combo_cookies)
-					self.combo_cookies.setCurrentIndex(i)
-					del block_b
-					# Populate profiles and set stored
-					self._refresh_profiles(stored_profile=sp)
-					break
-		else:
-			# Default to Disabled unless the user explicitly opts into cookies.
-			block_b = QSignalBlocker(self.combo_cookies)
-			self.combo_cookies.setCurrentIndex(0)
-			del block_b
-			self.profile_panel.setVisible(False)
+		self._detected_firefox_profile = None
+		self._cookies_test_ok = bool(cfg.get("cookies_test_ok", False))
+		if stored_browser.startswith("firefox:"):
+			profile = stored_browser.split(":", 1)[1].strip()
+			if profile and pathlib.Path(profile, "cookies.sqlite").exists():
+				self._detected_firefox_profile = profile
+				self._set_cookie_status(f"Firefox cookies detected: {pathlib.Path(profile).name}", ok=True)
+		elif stored_browser == "firefox":
+			profile = self._detect_firefox_profile()
+			if profile:
+				self._detected_firefox_profile = profile
+				self._set_cookie_status(f"Firefox cookies detected: {pathlib.Path(profile).name}", ok=True)
+		self.cb_use_cookies.setEnabled(self._cookies_test_ok)
+		block_use_cookies = QSignalBlocker(self.cb_use_cookies)
+		self.cb_use_cookies.setChecked(bool(cfg.get("use_cookies", False)) and self._cookies_test_ok)
+		del block_use_cookies
 		# Load cookies file path
 		cookie_file = cfg.get("cookies_file") or ""
 		block_cf = QSignalBlocker(self.ed_cookies_file)

@@ -94,6 +94,13 @@ def load_csv(path: Union[str, pathlib.Path]) -> pd.DataFrame:
 		# Best-effort numeric
 		df["Duration (ms)"] = pd.to_numeric(df["Duration (ms)"], errors="coerce").fillna(0).astype(int)
 
+	playlists = list_playlists(df)
+	if len(playlists) > 1:
+		raise ValueError(
+			f"CSV contains multiple playlists ({len(playlists)} found). "
+			"Export one playlist at a time from TuneMyMusic and try again."
+		)
+
 	return df
 
 def list_playlists(df: pd.DataFrame) -> List[str]:

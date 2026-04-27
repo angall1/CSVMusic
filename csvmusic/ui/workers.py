@@ -375,8 +375,8 @@ class CookiesCheckWorker(QThread):
 				cmd += ["--cookies", self.cookies_file]
 			elif self.cookies_browser:
 				cmd += ["--cookies-from-browser", self.cookies_browser]
-			# Use a harmless simulation JSON fetch to trigger cookie handling
-			cmd += ["-s", "-J", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+			# Use YouTube homepage extraction to trigger cookie loading without requiring media formats.
+			cmd += ["--skip-download", "--flat-playlist", "--playlist-items", "0", "https://www.youtube.com/"]
 			proc = subprocess.run(
 				cmd,
 				stdout=subprocess.PIPE,
@@ -394,6 +394,7 @@ class CookiesCheckWorker(QThread):
 					return
 				# Determine signed-in state
 				signed_in = False
+				account_hint = None
 				# No account name probing; keep it lightweight
 				if self.cookies_file:
 					try:
@@ -448,17 +449,15 @@ class CookiesCheckWorker(QThread):
 					if ff_signed_in_hint is not None:
 						signed_in = bool(ff_signed_in_hint)
 					else:
-						probe = [yt]
-						if self.cookies_browser:
-							probe += ["--cookies-from-browser", self.cookies_browser]
-						probe += ["-J", "https://www.youtube.com/feed/you"]
-						proc2 = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, **_hidden_subprocess_kwargs())
-						signed_in = (proc2.returncode == 0 and (proc2.stdout or "").strip().startswith("{"))
+						signed_in = "found youtube account cookies" in low_all
 				msg = "Signed-in cookies detected" if signed_in else "Guest session (no account cookies)"
 				self.sig_done.emit(True, msg)
 				return
 			stderr = (proc.stderr or "")
 			low = stderr.lower()
+			if self.cookies_browser and ff_signed_in_hint is True and "signature solving failed" in low:
+				self.sig_done.emit(True, "Signed-in cookies detected. YouTube signature warnings may still affect some videos.")
+				return
 			if ("could not copy" in low and "cookie" in low) or ("locked" in low and "cookie" in low):
 				self.sig_done.emit(False, "Cookie DB locked. Close browser and retry.")
 				return

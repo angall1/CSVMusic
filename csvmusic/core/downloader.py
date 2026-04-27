@@ -1,5 +1,5 @@
 # tabs only
-import os, pathlib, subprocess, requests, io, contextlib
+import os, pathlib, subprocess, requests, io, contextlib, json
 from dataclasses import dataclass
 from typing import Dict, Optional, List
 import re, sys
@@ -306,26 +306,65 @@ def _audio_processing_enabled(audio_processing: Dict | None) -> bool:
 	)
 
 
-def _audio_filter_chain(audio_processing: Dict | None) -> str | None:
-	if not _audio_processing_enabled(audio_processing):
-		return None
+def _tone_filter_chain(audio_processing: Dict | None) -> list[str]:
 	filters: list[str] = []
 	bass_gain = int(audio_processing.get("bass_gain", 0) or 0) if audio_processing else 0
 	treble_gain = int(audio_processing.get("treble_gain", 0) or 0) if audio_processing else 0
-	volume_gain = int(audio_processing.get("volume_gain", 0) or 0) if audio_processing else 0
 	if bass_gain:
 		filters.append(f"bass=g={bass_gain}:f=110:w=0.6")
 	if treble_gain:
 		filters.append(f"treble=g={treble_gain}:f=6000:w=0.6")
-	if audio_processing and audio_processing.get("normalize"):
-		filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
-	if volume_gain:
-		filters.append(f"volume={volume_gain}dB")
+	return filters
+
+
+def _extract_loudnorm_json(stderr: str) -> Dict | None:
+	matches = re.findall(r"\{\s*\"input_i\".*?\}", stderr or "", flags=re.S)
+	if not matches:
+		return None
+	try:
+		return json.loads(matches[-1])
+	except Exception:
+		return None
+
+
+def _measure_static_normalize_gain(src: pathlib.Path, ffmpeg_bin: str, audio_processing: Dict | None) -> float:
+	pre_filters = _tone_filter_chain(audio_processing)
+	filter_parts = list(pre_filters)
+	filter_parts.append("loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json")
+	proc = _run_capture([
+		ffmpeg_bin, "-hide_banner", "-i", str(src), "-vn", "-sn",
+		"-af", ",".join(filter_parts),
+		"-f", "null", "-"
+	])
+	stats = _extract_loudnorm_json((proc.stderr or "") + "\n" + (proc.stdout or ""))
+	if not stats:
+		return 0.0
+	try:
+		input_i = float(stats.get("input_i"))
+		input_tp = float(stats.get("input_tp"))
+	except Exception:
+		return 0.0
+	target_i = -16.0
+	target_tp = -1.5
+	gain = target_i - input_i
+	peak_limited_gain = target_tp - input_tp
+	return min(gain, peak_limited_gain)
+
+
+def _audio_filter_chain(audio_processing: Dict | None, src: pathlib.Path | None = None, ffmpeg_bin: str | None = None) -> str | None:
+	if not _audio_processing_enabled(audio_processing):
+		return None
+	filters = _tone_filter_chain(audio_processing)
+	total_gain = float(int(audio_processing.get("volume_gain", 0) or 0)) if audio_processing else 0.0
+	if audio_processing and audio_processing.get("normalize") and src and ffmpeg_bin:
+		total_gain += _measure_static_normalize_gain(src, ffmpeg_bin, audio_processing)
+	if abs(total_gain) > 0.01:
+		filters.append(f"volume={total_gain:.2f}dB")
 	return ",".join(filters) if filters else None
 
 
-def _append_audio_filter(args: list[str], audio_processing: Dict | None) -> None:
-	filter_chain = _audio_filter_chain(audio_processing)
+def _append_audio_filter(args: list[str], audio_processing: Dict | None, src: pathlib.Path | None = None, ffmpeg_bin: str | None = None) -> None:
+	filter_chain = _audio_filter_chain(audio_processing, src=src, ffmpeg_bin=ffmpeg_bin)
 	if filter_chain:
 		args += ["-af", filter_chain]
 
@@ -349,7 +388,7 @@ def _normalize_to_m4a(src: pathlib.Path, dst: pathlib.Path, ffmpeg_bin: str, vid
 			return dst
 
 	args = [ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn"]
-	_append_audio_filter(args, audio_processing)
+	_append_audio_filter(args, audio_processing, src=src, ffmpeg_bin=ffmpeg_bin)
 	args += ["-c:a", "aac", "-b:a", "192k", str(tmp_dst)]
 	proc = _run_capture(args)
 	rc = proc.returncode
@@ -598,7 +637,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	dst = dst_dir / (safe_base + ".mp3")
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
 	args = [ffmpeg_bin, "-y", "-i", str(src)]
-	_append_audio_filter(args, audio_processing)
+	_append_audio_filter(args, audio_processing, src=src, ffmpeg_bin=ffmpeg_bin)
 	if cbr_320:
 		args += ["-codec:a","libmp3lame","-b:a","320k"]
 	else:
