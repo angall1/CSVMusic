@@ -8,7 +8,7 @@ from typing import List, Dict
 
 from ytmusicapi import YTMusic
 
-from csvmusic.core.csv_import import load_csv, tracks_from_csv
+from csvmusic.core.csv_import import load_csv, tracks_from_csv, deduplicate_tracks
 from csvmusic.core.log import log
 from csvmusic.core.ytmusic_match import find_best, more_candidates, RATE_LIMIT_S
 from csvmusic.core.downloader import (
@@ -44,11 +44,12 @@ class PipelineWorker(QThread):
 	             embed_art: bool,
 	             yt_dlp_path: str | None,
 	             ffmpeg_path_override: str | None,
-	             cookies_browser: str | None,
-	             cookies_file: str | None,
+	             cookies_browser: str | None = None,
+	             cookies_file: str | None = None,
 	             audio_processing: Dict | None = None,
 	             tracks_override: List[Dict] | None = None,
 	             row_indices: List[int] | None = None,
+	             raw_tracks_override: List[Dict] | None = None,
 	             parent: QObject | None = None):
 		super().__init__(parent)
 		self.csv_path = csv_path
@@ -65,6 +66,7 @@ class PipelineWorker(QThread):
 		self.audio_processing = audio_processing or {}
 		self.tracks_override = tracks_override
 		self.row_indices = row_indices or []
+		self.raw_tracks_override = raw_tracks_override
 		self._stop = False
 		self._mitigation = YOUTUBE_MITIGATION_NONE
 
@@ -101,6 +103,9 @@ class PipelineWorker(QThread):
 			else:
 				df = load_csv(self.csv_path)
 				tracks = tracks_from_csv(df, self.playlist)
+				if self.playlist is None:
+					# Multi-playlist: deduplicate so each song is downloaded once
+					tracks = deduplicate_tracks(tracks)
 			if not tracks:
 				self.sig_done.emit("No tracks selected.", [], [], [])
 				return
@@ -117,10 +122,22 @@ class PipelineWorker(QThread):
 				yt = YTMusic()
 			except Exception as exc:
 				raise RuntimeError(f"Failed to initialize YTMusic client: {exc}")
-			playlist_name = self.playlist or (tracks[0]["playlist"] if tracks else "Playlist")
-			if not playlist_name:
-				playlist_name = "Playlist"
-			safe_playlist = sanitize_name(playlist_name) or "Playlist"
+			# Determine shared dest folder from playlist names
+			playlist_names: list[str] = []
+			for t in tracks:
+				for pl in t.get("playlists") or [t.get("playlist") or ""]:
+					if pl and pl not in playlist_names:
+						playlist_names.append(pl)
+			if self.playlist:
+				primary_playlist = self.playlist
+			elif playlist_names:
+				if len(playlist_names) <= 2:
+					primary_playlist = " + ".join(playlist_names)
+				else:
+					primary_playlist = " + ".join(playlist_names[:2]) + f" + {len(playlist_names) - 2} more"
+			else:
+				primary_playlist = "Playlist"
+			safe_playlist = sanitize_name(primary_playlist) or "Playlist"
 			dest_dir = self.out_dir / safe_playlist
 			dest_dir.mkdir(parents=True, exist_ok=True)
 			done_tracks: List[Dict] = []
@@ -149,7 +166,7 @@ class PipelineWorker(QThread):
 					"confidence": confidence,
 					"skipped": False,
 					"error": None,
-					"playlist_name": playlist_name,
+					"playlist_name": primary_playlist,
 					"file_path": None,
 					"downloaded": False,
 					"cover_bytes": None
@@ -213,7 +230,7 @@ class PipelineWorker(QThread):
 						except Exception as retry_exc:
 							err = str(retry_exc)
 					if not retried:
-						log(f"download failure: playlist='{playlist_name}' track='{artists} — {title}' fmt={self.fmt} error={err}")
+						log(f"download failure: playlist='{primary_playlist}' track='{artists} — {title}' fmt={self.fmt} error={err}")
 						self.sig_row_status.emit(row_idx, f"Fail: {err[:120]}")
 						failed_tracks.append({"track": t, "error": err})
 						error_msg = err
@@ -232,12 +249,39 @@ class PipelineWorker(QThread):
 				time.sleep(0.02)
 			if done_tracks:
 				ext = "m4a" if self.fmt == "m4a" else "mp3"
-				if self.write_m3u8:
-					m3u = write_m3u(self.out_dir, playlist_name, done_tracks, ext, suffix=".m3u8", encoding="utf-8")
-					self.sig_log.emit(f"[m3u] wrote: {m3u}")
-				if self.write_m3u_plain:
-					m3u_plain = write_m3u(self.out_dir, playlist_name, done_tracks, ext, suffix=".m3u", encoding="utf-8-sig")
-					self.sig_log.emit(f"[m3u] wrote: {m3u_plain}")
+				
+				# Build dictionary of successfully processed tracks, keyed by (title, artist)
+				done_dict = {}
+				for t in done_tracks:
+					k = (t.get("title", "").lower().strip(), t.get("artists", "").lower().strip())
+					done_dict[k] = t
+
+				# Use raw_tracks to preserve correct sequence and playlist membership 
+				source_list = self.raw_tracks_override if self.raw_tracks_override else tracks
+				
+				pl_map: dict[str, list] = {}
+				for raw_t in source_list:
+					k = (raw_t.get("title", "").lower().strip(), raw_t.get("artists", "").lower().strip())
+					if k in done_dict:
+						mapped_track = done_dict[k]
+						# use the playlist name specific to this raw track's row
+						pl = raw_t.get("playlist")
+						if not pl and raw_t.get("playlists"):
+							pl = raw_t.get("playlists")[0]
+						if not pl:
+							pl = primary_playlist
+						pl_map.setdefault(pl, []).append(mapped_track)
+
+				# Fallback: if no playlist info, write a single file
+				if not pl_map:
+					pl_map[primary_playlist] = done_tracks
+				for pl_name, pl_tracks in pl_map.items():
+					if self.write_m3u8:
+						m3u = write_m3u(self.out_dir, pl_name, pl_tracks, ext, suffix=".m3u8", encoding="utf-8", target_dir=dest_dir)
+						self.sig_log.emit(f"[m3u] wrote: {m3u}")
+					if self.write_m3u_plain:
+						m3u_plain = write_m3u(self.out_dir, pl_name, pl_tracks, ext, suffix=".m3u", encoding="utf-8-sig", target_dir=dest_dir)
+						self.sig_log.emit(f"[m3u] wrote: {m3u_plain}")
 			msg = "All tasks finished."
 			if self._stop:
 				msg = "Stopped (partial results saved)."

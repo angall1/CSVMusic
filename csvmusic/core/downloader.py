@@ -653,8 +653,11 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		raise DownloadError(f"ffmpeg mp3 transcode failed: {detail}")
 	return dst
 
-def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict], ext: str, *, suffix: str = ".m3u8", encoding: str = "utf-8") -> pathlib.Path:
-	playlist_dir = out_dir / _safe(playlist_name)
+def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict], ext: str, *, suffix: str = ".m3u8", encoding: str = "utf-8", target_dir: pathlib.Path | None = None) -> pathlib.Path:
+	if target_dir is not None:
+		playlist_dir = target_dir
+	else:
+		playlist_dir = out_dir / _safe(playlist_name)
 	playlist_dir.mkdir(parents=True, exist_ok=True)
 	fp = playlist_dir / f"{_safe(playlist_name)}{suffix}"
 	with fp.open("w", encoding=encoding, errors="ignore") as f:
