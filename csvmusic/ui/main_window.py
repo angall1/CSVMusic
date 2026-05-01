@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QSignalBlocker
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication
 
-from csvmusic.core.csv_import import load_csv, tracks_from_csv
+from csvmusic.core.csv_import import load_csv, tracks_from_csv, deduplicate_tracks
 from csvmusic.core.settings import load_settings, save_settings
 from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation
 from csvmusic.core.preflight import run_preflight_checks
@@ -530,13 +530,14 @@ class MainWindow(QMainWindow):
 		vl.addLayout(row4)
 
 		# ── Table ─────────────────────────────────────────────────────────────────
-		self.table = QTableWidget(0, 4)
-		self.table.setHorizontalHeaderLabels(["#", "Title", "Status", "Actions"])
+		self.table = QTableWidget(0, 5)
+		self.table.setHorizontalHeaderLabels(["#", "Title", "Playlists", "Status", "Actions"])
 		self.table.verticalHeader().setVisible(False)
 		self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
 		self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
 		self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-		self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+		self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+		self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
 		header_font = QFont(retro_font_family, default_pt + 2, QFont.Bold)
 		self.table.horizontalHeader().setFont(header_font)
 		vl.addWidget(self.table, 1)
@@ -740,7 +741,8 @@ class MainWindow(QMainWindow):
 	def _collect_tracks_preview(self, csv_path: str | None = None) -> List[dict]:
 		target_csv = csv_path or self.ed_csv.text().strip()
 		df = load_csv(target_csv)
-		return tracks_from_csv(df, None)  # use entire CSV
+		self.raw_tracks = tracks_from_csv(df, None)  # use entire CSV
+		return deduplicate_tracks(self.raw_tracks)
 
 	def _set_row_highlight(self, row_idx: int, color: QColor | None) -> None:
 		if not (0 <= row_idx < self.table.rowCount()):
@@ -752,7 +754,18 @@ class MainWindow(QMainWindow):
 			item.setBackground(color if color is not None else QColor(Qt.transparent))
 
 	def _playlist_dir_name(self, tracks: list[dict]) -> str:
-		playlist_name = tracks[0].get("playlist") or "Playlist"
+		playlist_names: list[str] = []
+		for t in tracks:
+			for pl in t.get("playlists") or [t.get("playlist") or ""]:
+				if pl and pl not in playlist_names:
+					playlist_names.append(pl)
+		if playlist_names:
+			if len(playlist_names) <= 2:
+				playlist_name = " + ".join(playlist_names)
+			else:
+				playlist_name = " + ".join(playlist_names[:2]) + f" + {len(playlist_names) - 2} more"
+		else:
+			playlist_name = tracks[0].get("playlist") or "Playlist"
 		return sanitize_name(playlist_name)
 
 	def _resolve_load_playlist_root(self, selected_path: pathlib.Path, tracks: list[dict]) -> pathlib.Path:
@@ -780,7 +793,12 @@ class MainWindow(QMainWindow):
 		raise ValueError("Load Playlist expects a folder or an .m3u/.m3u8 playlist file.")
 
 	def _expected_track_path(self, track: dict, out_root: pathlib.Path, fmt: str) -> pathlib.Path:
-		playlist_name = track.get("playlist") or "Playlist"
+		# Support both old 'playlist' (str) and new 'playlists' (list) fields
+		playlists_field = track.get("playlists")
+		if playlists_field and isinstance(playlists_field, list) and playlists_field:
+			playlist_name = playlists_field[0]
+		else:
+			playlist_name = track.get("playlist") or "Playlist"
 		base = f"{track.get('artists','')} - {track.get('title','')}"
 		return out_root / sanitize_name(playlist_name) / f"{sanitize_name(base)}.{fmt}"
 
@@ -809,10 +827,12 @@ class MainWindow(QMainWindow):
 				title_item.setIcon(self._default_track_icon)
 			self.table.setItem(i, 1, title_item)
 			self.table.setRowHeight(i, self._row_icon_size + self._px(8))
+			playlists_str = ", ".join(track.get("playlists") or [track.get("playlist") or ""])
+			self.table.setItem(i, 2, QTableWidgetItem(playlists_str))
 			btn_alt = QPushButton("Alternatives")
 			btn_alt.setEnabled(False)
 			btn_alt.clicked.connect(partial(self.on_open_alternatives, i))
-			self.table.setCellWidget(i, 3, btn_alt)
+			self.table.setCellWidget(i, 4, btn_alt)
 			self.action_buttons[i] = btn_alt
 			expected_path = self._expected_track_path(track, out_root, fmt)
 			if expected_path.exists():
@@ -832,13 +852,13 @@ class MainWindow(QMainWindow):
 				self.on_row_status(i, f"Already downloaded → {expected_path.name}")
 				btn_alt.setEnabled(True)
 			else:
-				self.table.setItem(i, 2, QTableWidgetItem("Queued"))
+				self.table.setItem(i, 3, QTableWidgetItem("Queued"))
 				self._set_row_highlight(i, YELLOW)
 				queued_rows.append(i)
 		self.total = len(tracks)
 		self.progress.setMaximum(max(len(queued_rows), 1))
 		self.progress.setValue(0)
-		self.last_playlist_name = tracks[0].get("playlist") or "Playlist"
+		self.last_playlist_name = self._playlist_dir_name(tracks)
 		return tracks, queued_rows
 
 	def _yt_dlp_override(self) -> str | None:
@@ -1197,6 +1217,7 @@ class MainWindow(QMainWindow):
 			self._audio_processing_options(),
 			tracks_override=active_tracks,
 			row_indices=queued_rows,
+			raw_tracks_override=getattr(self, "raw_tracks", None),
 			parent=self,
 		)
 		self.worker.sig_log.connect(self.lbl_log.setText)
@@ -1317,6 +1338,7 @@ class MainWindow(QMainWindow):
 				QMessageBox.information(self, "Busy", "Wait for in-progress manual downloads to finish before clearing.")
 				return
 		self.tracks = []
+		self.raw_tracks = []
 		self.total = 0
 		self.table.setRowCount(0)
 		self.ed_csv.clear()
@@ -1347,7 +1369,7 @@ class MainWindow(QMainWindow):
 			else:
 				self._set_row_highlight(row_idx, None)
 			item.setBackground(self.table.item(row_idx, 1).background())
-			self.table.setItem(row_idx, 2, item)
+			self.table.setItem(row_idx, 3, item)
 
 	def on_progress(self, processed: int, total: int):
 		self.progress.setMaximum(total)
@@ -1663,8 +1685,9 @@ class MainWindow(QMainWindow):
 		out_root = pathlib.Path(out_dir_text)
 		write_m3u8 = self.cb_m3u8.isChecked()
 		write_m3u_plain = self.cb_m3u_plain.isChecked()
-		ordered_entries: list[tuple[dict, pathlib.Path]] = []
-		playlist_name = None
+
+		# Build map of downloaded info: { (title, artist): (track, abs_path) }
+		downloaded_info = {}
 		for row in range(self.table.rowCount()):
 			info = self.track_results.get(row)
 			if not info or not info.get("downloaded") or info.get("removed"):
@@ -1673,38 +1696,72 @@ class MainWindow(QMainWindow):
 			fp = info.get("file_path")
 			if not track or not fp:
 				continue
-			path_obj = pathlib.Path(fp).resolve()
-			ordered_entries.append((track, path_obj))
-			if not playlist_name:
-				playlist_name = info.get("playlist_name") or track.get("playlist")
-		if not ordered_entries:
+			key = (track.get("title", "").lower().strip(), track.get("artists", "").lower().strip())
+			abs_path = pathlib.Path(fp).resolve()
+			downloaded_info[key] = (track, abs_path)
+
+		# Build per-playlist maps: {playlist_name: [(track, abs_path)]} mapped by original sequence
+		pl_entries: dict[str, list[tuple[dict, pathlib.Path]]] = {}
+		
+		# If we have raw_tracks (from a CSV load), map through them to preserve sequence
+		raw_tracks = getattr(self, "raw_tracks", None)
+		if raw_tracks is not None:
+			for rt in raw_tracks:
+				key = (rt.get("title", "").lower().strip(), rt.get("artists", "").lower().strip())
+				if key in downloaded_info:
+					track, abs_path = downloaded_info[key]
+					# which playlist did this original row belong to?
+					pl = rt.get("playlist")
+					if not pl and rt.get("playlists"):
+						pl = rt.get("playlists")[0]
+					if not pl:
+						pl = self.last_playlist_name or "Playlist"
+					pl_entries.setdefault(pl, []).append((track, abs_path))
+		else:
+			# Fallback for old/simple M3U scans where raw_tracks is not populated
+			for track, abs_path in downloaded_info.values():
+				playlists_field = track.get("playlists")
+				if playlists_field and isinstance(playlists_field, list):
+					track_playlists = [pl for pl in playlists_field if pl]
+				else:
+					pl = info.get("playlist_name") or track.get("playlist") or ""
+					track_playlists = [pl] if pl else []
+				if not track_playlists:
+					track_playlists = [self.last_playlist_name or "Playlist"]
+				for pl_name in track_playlists:
+					pl_entries.setdefault(pl_name, []).append((track, abs_path))
+
+		if not pl_entries:
+			# Nothing downloaded — remove files for last known playlist only
 			name = self.last_playlist_name or "Playlist"
 			self._remove_playlist_file(out_root, name, ".m3u8")
 			self._remove_playlist_file(out_root, name, ".m3u")
 			return
-		playlist_name = playlist_name or self.last_playlist_name or "Playlist"
-		self.last_playlist_name = playlist_name
-		entries_resolved: list[tuple[dict, pathlib.Path]] = []
-		for track, abs_path in ordered_entries:
-			entries_resolved.append((track, abs_path))
-		# determine extension from actual files
+
+		# Determine extension from actual files
 		ext = "m4a"
-		for _, abs_path in entries_resolved:
+		for _, abs_path in next(iter(pl_entries.values())):
 			suf = abs_path.suffix.lower().lstrip('.')
 			if suf in ("m4a", "mp3"):
 				ext = suf
 				break
-		if write_m3u8:
-			self._write_playlist_file(out_root, playlist_name, entries_resolved, ext, ".m3u8", "utf-8")
-		else:
-			self._remove_playlist_file(out_root, playlist_name, ".m3u8")
-		if write_m3u_plain:
-			self._write_playlist_file(out_root, playlist_name, entries_resolved, ext, ".m3u", "utf-8-sig")
-		else:
-			self._remove_playlist_file(out_root, playlist_name, ".m3u")
 
-	def _write_playlist_file(self, out_root: pathlib.Path, playlist_name: str, entries: list[tuple[dict, pathlib.Path]], ext: str, suffix: str, encoding: str) -> None:
-		playlist_dir = out_root / sanitize_name(playlist_name)
+		# All M3U files go into the same shared folder as the audio files
+		first_path = next(iter(next(iter(pl_entries.values()))))[1]
+		shared_dir = first_path.parent
+
+		for pl_name, entries in pl_entries.items():
+			if write_m3u8:
+				self._write_playlist_file(out_root, pl_name, entries, ext, ".m3u8", "utf-8", target_dir=shared_dir)
+			else:
+				self._remove_playlist_file(out_root, pl_name, ".m3u8", shared_dir=shared_dir)
+			if write_m3u_plain:
+				self._write_playlist_file(out_root, pl_name, entries, ext, ".m3u", "utf-8-sig", target_dir=shared_dir)
+			else:
+				self._remove_playlist_file(out_root, pl_name, ".m3u", shared_dir=shared_dir)
+
+	def _write_playlist_file(self, out_root: pathlib.Path, playlist_name: str, entries: list[tuple[dict, pathlib.Path]], ext: str, suffix: str, encoding: str, *, target_dir: pathlib.Path | None = None) -> None:
+		playlist_dir = target_dir if target_dir is not None else (out_root / sanitize_name(playlist_name))
 		playlist_dir.mkdir(parents=True, exist_ok=True)
 		file_path = playlist_dir / f"{sanitize_name(playlist_name)}{suffix}"
 		try:
@@ -1728,8 +1785,11 @@ class MainWindow(QMainWindow):
 		except Exception as exc:
 			self.lbl_log.setText(f"Failed to update playlists: {exc}")
 
-	def _remove_playlist_file(self, out_root: pathlib.Path, playlist_name: str, suffix: str) -> None:
-		file_path = out_root / sanitize_name(playlist_name) / f"{sanitize_name(playlist_name)}{suffix}"
+	def _remove_playlist_file(self, out_root: pathlib.Path, playlist_name: str, suffix: str, *, shared_dir: pathlib.Path | None = None) -> None:
+		if shared_dir is not None:
+			file_path = shared_dir / f"{sanitize_name(playlist_name)}{suffix}"
+		else:
+			file_path = out_root / sanitize_name(playlist_name) / f"{sanitize_name(playlist_name)}{suffix}"
 		if file_path.exists():
 			try:
 				file_path.unlink()
