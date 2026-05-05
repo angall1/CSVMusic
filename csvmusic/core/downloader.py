@@ -574,7 +574,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
 	return _normalize_to_m4a(src, dst, ffmpeg_bin, video_id, audio_processing)
 
-def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None) -> pathlib.Path:
+def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None, mp3_quality: int = 0) -> pathlib.Path:
 	dst_dir.mkdir(parents=True, exist_ok=True)
 	safe_base = _safe(base_name)
 	tmp = dst_dir / (safe_base + ".tmp")
@@ -638,10 +638,11 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
 	args = [ffmpeg_bin, "-y", "-i", str(src)]
 	_append_audio_filter(args, audio_processing, src=src, ffmpeg_bin=ffmpeg_bin)
+	mp3_quality = max(0, min(10, int(mp3_quality)))
 	if cbr_320:
 		args += ["-codec:a","libmp3lame","-b:a","320k"]
 	else:
-		args += ["-codec:a","libmp3lame","-q:a","0"]  # V0
+		args += ["-codec:a","libmp3lame","-q:a", str(mp3_quality)]
 	args += [str(dst)]
 	proc = _run_capture(args)
 	rc = proc.returncode

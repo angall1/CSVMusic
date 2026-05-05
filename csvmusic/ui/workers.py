@@ -47,6 +47,7 @@ class PipelineWorker(QThread):
 	             cookies_browser: str | None,
 	             cookies_file: str | None,
 	             audio_processing: Dict | None = None,
+	             mp3_quality: int = 0,
 	             tracks_override: List[Dict] | None = None,
 	             row_indices: List[int] | None = None,
 	             parent: QObject | None = None):
@@ -63,6 +64,7 @@ class PipelineWorker(QThread):
 		self.cookies_browser = cookies_browser
 		self.cookies_file = cookies_file
 		self.audio_processing = audio_processing or {}
+		self.mp3_quality = max(0, min(10, int(mp3_quality)))
 		self.tracks_override = tracks_override
 		self.row_indices = row_indices or []
 		self._stop = False
@@ -80,7 +82,7 @@ class PipelineWorker(QThread):
 		extra_args += build_ytdlp_mitigation_args(profile)
 		if self.fmt == "m4a":
 			return download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing)
-		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing)
+		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality)
 
 	def _apply_mitigation(self, profile: YouTubeMitigationProfile, reason: str | None = None) -> None:
 		if profile.label == self._mitigation.label:
@@ -258,6 +260,7 @@ class SingleDownloadWorker(QThread):
 	             cookies_browser: str | None,
 	             cookies_file: str | None,
 	             audio_processing: Dict | None = None,
+	             mp3_quality: int = 0,
 	             parent: QObject | None = None):
 		super().__init__(parent)
 		self.row_idx = row_idx
@@ -272,6 +275,7 @@ class SingleDownloadWorker(QThread):
 		self.cookies_browser = cookies_browser
 		self.cookies_file = cookies_file
 		self.audio_processing = audio_processing or {}
+		self.mp3_quality = max(0, min(10, int(mp3_quality)))
 
 	def run(self):
 		try:
@@ -291,7 +295,7 @@ class SingleDownloadWorker(QThread):
 			if self.fmt == "m4a":
 				fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing)
 			else:
-				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing)
+				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality)
 			self.sig_status.emit(self.row_idx, "Tagging…")
 			cover = yt_thumbnail_bytes(vid)
 			if self.embed_art:

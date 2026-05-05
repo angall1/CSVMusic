@@ -8,10 +8,10 @@ from PySide6.QtWidgets import (
 	QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
 	QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox,
 	QRadioButton, QButtonGroup, QProgressBar, QToolButton, QSizePolicy, QFrame,
-	QComboBox, QSlider
+	QComboBox, QSlider, QDialog
 )
-from PySide6.QtCore import Qt, QSignalBlocker
-from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication
+from PySide6.QtCore import Qt, QSignalBlocker, QUrl, Signal, QRect
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication, QDesktopServices, QPainter, QPen
 
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
 from csvmusic.core.settings import load_settings, save_settings
@@ -24,6 +24,133 @@ from csvmusic.core.browsers import list_profiles
 YELLOW = QColor(255, 244, 179)   # soft yellow
 RED = QColor(255, 205, 210)      # soft red
 GREEN = QColor(200, 230, 201)    # soft green
+
+class NotchedSlider(QWidget):
+	valueChanged = Signal(int)
+
+	def __init__(self, orientation: Qt.Orientation = Qt.Horizontal, parent: QWidget | None = None):
+		super().__init__(parent)
+		self._orientation = orientation
+		self._minimum = 0
+		self._maximum = 100
+		self._value = 0
+		self._tick_interval = 1
+		self.setMouseTracking(True)
+
+	def setRange(self, minimum: int, maximum: int) -> None:
+		self._minimum = int(minimum)
+		self._maximum = max(int(maximum), self._minimum)
+		self.setValue(self._value)
+		self.update()
+
+	def setMinimum(self, minimum: int) -> None:
+		self.setRange(minimum, self._maximum)
+
+	def setMaximum(self, maximum: int) -> None:
+		self.setRange(self._minimum, maximum)
+
+	def setValue(self, value: int) -> None:
+		value = max(self._minimum, min(self._maximum, int(value)))
+		if value == self._value:
+			self.update()
+			return
+		self._value = value
+		self.valueChanged.emit(value)
+		self.update()
+
+	def value(self) -> int:
+		return self._value
+
+	def setTickInterval(self, interval: int) -> None:
+		self._tick_interval = max(1, int(interval))
+		self.update()
+
+	def setTickPosition(self, _position) -> None:
+		self.update()
+
+	def setSingleStep(self, _step: int) -> None:
+		pass
+
+	def setPageStep(self, _step: int) -> None:
+		pass
+
+	def _groove_rect(self) -> QRect:
+		margin_x = 12
+		groove_h = 4
+		return QRect(margin_x, (self.height() - groove_h) // 2, max(1, self.width() - (margin_x * 2)), groove_h)
+
+	def _handle_rect(self) -> QRect:
+		groove = self._groove_rect()
+		x = self._value_to_x(self._value)
+		handle_w = 12
+		handle_h = 24
+		return QRect(x - (handle_w // 2), groove.center().y() - (handle_h // 2), handle_w, handle_h)
+
+	def _value_to_x(self, value: int) -> int:
+		groove = self._groove_rect()
+		span = max(1, self._maximum - self._minimum)
+		ratio = (value - self._minimum) / span
+		return groove.left() + int(round(ratio * groove.width()))
+
+	def _x_to_value(self, x: int) -> int:
+		groove = self._groove_rect()
+		if groove.width() <= 0:
+			return self._minimum
+		clamped = max(groove.left(), min(groove.right(), x))
+		ratio = (clamped - groove.left()) / groove.width()
+		return int(round(self._minimum + (self._maximum - self._minimum) * ratio))
+
+	def mousePressEvent(self, event) -> None:
+		if event.button() == Qt.LeftButton and self._orientation == Qt.Horizontal:
+			self.setValue(self._x_to_value(int(event.position().x())))
+			event.accept()
+			return
+		super().mousePressEvent(event)
+
+	def mouseMoveEvent(self, event) -> None:
+		if event.buttons() & Qt.LeftButton and self._orientation == Qt.Horizontal:
+			self.setValue(self._x_to_value(int(event.position().x())))
+			event.accept()
+			return
+		super().mouseMoveEvent(event)
+
+	def paintEvent(self, _event) -> None:
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.Antialiasing, False)
+		groove = self._groove_rect()
+		handle = self._handle_rect()
+		panel = QColor("#d4d0c8") if self.isEnabled() else QColor("#c0c0c0")
+		shadow = QColor("#808080")
+		dark = QColor("#404040")
+		light = QColor("#ffffff")
+		tick = QColor("#6c6c6c") if self.isEnabled() else QColor("#9a9a9a")
+
+		painter.fillRect(groove, panel)
+		painter.setPen(QPen(dark, 1))
+		painter.drawLine(groove.left(), groove.top(), groove.right(), groove.top())
+		painter.drawLine(groove.left(), groove.top(), groove.left(), groove.bottom())
+		painter.setPen(QPen(light, 1))
+		painter.drawLine(groove.left(), groove.bottom(), groove.right(), groove.bottom())
+		painter.drawLine(groove.right(), groove.top(), groove.right(), groove.bottom())
+
+		painter.setPen(QPen(tick, 1))
+		step = max(1, self._tick_interval)
+		for value in range(self._minimum, self._maximum + 1, step):
+			x = self._value_to_x(value)
+			painter.drawLine(x, groove.top() - 6, x, groove.top() - 2)
+			painter.drawLine(x, groove.bottom() + 2, x, groove.bottom() + 6)
+
+		painter.fillRect(handle, panel)
+		painter.setPen(QPen(light, 1))
+		painter.drawLine(handle.left(), handle.top(), handle.right(), handle.top())
+		painter.drawLine(handle.left(), handle.top(), handle.left(), handle.bottom())
+		painter.setPen(QPen(shadow, 1))
+		painter.drawLine(handle.right(), handle.top(), handle.right(), handle.bottom())
+		painter.drawLine(handle.left(), handle.bottom(), handle.right(), handle.bottom())
+		painter.setPen(QPen(dark, 1))
+		center_x = handle.center().x()
+		painter.drawLine(center_x - 1, handle.top() + 4, center_x - 1, handle.bottom() - 4)
+		painter.drawLine(center_x + 1, handle.top() + 4, center_x + 1, handle.bottom() - 4)
 
 class MainWindow(QMainWindow):
 	def __init__(self):
@@ -112,6 +239,7 @@ class MainWindow(QMainWindow):
 				border-right: {self._px(2)}px solid {win_dark};
 				border-bottom: {self._px(2)}px solid {win_dark};
 				padding: {self._px(4)}px {self._px(12)}px;
+				min-height: {self._px(18)}px;
 			}}
 			QPushButton:disabled {{
 				color: #808080;
@@ -127,7 +255,31 @@ class MainWindow(QMainWindow):
 				border-bottom: {self._px(2)}px solid {win_light};
 			}}
 			QToolButton {{
+				background-color: {win_panel};
 				color: {win_text};
+				border-top: {self._px(2)}px solid {win_light};
+				border-left: {self._px(2)}px solid {win_light};
+				border-right: {self._px(2)}px solid {win_dark};
+				border-bottom: {self._px(2)}px solid {win_dark};
+				padding: {self._px(4)}px {self._px(10)}px;
+				min-height: {self._px(18)}px;
+			}}
+			QToolButton:pressed, QToolButton:checked {{
+				border-top: {self._px(2)}px solid {win_dark};
+				border-left: {self._px(2)}px solid {win_dark};
+				border-right: {self._px(2)}px solid {win_light};
+				border-bottom: {self._px(2)}px solid {win_light};
+				padding-left: {self._px(11)}px;
+				padding-top: {self._px(5)}px;
+				padding-right: {self._px(9)}px;
+				padding-bottom: {self._px(3)}px;
+			}}
+			QToolButton:disabled {{
+				color: #808080;
+				border-top: {self._px(2)}px solid {win_light};
+				border-left: {self._px(2)}px solid {win_light};
+				border-right: {self._px(2)}px solid {win_shadow};
+				border-bottom: {self._px(2)}px solid {win_shadow};
 			}}
 			QCheckBox, QRadioButton {{
 				color: {win_text};
@@ -143,6 +295,30 @@ class MainWindow(QMainWindow):
 			}}
 			QProgressBar::chunk {{
 				background-color: {progress_chunk};
+			}}
+			QSlider::groove:horizontal {{
+				background-color: #8b877f;
+				border-top: {self._px(1)}px solid {win_dark};
+				border-left: {self._px(1)}px solid {win_dark};
+				border-right: {self._px(1)}px solid {win_light};
+				border-bottom: {self._px(1)}px solid {win_light};
+				height: {self._px(4)}px;
+				margin: {self._px(10)}px 0 {self._px(8)}px 0;
+			}}
+			QSlider::handle:horizontal {{
+				background-color: {win_light};
+				border-top: {self._px(2)}px solid {win_light};
+				border-left: {self._px(2)}px solid {win_light};
+				border-right: {self._px(2)}px solid {win_dark};
+				border-bottom: {self._px(2)}px solid {win_dark};
+				width: {self._px(8)}px;
+				margin: {self._px(-10)}px 0 {self._px(-10)}px 0;
+			}}
+			QSlider::sub-page:horizontal {{
+				background-color: #8b877f;
+			}}
+			QSlider::add-page:horizontal {{
+				background-color: #8b877f;
 			}}
 		"""
 		retro_font_family = self._retro_font_family
@@ -189,8 +365,9 @@ class MainWindow(QMainWindow):
 		lbl_link = QLabel('<a href="https://www.tunemymusic.com/home">TuneMyMusic (export CSV)</a>')
 		link_font = QFont(retro_font_family, default_pt + 3, QFont.Bold)
 		lbl_link.setFont(link_font)
-		lbl_link.setOpenExternalLinks(True)
-		lbl_link.setTextInteractionFlags(Qt.TextBrowserInteraction)
+		lbl_link.setOpenExternalLinks(False)
+		lbl_link.setTextInteractionFlags(Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
+		lbl_link.linkActivated.connect(self.on_open_external_link)
 		lbl_link.setStyleSheet("a { color: #000080; text-decoration: none; }")
 		top.addWidget(lbl_link)
 		btn_help = QToolButton()
@@ -199,6 +376,7 @@ class MainWindow(QMainWindow):
 		btn_help.setToolButtonStyle(Qt.ToolButtonTextOnly)
 		btn_font = QFont(retro_font_family, default_pt + 1, QFont.Bold)
 		btn_help.setFont(btn_font)
+		self.btn_tutorial = btn_help
 		self._button_font = btn_font
 		top.addStretch(1)
 		top.addWidget(btn_help)
@@ -229,87 +407,139 @@ class MainWindow(QMainWindow):
 		self.help_panel.setFrameShape(QFrame.StyledPanel)
 		help_layout = QVBoxLayout(self.help_panel)
 		help_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
-		help_layout.setSpacing(self._px(6))
-		help_text = QLabel(
-			"Instructions:\n"
-			"1) Click the link above → select your music platform\n"
-			"2) Paste your playlist URL\n"
-			"3) Choose destination\n"
-			"4) Export to file → CSV\n"
-			"\n"
-			"Save the exported CSV (e.g., 'My Spotify Library.csv'), then select it below.\n"
-			"\n"
-			"Tips:\n"
-			"• Use EQUALIZER if you want louder output, bass/treble changes, or track-to-track volume matching.\n"
-			"• Use LOAD PLAYLIST if you already have songs in a playlist folder and only want to download the new ones.\n"
-			"• LOAD PLAYLIST accepts the playlist CSV plus either the output folder, the playlist folder, or that playlist's .m3u/.m3u8 file."
-		)
-		help_text.setFont(QFont(retro_font_family, default_pt + 3))
-		help_text.setWordWrap(True)
-		help_text.setMinimumHeight(self._px(160))
-		help_layout.addWidget(help_text)
+		help_layout.setSpacing(self._px(8))
+		help_heading = QLabel("Export one playlist as CSV, then import it here.")
+		help_heading.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		help_heading.setWordWrap(True)
+		help_layout.addWidget(help_heading)
+		help_intro = QLabel("Follow these steps:")
+		help_intro.setFont(QFont(retro_font_family, default_pt + 1))
+		help_layout.addWidget(help_intro)
+		help_steps_box = QFrame()
+		help_steps_box.setFrameShape(QFrame.StyledPanel)
+		steps_layout = QVBoxLayout(help_steps_box)
+		steps_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
+		steps_layout.setSpacing(self._px(6))
+		for line in (
+			"1. Click the TuneMyMusic link above.",
+			"2. Select your music platform.",
+			"3. Paste your playlist URL.",
+			"4. Choose Export to file → CSV.",
+			"5. Save the CSV, then select it in CSVMusic.",
+		):
+			step_label = QLabel(line)
+			step_label.setFont(QFont(retro_font_family, default_pt + 1))
+			step_label.setWordWrap(True)
+			steps_layout.addWidget(step_label)
+		help_layout.addWidget(help_steps_box)
+		help_tip_heading = QLabel("Tips")
+		help_tip_heading.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		help_layout.addWidget(help_tip_heading)
+		help_tips_box = QFrame()
+		help_tips_box.setFrameShape(QFrame.StyledPanel)
+		tips_layout = QVBoxLayout(help_tips_box)
+		tips_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
+		tips_layout.setSpacing(self._px(6))
+		for line in (
+			"• Use EQUALIZER for volume matching, gain, bass, or treble changes.",
+			"• Use LOAD PLAYLIST when the folder already has songs and you only want the missing ones.",
+			"• LOAD PLAYLIST accepts the playlist CSV plus the output folder, playlist folder, or that playlist's .m3u/.m3u8 file.",
+		):
+			tip_label = QLabel(line)
+			tip_label.setFont(QFont(retro_font_family, default_pt + 1))
+			tip_label.setWordWrap(True)
+			tips_layout.addWidget(tip_label)
+		help_layout.addWidget(help_tips_box)
 		self.help_panel.setVisible(False)
 		vl.addWidget(self.help_panel)
 		def _toggle_help(checked: bool):
-			self.help_panel.setVisible(checked)
-			btn_help.setText("TUTORIAL ▾" if checked else "TUTORIAL ▸")
+			self._toggle_top_dialog(btn_help, self.help_dialog, "TUTORIAL", checked)
 		btn_help.toggled.connect(_toggle_help)
 
 		self.load_panel = QFrame()
 		self.load_panel.setFrameShape(QFrame.StyledPanel)
-		self.load_panel.setStyleSheet("background-color: #bcb7ae;")
 		load_layout = QVBoxLayout(self.load_panel)
 		load_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
-		load_layout.setSpacing(self._px(8))
-		load_note = QLabel(
-			"Use this when you already have music in a playlist folder and want CSVMusic to skip files that are already there."
-		)
+		load_layout.setSpacing(self._px(10))
+		load_heading = QLabel("Refresh an existing playlist folder")
+		load_heading.setFont(QFont(retro_font_family, default_pt + 4, QFont.Bold))
+		load_layout.addWidget(load_heading)
+		load_note = QLabel("Point CSVMusic at the original playlist CSV and the folder that already contains the downloaded songs.")
 		load_note.setWordWrap(True)
-		load_note.setFont(QFont(retro_font_family, default_pt))
+		load_note.setFont(QFont(retro_font_family, default_pt + 1))
 		load_layout.addWidget(load_note)
-		load_row_csv = QHBoxLayout()
-		lbl_load_csv = QLabel("Playlist CSV:")
-		lbl_load_csv.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		csv_section = QFrame()
+		csv_section.setFrameShape(QFrame.StyledPanel)
+		csv_layout = QVBoxLayout(csv_section)
+		csv_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
+		csv_layout.setSpacing(self._px(6))
+		lbl_load_csv = QLabel("1. Playlist CSV")
+		lbl_load_csv.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		csv_layout.addWidget(lbl_load_csv)
 		self.ed_load_csv = QLineEdit()
 		self.ed_load_csv.setPlaceholderText("CSV for the playlist you want to refresh")
 		self.ed_load_csv.setFont(QFont(retro_font_family, default_pt + 1))
+		csv_layout.addWidget(self.ed_load_csv)
+		load_row_csv = QHBoxLayout()
 		btn_load_csv = QPushButton("Browse…")
 		btn_load_csv.setFont(btn_font)
 		btn_load_csv.clicked.connect(self.on_browse_load_csv)
-		load_row_csv.addWidget(lbl_load_csv)
-		load_row_csv.addWidget(self.ed_load_csv, 1)
 		load_row_csv.addWidget(btn_load_csv)
-		load_layout.addLayout(load_row_csv)
-		load_row_source = QHBoxLayout()
-		lbl_load_source = QLabel("Current music:")
-		lbl_load_source.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		load_row_csv.addStretch(1)
+		csv_layout.addLayout(load_row_csv)
+		load_layout.addWidget(csv_section)
+		source_section = QFrame()
+		source_section.setFrameShape(QFrame.StyledPanel)
+		source_layout = QVBoxLayout(source_section)
+		source_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
+		source_layout.setSpacing(self._px(6))
+		lbl_load_source = QLabel("2. Current music location")
+		lbl_load_source.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		source_layout.addWidget(lbl_load_source)
 		self.ed_load_source = QLineEdit()
 		self.ed_load_source.setPlaceholderText("Playlist folder, output folder, or that playlist's .m3u/.m3u8 file")
 		self.ed_load_source.setFont(QFont(retro_font_family, default_pt + 1))
+		source_layout.addWidget(self.ed_load_source)
+		load_row_source = QHBoxLayout()
 		btn_load_source = QPushButton("Browse…")
 		btn_load_source.setFont(btn_font)
 		btn_load_source.clicked.connect(self.on_browse_load_source)
-		load_row_source.addWidget(lbl_load_source)
-		load_row_source.addWidget(self.ed_load_source, 1)
 		load_row_source.addWidget(btn_load_source)
-		load_layout.addLayout(load_row_source)
+		load_row_source.addStretch(1)
+		source_layout.addLayout(load_row_source)
+		load_hint = QLabel("Accepted locations: the output folder, the playlist folder, or that playlist's .m3u/.m3u8 file.")
+		load_hint.setFont(QFont(retro_font_family, default_pt + 1))
+		load_hint.setWordWrap(True)
+		source_layout.addWidget(load_hint)
+		load_layout.addWidget(source_section)
+		action_section = QFrame()
+		action_section.setFrameShape(QFrame.StyledPanel)
+		action_layout = QVBoxLayout(action_section)
+		action_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
+		action_layout.setSpacing(self._px(6))
+		lbl_load_action = QLabel("3. Scan existing files")
+		lbl_load_action.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		action_layout.addWidget(lbl_load_action)
 		load_action_row = QHBoxLayout()
 		self.btn_scan_existing = QPushButton("Load Existing Playlist")
 		self.btn_scan_existing.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		self.btn_scan_existing.clicked.connect(self.on_load_playlist)
 		load_action_row.addWidget(self.btn_scan_existing)
 		load_action_row.addStretch(1)
-		load_layout.addLayout(load_action_row)
+		action_layout.addLayout(load_action_row)
+		load_warning = QLabel("The selected CSV must match the playlist folder you are scanning.")
+		load_warning.setFont(QFont(retro_font_family, default_pt))
+		load_warning.setWordWrap(True)
+		action_layout.addWidget(load_warning)
+		load_layout.addWidget(action_section)
 		self.load_panel.setVisible(False)
 		vl.addWidget(self.load_panel)
 		def _toggle_load_panel(checked: bool):
-			self.load_panel.setVisible(checked)
-			btn_load.setText("LOAD PLAYLIST ▾" if checked else "LOAD PLAYLIST ▸")
+			self._toggle_top_dialog(btn_load, self.load_dialog, "LOAD PLAYLIST", checked)
 		btn_load.toggled.connect(_toggle_load_panel)
 
 		self.equalizer_panel = QFrame()
 		self.equalizer_panel.setFrameShape(QFrame.StyledPanel)
-		self.equalizer_panel.setStyleSheet("background-color: #bcb7ae;")
 		eq_layout = QVBoxLayout(self.equalizer_panel)
 		eq_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
 		eq_layout.setSpacing(self._px(8))
@@ -345,57 +575,87 @@ class MainWindow(QMainWindow):
 		self.equalizer_panel.setVisible(False)
 		vl.addWidget(self.equalizer_panel)
 		def _toggle_equalizer(checked: bool):
-			self.equalizer_panel.setVisible(checked)
-			btn_eq.setText("EQUALIZER ▾" if checked else "EQUALIZER ▸")
+			self._toggle_top_dialog(btn_eq, self.equalizer_dialog, "EQUALIZER", checked)
 		btn_eq.toggled.connect(_toggle_equalizer)
 
 		self.advanced_panel = QFrame()
 		self.advanced_panel.setFrameShape(QFrame.StyledPanel)
 		adv_layout = QVBoxLayout(self.advanced_panel)
 		adv_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
-		adv_layout.setSpacing(self._px(8))
+		adv_layout.setSpacing(self._px(10))
 		# Darker background for clarity
-		self.advanced_panel.setStyleSheet("background-color: #bcb7ae;")
-		note = QLabel("These overrides are optional. Leave blank to use bundled tools.")
+		settings_heading = QLabel("Settings")
+		settings_heading.setFont(QFont(retro_font_family, default_pt + 4, QFont.Bold))
+		adv_layout.addWidget(settings_heading)
+		note = QLabel("These overrides are optional. Leave blank to use the bundled defaults.")
 		note.setWordWrap(True)
-		note.setFont(QFont(retro_font_family, default_pt))
+		note.setFont(QFont(retro_font_family, default_pt + 1))
 		adv_layout.addWidget(note)
-		row_ytdlp = QHBoxLayout()
 		lbl_ytdlp = QLabel("yt-dlp path:")
-		lbl_ytdlp.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		lbl_ytdlp.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		adv_layout.addWidget(lbl_ytdlp)
 		self.ed_ytdlp = QLineEdit()
 		self.ed_ytdlp.setPlaceholderText("Auto-detect from PATH")
 		self.ed_ytdlp.setFont(QFont(retro_font_family, default_pt + 1))
 		self.ed_ytdlp.textChanged.connect(lambda _=None: self._persist_settings())
+		adv_layout.addWidget(self.ed_ytdlp)
+		row_ytdlp = QHBoxLayout()
 		btn_ytdlp = QPushButton("Browse…")
 		btn_ytdlp.setFont(btn_font)
 		btn_ytdlp.clicked.connect(self.on_browse_ytdlp)
 		btn_ytdlp_clear = QPushButton("Clear")
 		btn_ytdlp_clear.setFont(btn_font)
 		btn_ytdlp_clear.clicked.connect(self.on_clear_ytdlp)
-		row_ytdlp.addWidget(lbl_ytdlp)
-		row_ytdlp.addWidget(self.ed_ytdlp, 1)
 		row_ytdlp.addWidget(btn_ytdlp)
 		row_ytdlp.addWidget(btn_ytdlp_clear)
+		row_ytdlp.addStretch(1)
 		adv_layout.addLayout(row_ytdlp)
-		row_ffmpeg = QHBoxLayout()
 		lbl_ffmpeg = QLabel("FFmpeg path:")
-		lbl_ffmpeg.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		lbl_ffmpeg.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		adv_layout.addWidget(lbl_ffmpeg)
 		self.ed_ffmpeg = QLineEdit()
 		self.ed_ffmpeg.setPlaceholderText("Uses bundled binary by default")
 		self.ed_ffmpeg.setFont(QFont(retro_font_family, default_pt + 1))
 		self.ed_ffmpeg.textChanged.connect(lambda _=None: self._persist_settings())
+		adv_layout.addWidget(self.ed_ffmpeg)
+		row_ffmpeg = QHBoxLayout()
 		btn_ffmpeg = QPushButton("Browse…")
 		btn_ffmpeg.setFont(btn_font)
 		btn_ffmpeg.clicked.connect(self.on_browse_ffmpeg)
 		btn_ffmpeg_clear = QPushButton("Clear")
 		btn_ffmpeg_clear.setFont(btn_font)
 		btn_ffmpeg_clear.clicked.connect(self.on_clear_ffmpeg)
-		row_ffmpeg.addWidget(lbl_ffmpeg)
-		row_ffmpeg.addWidget(self.ed_ffmpeg, 1)
 		row_ffmpeg.addWidget(btn_ffmpeg)
 		row_ffmpeg.addWidget(btn_ffmpeg_clear)
+		row_ffmpeg.addStretch(1)
 		adv_layout.addLayout(row_ffmpeg)
+		audio_heading = QLabel("Audio defaults")
+		audio_heading.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
+		adv_layout.addWidget(audio_heading)
+		lbl_mp3_quality = QLabel("MP3 quality")
+		lbl_mp3_quality.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		adv_layout.addWidget(lbl_mp3_quality)
+		row_mp3_quality = QHBoxLayout()
+		self.slider_mp3_quality = NotchedSlider(Qt.Horizontal)
+		self.slider_mp3_quality.setRange(0, 10)
+		self.slider_mp3_quality.setValue(0)
+		self.slider_mp3_quality.setTickInterval(1)
+		self.slider_mp3_quality.setMaximumWidth(self._px(360))
+		self.slider_mp3_quality.setMinimumHeight(self._px(34))
+		self.slider_mp3_quality.valueChanged.connect(self._on_mp3_quality_changed)
+		self.lbl_mp3_quality_value = QLabel("0 = Best")
+		self.lbl_mp3_quality_value.setMinimumWidth(self._px(116))
+		self.lbl_mp3_quality_value.setFont(QFont(retro_font_family, default_pt + 1))
+		row_mp3_quality.addWidget(self.slider_mp3_quality, 1)
+		row_mp3_quality.addWidget(self.lbl_mp3_quality_value)
+		row_mp3_quality.addStretch(1)
+		adv_layout.addLayout(row_mp3_quality)
+		lbl_mp3_quality_note = QLabel(
+			"Only applies to MP3 output. 0 = best quality / largest files. 10 = worst quality / smallest files."
+		)
+		lbl_mp3_quality_note.setWordWrap(True)
+		lbl_mp3_quality_note.setFont(QFont(retro_font_family, default_pt))
+		adv_layout.addWidget(lbl_mp3_quality_note)
 		self.cb_readability_mode = QCheckBox("Readable text")
 		self.cb_readability_mode.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
 		self.cb_readability_mode.toggled.connect(self.on_toggle_readability_mode)
@@ -403,48 +663,56 @@ class MainWindow(QMainWindow):
 		# Firefox is the only browser-cookie path reliable enough to expose directly.
 		self._detected_firefox_profile: str | None = None
 		self._cookies_test_ok = False
+		cookies_heading = QLabel("YouTube cookies")
+		cookies_heading.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
+		adv_layout.addWidget(cookies_heading)
 		row_firefox = QHBoxLayout()
 		lbl_firefox = QLabel("YouTube login:")
-		lbl_firefox.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		lbl_firefox.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		self.cb_use_cookies = QCheckBox("Use Cookies")
 		self.cb_use_cookies.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
 		self.cb_use_cookies.setEnabled(False)
 		self.cb_use_cookies.toggled.connect(lambda _=None: self._persist_settings())
+		row_firefox.addWidget(lbl_firefox)
+		row_firefox.addWidget(self.cb_use_cookies)
+		row_firefox.addStretch(1)
+		adv_layout.addLayout(row_firefox)
+		row_firefox_buttons = QHBoxLayout()
 		self.btn_detect_firefox_cookies = QPushButton("Detect Cookies from Firefox")
 		self.btn_detect_firefox_cookies.setFont(btn_font)
 		self.btn_detect_firefox_cookies.clicked.connect(self.on_detect_firefox_cookies)
 		self.btn_test_cookies = QPushButton("Test Cookies")
 		self.btn_test_cookies.setFont(btn_font)
 		self.btn_test_cookies.clicked.connect(self.on_test_cookies)
-		row_firefox.addWidget(lbl_firefox)
-		row_firefox.addWidget(self.cb_use_cookies)
-		row_firefox.addWidget(self.btn_detect_firefox_cookies)
-		row_firefox.addWidget(self.btn_test_cookies)
-		row_firefox.addStretch(1)
-		adv_layout.addLayout(row_firefox)
+		row_firefox_buttons.addWidget(self.btn_detect_firefox_cookies)
+		row_firefox_buttons.addWidget(self.btn_test_cookies)
+		row_firefox_buttons.addStretch(1)
+		adv_layout.addLayout(row_firefox_buttons)
 		lbl_ff_tip = QLabel("Cookies help with age-restricted or sign-in-only YouTube results. Sign into YouTube in Firefox, click Detect, then Test. The Use Cookies checkbox unlocks only after the test passes. <a href=\"https://www.mozilla.org/firefox/download/\">Get Firefox</a>")
-		lbl_ff_tip.setOpenExternalLinks(True)
-		lbl_ff_tip.setTextInteractionFlags(Qt.TextBrowserInteraction)
+		lbl_ff_tip.setOpenExternalLinks(False)
+		lbl_ff_tip.setTextInteractionFlags(Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
+		lbl_ff_tip.linkActivated.connect(self.on_open_external_link)
 		lbl_ff_tip.setFont(QFont(retro_font_family, default_pt))
 		adv_layout.addWidget(lbl_ff_tip)
 		# Cookies file alternative
-		row_cookie_file = QHBoxLayout()
 		lbl_cookie_file = QLabel("Cookies file (.txt):")
-		lbl_cookie_file.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		lbl_cookie_file.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		adv_layout.addWidget(lbl_cookie_file)
 		self.ed_cookies_file = QLineEdit()
 		self.ed_cookies_file.setPlaceholderText("Optional: Netscape cookies.txt (YouTube domain)")
 		self.ed_cookies_file.setFont(QFont(retro_font_family, default_pt + 1))
 		self.ed_cookies_file.textChanged.connect(self.on_cookies_file_changed)
+		adv_layout.addWidget(self.ed_cookies_file)
+		row_cookie_file = QHBoxLayout()
 		btn_cookie_file = QPushButton("Browse...")
 		btn_cookie_file.setFont(btn_font)
 		btn_cookie_file.clicked.connect(self.on_browse_cookies_file)
 		btn_cookie_file_clear = QPushButton("Clear")
 		btn_cookie_file_clear.setFont(btn_font)
 		btn_cookie_file_clear.clicked.connect(self.on_clear_cookies_file)
-		row_cookie_file.addWidget(lbl_cookie_file)
-		row_cookie_file.addWidget(self.ed_cookies_file, 1)
 		row_cookie_file.addWidget(btn_cookie_file)
 		row_cookie_file.addWidget(btn_cookie_file_clear)
+		row_cookie_file.addStretch(1)
 		adv_layout.addLayout(row_cookie_file)
 		# Cookie check status label
 		self.lbl_cookie_status = QLabel("")
@@ -455,9 +723,21 @@ class MainWindow(QMainWindow):
 		vl.addWidget(self.advanced_panel)
 
 		def _toggle_advanced(checked: bool):
-			self.advanced_panel.setVisible(checked)
-			btn_adv.setText("SETTINGS ▾" if checked else "SETTINGS ▸")
+			self._toggle_top_dialog(btn_adv, self.advanced_dialog, "SETTINGS", checked)
 		btn_adv.toggled.connect(_toggle_advanced)
+
+		self.help_dialog = self._create_panel_dialog(vl, self.help_panel, "Tutorial", self._px(720), self._px(360))
+		self.load_dialog = self._create_panel_dialog(vl, self.load_panel, "Load Playlist", self._px(720), self._px(420))
+		self.equalizer_dialog = self._create_panel_dialog(vl, self.equalizer_panel, "Equalizer", self._px(720), self._px(360))
+		self.advanced_dialog = self._create_panel_dialog(vl, self.advanced_panel, "Settings", self._px(760), self._px(620))
+		self._top_dialogs = {
+			self.btn_tutorial: (self.help_dialog, "TUTORIAL"),
+			self.btn_load_existing: (self.load_dialog, "LOAD PLAYLIST"),
+			self.btn_equalizer: (self.equalizer_dialog, "EQUALIZER"),
+			self.btn_advanced: (self.advanced_dialog, "SETTINGS"),
+		}
+		for button, (dialog, label) in self._top_dialogs.items():
+			dialog.finished.connect(lambda _result=0, btn=button, text=label: self._on_top_dialog_closed(btn, text))
 
 		# ── CSV picker ─────────────────────────────────────────────────────────────
 		row1 = QHBoxLayout()
@@ -590,6 +870,11 @@ class MainWindow(QMainWindow):
 		font.setFamily(family)
 		widget.setFont(font)
 
+	def _apply_font_family_to_widget_tree(self, root: QWidget, family: str) -> None:
+		self._swap_font_family(root, family)
+		for widget in root.findChildren(QWidget):
+			self._swap_font_family(widget, family)
+
 	def _apply_font_family(self, family: str) -> None:
 		self.setFont(QFont(family, self._default_pt))
 		self._root_widget.setStyleSheet(self._base_stylesheet_template.replace("__FONT_FAMILY__", family))
@@ -598,6 +883,27 @@ class MainWindow(QMainWindow):
 		for widget in self.findChildren(QWidget):
 			self._swap_font_family(widget, family)
 		self.table.horizontalHeader().setFont(QFont(family, self._default_pt + 2, QFont.Bold))
+		self._refresh_top_dialog_styles()
+
+	def _refresh_top_dialog_styles(self) -> None:
+		family = self._readable_font_family if self._readability_mode else self._retro_font_family
+		dialog_stylesheet = self._base_stylesheet_template.replace("__FONT_FAMILY__", family)
+		for dialog in (
+			getattr(self, "help_dialog", None),
+			getattr(self, "load_dialog", None),
+			getattr(self, "equalizer_dialog", None),
+			getattr(self, "advanced_dialog", None),
+		):
+			if dialog is not None:
+				dialog.setStyleSheet(dialog_stylesheet)
+		for panel in (
+			getattr(self, "help_panel", None),
+			getattr(self, "load_panel", None),
+			getattr(self, "equalizer_panel", None),
+			getattr(self, "advanced_panel", None),
+		):
+			if panel is not None:
+				self._apply_font_family_to_widget_tree(panel, family)
 
 	def on_toggle_readability_mode(self, checked: bool) -> None:
 		self._readability_mode = bool(checked)
@@ -605,15 +911,19 @@ class MainWindow(QMainWindow):
 		self._apply_font_family(family)
 		self._persist_settings()
 
-	def _make_eq_slider(self, parent_layout: QVBoxLayout, label: str, font_family: str, default_pt: int) -> tuple[QSlider, QLabel, QLabel]:
+	def _make_eq_slider(self, parent_layout: QVBoxLayout, label: str, font_family: str, default_pt: int) -> tuple[NotchedSlider, QLabel, QLabel]:
 		row = QHBoxLayout()
 		lbl = QLabel(f"{label}:")
 		lbl.setFont(QFont(font_family, default_pt + 1, QFont.Bold))
-		slider = QSlider(Qt.Horizontal)
+		lbl.setFixedWidth(self._px(96))
+		slider = NotchedSlider(Qt.Horizontal)
 		slider.setRange(-15, 15)
 		slider.setValue(0)
 		slider.setTickInterval(1)
-		slider.setTickPosition(QSlider.TicksBelow)
+		slider.setSingleStep(1)
+		slider.setPageStep(1)
+		slider.setFixedWidth(self._px(520))
+		slider.setMinimumHeight(self._px(34))
 		value_label = QLabel("0 dB")
 		value_label.setMinimumWidth(self._px(52))
 		value_label.setFont(QFont(font_family, default_pt + 1))
@@ -626,6 +936,55 @@ class MainWindow(QMainWindow):
 		row.addWidget(value_label)
 		parent_layout.addLayout(row)
 		return slider, value_label, lbl
+
+	def _create_panel_dialog(self, root_layout: QVBoxLayout, panel: QFrame, title: str, width: int, height: int) -> QDialog:
+		root_layout.removeWidget(panel)
+		panel.setVisible(True)
+		dialog = QDialog(self)
+		dialog.setWindowTitle(title)
+		dialog.setModal(False)
+		dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+		dialog_layout = QVBoxLayout(dialog)
+		dialog_layout.setContentsMargins(0, 0, 0, 0)
+		dialog_layout.addWidget(panel)
+		family = self._readable_font_family if self._readability_mode else self._retro_font_family
+		dialog.setStyleSheet(self._base_stylesheet_template.replace("__FONT_FAMILY__", family))
+		self._apply_font_family_to_widget_tree(panel, family)
+		dialog.setMinimumSize(width, height)
+		dialog.resize(width, height)
+		return dialog
+
+	def _set_top_button_label(self, button: QToolButton, base_label: str, open_state: bool) -> None:
+		button.setText(f"{base_label} {'▾' if open_state else '▸'}")
+
+	def _on_top_dialog_closed(self, button: QToolButton, base_label: str) -> None:
+		blocker = QSignalBlocker(button)
+		button.setChecked(False)
+		del blocker
+		self._set_top_button_label(button, base_label, False)
+
+	def _close_other_top_dialogs(self, active_button: QToolButton | None) -> None:
+		for button, (dialog, label) in getattr(self, "_top_dialogs", {}).items():
+			if button is active_button:
+				continue
+			if dialog.isVisible():
+				dialog.hide()
+			if button.isChecked():
+				blocker = QSignalBlocker(button)
+				button.setChecked(False)
+				del blocker
+			self._set_top_button_label(button, label, False)
+
+	def _toggle_top_dialog(self, button: QToolButton, dialog: QDialog, base_label: str, checked: bool) -> None:
+		if checked:
+			self._close_other_top_dialogs(button)
+			self._set_top_button_label(button, base_label, True)
+			dialog.show()
+			dialog.raise_()
+			dialog.activateWindow()
+		else:
+			dialog.hide()
+			self._set_top_button_label(button, base_label, False)
 
 	def _set_equalizer_controls_enabled(self, enabled: bool) -> None:
 		self.cb_eq_enabled.setText("Equalizer ON" if enabled else "Equalizer OFF")
@@ -642,6 +1001,20 @@ class MainWindow(QMainWindow):
 			"bass_gain": self.slider_bass.value(),
 			"treble_gain": self.slider_treble.value(),
 		}
+
+	def _mp3_quality_value(self) -> int:
+		return max(0, min(10, int(self.slider_mp3_quality.value())))
+
+	def _on_mp3_quality_changed(self, value: int) -> None:
+		value = max(0, min(10, int(value)))
+		if value == 0:
+			label = "0 = Best"
+		elif value == 10:
+			label = "10 = Worst"
+		else:
+			label = f"{value} = Lower"
+		self.lbl_mp3_quality_value.setText(label)
+		self._persist_settings()
 
 	def _clamp_to_screen(self, width: int, height: int) -> Tuple[int, int]:
 		screen = QGuiApplication.primaryScreen()
@@ -733,9 +1106,17 @@ class MainWindow(QMainWindow):
 		if not p.exists() or not p.is_dir():
 			QMessageBox.warning(self, "Missing folder", "The selected output folder does not exist.")
 			return
-		from PySide6.QtGui import QDesktopServices
-		from PySide6.QtCore import QUrl
 		QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
+
+	def on_open_external_link(self, url: str) -> None:
+		if not url:
+			return
+		if not QDesktopServices.openUrl(QUrl(url)):
+			QMessageBox.warning(
+				self,
+				"Could Not Open Link",
+				f"CSVMusic could not open this link automatically:\n{url}\n\nOpen it manually in your browser."
+			)
 
 	def _collect_tracks_preview(self, csv_path: str | None = None) -> List[dict]:
 		target_csv = csv_path or self.ed_csv.text().strip()
@@ -996,6 +1377,7 @@ class MainWindow(QMainWindow):
 			"eq_volume_gain": self.slider_volume.value(),
 			"eq_bass_gain": self.slider_bass.value(),
 			"eq_treble_gain": self.slider_treble.value(),
+			"mp3_quality": self._mp3_quality_value(),
 			"format": "m4a" if self.rb_m4a.isChecked() else "mp3",
 		}
 		if include_paths:
@@ -1099,6 +1481,16 @@ class MainWindow(QMainWindow):
 		self.slider_treble.setValue(max(-15, min(15, treble_gain)))
 		del block_treble
 		self.lbl_treble_value.setText(f"{self.slider_treble.value():+d} dB" if self.slider_treble.value() else "0 dB")
+		mp3_quality = int(cfg.get("mp3_quality", 0) or 0)
+		block_mp3_quality = QSignalBlocker(self.slider_mp3_quality)
+		self.slider_mp3_quality.setValue(max(0, min(10, mp3_quality)))
+		del block_mp3_quality
+		if self.slider_mp3_quality.value() == 0:
+			self.lbl_mp3_quality_value.setText("0 = Best")
+		elif self.slider_mp3_quality.value() == 10:
+			self.lbl_mp3_quality_value.setText("10 = Worst")
+		else:
+			self.lbl_mp3_quality_value.setText(f"{self.slider_mp3_quality.value()} = Lower")
 		stored_format = str(cfg.get("format") or "").lower()
 		if stored_format in ("m4a", "mp3"):
 			block_m4a = QSignalBlocker(self.rb_m4a)
@@ -1195,6 +1587,7 @@ class MainWindow(QMainWindow):
 			cookies_browser,
 			self._cookies_file(),
 			self._audio_processing_options(),
+			mp3_quality=self._mp3_quality_value(),
 			tracks_override=active_tracks,
 			row_indices=queued_rows,
 			parent=self,
@@ -1567,6 +1960,7 @@ class MainWindow(QMainWindow):
 			self._cookies_browser(),
 			self._cookies_file(),
 			self._audio_processing_options(),
+			self._mp3_quality_value(),
 			self
 		)
 		record["download_worker"] = worker
