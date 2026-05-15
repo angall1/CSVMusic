@@ -73,6 +73,8 @@ YOUTUBE_MITIGATION_AGGRESSIVE = YouTubeMitigationProfile(
 )
 
 _WINDOWS = sys.platform.startswith("win")
+_TARGET_LOUDNESS_I = -16.0
+_TARGET_TRUE_PEAK_DB = -2.5
 
 def _hidden_subprocess_kwargs() -> dict:
 	if not _WINDOWS:
@@ -264,8 +266,24 @@ def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
 			return rc2, detail2
 	return rc, detail
 
+_FILENAME_CHAR_MAP = str.maketrans({
+	"\\": "＼",
+	"/": "／",
+	":": "：",
+	"*": "＊",
+	"?": "？",
+	'"': "＂",
+	"<": "＜",
+	">": "＞",
+	"|": "｜",
+})
+
 def sanitize_name(name: str) -> str:
-	return re.sub(r'[\\/:*?"<>|]+', "_", name or "").strip()
+	text = (name or "").translate(_FILENAME_CHAR_MAP)
+	text = re.sub(r"[\x00-\x1f]+", "", text)
+	text = re.sub(r"\s+", " ", text).strip()
+	text = text.rstrip(". ")
+	return text or "_"
 
 def _safe(name: str) -> str:
 	# Backward-compatible helper kept for internal use
@@ -330,7 +348,7 @@ def _extract_loudnorm_json(stderr: str) -> Dict | None:
 def _measure_static_normalize_gain(src: pathlib.Path, ffmpeg_bin: str, audio_processing: Dict | None) -> float:
 	pre_filters = _tone_filter_chain(audio_processing)
 	filter_parts = list(pre_filters)
-	filter_parts.append("loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json")
+	filter_parts.append(f"loudnorm=I={_TARGET_LOUDNESS_I}:TP={_TARGET_TRUE_PEAK_DB}:LRA=11:print_format=json")
 	proc = _run_capture([
 		ffmpeg_bin, "-hide_banner", "-i", str(src), "-vn", "-sn",
 		"-af", ",".join(filter_parts),
@@ -344,8 +362,8 @@ def _measure_static_normalize_gain(src: pathlib.Path, ffmpeg_bin: str, audio_pro
 		input_tp = float(stats.get("input_tp"))
 	except Exception:
 		return 0.0
-	target_i = -16.0
-	target_tp = -1.5
+	target_i = _TARGET_LOUDNESS_I
+	target_tp = _TARGET_TRUE_PEAK_DB
 	gain = target_i - input_i
 	peak_limited_gain = target_tp - input_tp
 	return min(gain, peak_limited_gain)
@@ -360,6 +378,8 @@ def _audio_filter_chain(audio_processing: Dict | None, src: pathlib.Path | None 
 		total_gain += _measure_static_normalize_gain(src, ffmpeg_bin, audio_processing)
 	if abs(total_gain) > 0.01:
 		filters.append(f"volume={total_gain:.2f}dB")
+	limit_linear = 10 ** (_TARGET_TRUE_PEAK_DB / 20.0)
+	filters.append(f"alimiter=limit={limit_linear:.3f}:attack=5:release=50:level=disabled:latency=1")
 	return ",".join(filters) if filters else None
 
 

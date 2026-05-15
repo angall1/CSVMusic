@@ -10,7 +10,7 @@ from ytmusicapi import YTMusic
 
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
 from csvmusic.core.log import log
-from csvmusic.core.ytmusic_match import find_best, more_candidates, RATE_LIMIT_S
+from csvmusic.core.ytmusic_match import find_best, more_candidates, RATE_LIMIT_S, CONFIDENCE_MIN
 from csvmusic.core.downloader import (
 	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name,
 	youtube_batch_mitigation, build_ytdlp_mitigation_args, detect_youtube_risk,
@@ -48,6 +48,7 @@ class PipelineWorker(QThread):
 	             cookies_file: str | None,
 	             audio_processing: Dict | None = None,
 	             mp3_quality: int = 0,
+	             force_download: bool = False,
 	             tracks_override: List[Dict] | None = None,
 	             row_indices: List[int] | None = None,
 	             parent: QObject | None = None):
@@ -65,6 +66,7 @@ class PipelineWorker(QThread):
 		self.cookies_file = cookies_file
 		self.audio_processing = audio_processing or {}
 		self.mp3_quality = max(0, min(10, int(mp3_quality)))
+		self.force_download = bool(force_download)
 		self.tracks_override = tracks_override
 		self.row_indices = row_indices or []
 		self._stop = False
@@ -154,8 +156,16 @@ class PipelineWorker(QThread):
 					"playlist_name": playlist_name,
 					"file_path": None,
 					"downloaded": False,
-					"cover_bytes": None
+					"cover_bytes": None,
+					"forced_match": False
 				}
+
+				if match is None and self.force_download and options:
+					match = options[0]
+					confidence = float(match.get("score", confidence or 0.0) or 0.0)
+					payload["match"] = match
+					payload["confidence"] = confidence
+					payload["forced_match"] = True
 
 				if match is None:
 					if search_error:
@@ -180,7 +190,11 @@ class PipelineWorker(QThread):
 				matched += 1
 				self.sig_match_stats.emit(matched, skipped_count)
 				vid = match["videoId"]
-				self.sig_row_status.emit(row_idx, f"Downloading ({self.fmt})…")
+				low_confidence = payload.get("forced_match") or confidence < CONFIDENCE_MIN
+				if low_confidence:
+					self.sig_row_status.emit(row_idx, f"Downloading low-confidence match ({self.fmt})…")
+				else:
+					self.sig_row_status.emit(row_idx, f"Downloading ({self.fmt})…")
 				error_msg = None
 
 				try:
@@ -192,7 +206,10 @@ class PipelineWorker(QThread):
 						tag_file(fp, t, cover)
 					else:
 						tag_file(fp, t, None)
-					self.sig_row_status.emit(row_idx, f"Done → {fp.name}")
+					if low_confidence:
+						self.sig_row_status.emit(row_idx, f"Low confidence → {fp.name}")
+					else:
+						self.sig_row_status.emit(row_idx, f"Done → {fp.name}")
 					done_tracks.append(t)
 				except Exception as e:
 					err = str(e)
@@ -209,7 +226,10 @@ class PipelineWorker(QThread):
 								tag_file(fp, t, cover)
 							else:
 								tag_file(fp, t, None)
-							self.sig_row_status.emit(row_idx, f"Done → {fp.name}")
+							if low_confidence:
+								self.sig_row_status.emit(row_idx, f"Low confidence → {fp.name}")
+							else:
+								self.sig_row_status.emit(row_idx, f"Done → {fp.name}")
 							done_tracks.append(t)
 							retried = True
 						except Exception as retry_exc:
@@ -261,6 +281,7 @@ class SingleDownloadWorker(QThread):
 	             cookies_file: str | None,
 	             audio_processing: Dict | None = None,
 	             mp3_quality: int = 0,
+	             force_download: bool = False,
 	             parent: QObject | None = None):
 		super().__init__(parent)
 		self.row_idx = row_idx
@@ -276,6 +297,7 @@ class SingleDownloadWorker(QThread):
 		self.cookies_file = cookies_file
 		self.audio_processing = audio_processing or {}
 		self.mp3_quality = max(0, min(10, int(mp3_quality)))
+		self.force_download = bool(force_download)
 
 	def run(self):
 		try:

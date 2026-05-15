@@ -1,6 +1,6 @@
 # tabs only
 from typing import Dict, List, Optional, Tuple, Set, Literal
-import re, time
+import re, time, unicodedata
 from ytmusicapi import YTMusic
 
 CONFIDENCE_MIN = 0.6
@@ -12,8 +12,13 @@ DURATION_TOLERANCE_RATIO = 0.10
 _PENALTY_TERMS = {"live","remix","cover","sped","slowed","nightcore","8d","reverb","extended","mashup","edit","karaoke","instrumental","demo","tribute","soundalike"}
 _CAST_PENALTY_TERMS = {"cast","original cast","tribute band","musical","orchestra"}
 
+def _norm_text(s: str) -> str:
+	text = unicodedata.normalize("NFKC", (s or "").casefold())
+	return re.sub(r"\s+", " ", text).strip()
+
 def _toks(s: str) -> set:
-	return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
+	text = _norm_text(s)
+	return {tok for tok in re.findall(r"\w+", text, flags=re.UNICODE) if any(ch.isalnum() for ch in tok)}
 
 def _candidate_artist_text(cand: Dict) -> str:
 	if cand.get("artists"):
@@ -88,11 +93,11 @@ def _score(track: Dict, cand: Dict) -> float:
 		d_score = 0.7  # neutral baseline when no duration available
 
 	# channel boost
-	channel = (cand.get("author") or "").lower()
+	channel = _norm_text(cand.get("author") or "")
 	ch_boost = 0.15 if ("topic" in channel or "official" in channel) else 0.0
 
 	# penalties
-	titleblob = (cand_title + " " + cand_art).lower()
+	titleblob = _norm_text(cand_title + " " + cand_art)
 	p_pen = 0.0
 	for t in _PENALTY_TERMS:
 		if t in titleblob:

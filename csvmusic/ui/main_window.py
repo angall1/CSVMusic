@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 	QRadioButton, QButtonGroup, QProgressBar, QToolButton, QSizePolicy, QFrame,
 	QComboBox, QSlider, QDialog
 )
-from PySide6.QtCore import Qt, QSignalBlocker, QUrl, Signal, QRect
+from PySide6.QtCore import Qt, QSignalBlocker, QUrl, Signal, QRect, QSize
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication, QDesktopServices, QPainter, QPen
 
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
@@ -152,6 +152,55 @@ class NotchedSlider(QWidget):
 		painter.drawLine(center_x - 1, handle.top() + 4, center_x - 1, handle.bottom() - 4)
 		painter.drawLine(center_x + 1, handle.top() + 4, center_x + 1, handle.bottom() - 4)
 
+class RetroRadioButton(QRadioButton):
+	def sizeHint(self) -> QSize:
+		fm = self.fontMetrics()
+		indicator = 18
+		gap = 10
+		height = max(24, indicator + 6, fm.height() + 8)
+		width = indicator + gap + fm.horizontalAdvance(self.text()) + 12
+		return QSize(width, height)
+
+	def paintEvent(self, _event) -> None:
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.Antialiasing, False)
+		panel = QColor("#d4d0c8")
+		light = QColor("#ffffff")
+		dark = QColor("#404040")
+		shadow = QColor("#808080")
+		text_color = QColor("#000000") if self.isEnabled() else QColor("#808080")
+		indicator = 18
+		left = 2
+		top = max(2, (self.height() - indicator) // 2)
+		rect = QRect(left, top, indicator, indicator)
+
+		painter.setPen(light)
+		painter.drawArc(rect, 45 * 16, 180 * 16)
+		painter.drawArc(rect, 135 * 16, 180 * 16)
+		inner = rect.adjusted(1, 1, -1, -1)
+		painter.setPen(dark)
+		painter.drawArc(inner, 225 * 16, 180 * 16)
+		painter.drawArc(inner, 315 * 16, 180 * 16)
+		fill = rect.adjusted(2, 2, -2, -2)
+		painter.fillRect(fill, panel)
+
+		if self.isChecked():
+			dot = rect.adjusted(4, 4, -4, -4)
+			painter.setPen(Qt.NoPen)
+			painter.setBrush(QColor("#101010"))
+			painter.drawEllipse(dot)
+
+		text_x = rect.right() + 11
+		text_rect = QRect(text_x, 0, max(1, self.width() - text_x), self.height())
+		painter.setPen(text_color)
+		painter.setFont(self.font())
+		painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, self.text())
+
+		if self.hasFocus():
+			painter.setPen(QPen(shadow, 1, Qt.DotLine))
+			painter.setBrush(Qt.NoBrush)
+			painter.drawRect(text_rect.adjusted(1, 3, -2, -4))
+
 class MainWindow(QMainWindow):
 	def __init__(self):
 		super().__init__()
@@ -283,6 +332,24 @@ class MainWindow(QMainWindow):
 			}}
 			QCheckBox, QRadioButton {{
 				color: {win_text};
+			}}
+			QRadioButton::indicator {{
+				width: {self._px(14)}px;
+				height: {self._px(14)}px;
+				border-top: {self._px(2)}px solid {win_light};
+				border-left: {self._px(2)}px solid {win_light};
+				border-right: {self._px(2)}px solid {win_dark};
+				border-bottom: {self._px(2)}px solid {win_dark};
+				background-color: {win_panel};
+				border-radius: {self._px(7)}px;
+			}}
+			QRadioButton::indicator:checked {{
+				background-color: {win_panel};
+				image: none;
+				border-top: {self._px(2)}px solid {win_dark};
+				border-left: {self._px(2)}px solid {win_dark};
+				border-right: {self._px(2)}px solid {win_light};
+				border-bottom: {self._px(2)}px solid {win_light};
 			}}
 			QProgressBar {{
 				background-color: {win_panel};
@@ -581,9 +648,8 @@ class MainWindow(QMainWindow):
 		self.advanced_panel = QFrame()
 		self.advanced_panel.setFrameShape(QFrame.StyledPanel)
 		adv_layout = QVBoxLayout(self.advanced_panel)
-		adv_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
-		adv_layout.setSpacing(self._px(10))
-		# Darker background for clarity
+		adv_layout.setContentsMargins(self._px(14), self._px(12), self._px(14), self._px(12))
+		adv_layout.setSpacing(self._px(12))
 		settings_heading = QLabel("Settings")
 		settings_heading.setFont(QFont(retro_font_family, default_pt + 4, QFont.Bold))
 		adv_layout.addWidget(settings_heading)
@@ -591,15 +657,43 @@ class MainWindow(QMainWindow):
 		note.setWordWrap(True)
 		note.setFont(QFont(retro_font_family, default_pt + 1))
 		adv_layout.addWidget(note)
+
+		display_section = QFrame()
+		display_section.setFrameShape(QFrame.StyledPanel)
+		display_layout = QVBoxLayout(display_section)
+		display_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		display_layout.setSpacing(self._px(8))
+		display_heading = QLabel("Display")
+		display_heading.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
+		display_layout.addWidget(display_heading)
+		self.cb_readability_mode = QCheckBox("Readable text")
+		self.cb_readability_mode.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_readability_mode.toggled.connect(self.on_toggle_readability_mode)
+		display_layout.addWidget(self.cb_readability_mode)
+		display_note = QLabel("Switches popup windows and the main app to a cleaner system font.")
+		display_note.setWordWrap(True)
+		display_note.setFont(QFont(retro_font_family, default_pt))
+		display_layout.addWidget(display_note)
+		adv_layout.addWidget(display_section)
+
+		paths_section = QFrame()
+		paths_section.setFrameShape(QFrame.StyledPanel)
+		paths_layout = QVBoxLayout(paths_section)
+		paths_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		paths_layout.setSpacing(self._px(8))
+		paths_heading = QLabel("Tool paths")
+		paths_heading.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
+		paths_layout.addWidget(paths_heading)
 		lbl_ytdlp = QLabel("yt-dlp path:")
 		lbl_ytdlp.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
-		adv_layout.addWidget(lbl_ytdlp)
+		paths_layout.addWidget(lbl_ytdlp)
 		self.ed_ytdlp = QLineEdit()
 		self.ed_ytdlp.setPlaceholderText("Auto-detect from PATH")
 		self.ed_ytdlp.setFont(QFont(retro_font_family, default_pt + 1))
 		self.ed_ytdlp.textChanged.connect(lambda _=None: self._persist_settings())
-		adv_layout.addWidget(self.ed_ytdlp)
+		paths_layout.addWidget(self.ed_ytdlp)
 		row_ytdlp = QHBoxLayout()
+		row_ytdlp.setSpacing(self._px(6))
 		btn_ytdlp = QPushButton("Browse…")
 		btn_ytdlp.setFont(btn_font)
 		btn_ytdlp.clicked.connect(self.on_browse_ytdlp)
@@ -609,16 +703,18 @@ class MainWindow(QMainWindow):
 		row_ytdlp.addWidget(btn_ytdlp)
 		row_ytdlp.addWidget(btn_ytdlp_clear)
 		row_ytdlp.addStretch(1)
-		adv_layout.addLayout(row_ytdlp)
+		paths_layout.addLayout(row_ytdlp)
+		paths_layout.addSpacing(self._px(4))
 		lbl_ffmpeg = QLabel("FFmpeg path:")
 		lbl_ffmpeg.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
-		adv_layout.addWidget(lbl_ffmpeg)
+		paths_layout.addWidget(lbl_ffmpeg)
 		self.ed_ffmpeg = QLineEdit()
 		self.ed_ffmpeg.setPlaceholderText("Uses bundled binary by default")
 		self.ed_ffmpeg.setFont(QFont(retro_font_family, default_pt + 1))
 		self.ed_ffmpeg.textChanged.connect(lambda _=None: self._persist_settings())
-		adv_layout.addWidget(self.ed_ffmpeg)
+		paths_layout.addWidget(self.ed_ffmpeg)
 		row_ffmpeg = QHBoxLayout()
+		row_ffmpeg.setSpacing(self._px(6))
 		btn_ffmpeg = QPushButton("Browse…")
 		btn_ffmpeg.setFont(btn_font)
 		btn_ffmpeg.clicked.connect(self.on_browse_ffmpeg)
@@ -628,14 +724,22 @@ class MainWindow(QMainWindow):
 		row_ffmpeg.addWidget(btn_ffmpeg)
 		row_ffmpeg.addWidget(btn_ffmpeg_clear)
 		row_ffmpeg.addStretch(1)
-		adv_layout.addLayout(row_ffmpeg)
+		paths_layout.addLayout(row_ffmpeg)
+		adv_layout.addWidget(paths_section)
+
+		audio_section = QFrame()
+		audio_section.setFrameShape(QFrame.StyledPanel)
+		audio_layout = QVBoxLayout(audio_section)
+		audio_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		audio_layout.setSpacing(self._px(8))
 		audio_heading = QLabel("Audio defaults")
 		audio_heading.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
-		adv_layout.addWidget(audio_heading)
+		audio_layout.addWidget(audio_heading)
 		lbl_mp3_quality = QLabel("MP3 quality")
 		lbl_mp3_quality.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
-		adv_layout.addWidget(lbl_mp3_quality)
+		audio_layout.addWidget(lbl_mp3_quality)
 		row_mp3_quality = QHBoxLayout()
+		row_mp3_quality.setSpacing(self._px(10))
 		self.slider_mp3_quality = NotchedSlider(Qt.Horizontal)
 		self.slider_mp3_quality.setRange(0, 10)
 		self.slider_mp3_quality.setValue(0)
@@ -649,24 +753,36 @@ class MainWindow(QMainWindow):
 		row_mp3_quality.addWidget(self.slider_mp3_quality, 1)
 		row_mp3_quality.addWidget(self.lbl_mp3_quality_value)
 		row_mp3_quality.addStretch(1)
-		adv_layout.addLayout(row_mp3_quality)
+		audio_layout.addLayout(row_mp3_quality)
 		lbl_mp3_quality_note = QLabel(
 			"Only applies to MP3 output. 0 = best quality / largest files. 10 = worst quality / smallest files."
 		)
 		lbl_mp3_quality_note.setWordWrap(True)
 		lbl_mp3_quality_note.setFont(QFont(retro_font_family, default_pt))
-		adv_layout.addWidget(lbl_mp3_quality_note)
-		self.cb_readability_mode = QCheckBox("Readable text")
-		self.cb_readability_mode.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
-		self.cb_readability_mode.toggled.connect(self.on_toggle_readability_mode)
-		adv_layout.addWidget(self.cb_readability_mode)
+		audio_layout.addWidget(lbl_mp3_quality_note)
+		audio_layout.addSpacing(self._px(4))
+		self.cb_force_download = QCheckBox("Force download low-confidence matches")
+		self.cb_force_download.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_force_download.toggled.connect(lambda _=None: self._persist_settings())
+		audio_layout.addWidget(self.cb_force_download)
+		force_note = QLabel("If no confident match is found, CSVMusic will still download the best result from YouTube / YouTube Music and mark that row in yellow.")
+		force_note.setWordWrap(True)
+		force_note.setFont(QFont(retro_font_family, default_pt))
+		audio_layout.addWidget(force_note)
+		adv_layout.addWidget(audio_section)
 		# Firefox is the only browser-cookie path reliable enough to expose directly.
 		self._detected_firefox_profile: str | None = None
 		self._cookies_test_ok = False
+		cookies_section = QFrame()
+		cookies_section.setFrameShape(QFrame.StyledPanel)
+		cookies_layout = QVBoxLayout(cookies_section)
+		cookies_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		cookies_layout.setSpacing(self._px(8))
 		cookies_heading = QLabel("YouTube cookies")
 		cookies_heading.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
-		adv_layout.addWidget(cookies_heading)
+		cookies_layout.addWidget(cookies_heading)
 		row_firefox = QHBoxLayout()
+		row_firefox.setSpacing(self._px(8))
 		lbl_firefox = QLabel("YouTube login:")
 		lbl_firefox.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		self.cb_use_cookies = QCheckBox("Use Cookies")
@@ -676,8 +792,9 @@ class MainWindow(QMainWindow):
 		row_firefox.addWidget(lbl_firefox)
 		row_firefox.addWidget(self.cb_use_cookies)
 		row_firefox.addStretch(1)
-		adv_layout.addLayout(row_firefox)
+		cookies_layout.addLayout(row_firefox)
 		row_firefox_buttons = QHBoxLayout()
+		row_firefox_buttons.setSpacing(self._px(6))
 		self.btn_detect_firefox_cookies = QPushButton("Detect Cookies from Firefox")
 		self.btn_detect_firefox_cookies.setFont(btn_font)
 		self.btn_detect_firefox_cookies.clicked.connect(self.on_detect_firefox_cookies)
@@ -687,23 +804,26 @@ class MainWindow(QMainWindow):
 		row_firefox_buttons.addWidget(self.btn_detect_firefox_cookies)
 		row_firefox_buttons.addWidget(self.btn_test_cookies)
 		row_firefox_buttons.addStretch(1)
-		adv_layout.addLayout(row_firefox_buttons)
+		cookies_layout.addLayout(row_firefox_buttons)
 		lbl_ff_tip = QLabel("Cookies help with age-restricted or sign-in-only YouTube results. Sign into YouTube in Firefox, click Detect, then Test. The Use Cookies checkbox unlocks only after the test passes. <a href=\"https://www.mozilla.org/firefox/download/\">Get Firefox</a>")
 		lbl_ff_tip.setOpenExternalLinks(False)
 		lbl_ff_tip.setTextInteractionFlags(Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
 		lbl_ff_tip.linkActivated.connect(self.on_open_external_link)
+		lbl_ff_tip.setWordWrap(True)
 		lbl_ff_tip.setFont(QFont(retro_font_family, default_pt))
-		adv_layout.addWidget(lbl_ff_tip)
+		cookies_layout.addWidget(lbl_ff_tip)
+		cookies_layout.addSpacing(self._px(4))
 		# Cookies file alternative
 		lbl_cookie_file = QLabel("Cookies file (.txt):")
 		lbl_cookie_file.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
-		adv_layout.addWidget(lbl_cookie_file)
+		cookies_layout.addWidget(lbl_cookie_file)
 		self.ed_cookies_file = QLineEdit()
 		self.ed_cookies_file.setPlaceholderText("Optional: Netscape cookies.txt (YouTube domain)")
 		self.ed_cookies_file.setFont(QFont(retro_font_family, default_pt + 1))
 		self.ed_cookies_file.textChanged.connect(self.on_cookies_file_changed)
-		adv_layout.addWidget(self.ed_cookies_file)
+		cookies_layout.addWidget(self.ed_cookies_file)
 		row_cookie_file = QHBoxLayout()
+		row_cookie_file.setSpacing(self._px(6))
 		btn_cookie_file = QPushButton("Browse...")
 		btn_cookie_file.setFont(btn_font)
 		btn_cookie_file.clicked.connect(self.on_browse_cookies_file)
@@ -713,12 +833,14 @@ class MainWindow(QMainWindow):
 		row_cookie_file.addWidget(btn_cookie_file)
 		row_cookie_file.addWidget(btn_cookie_file_clear)
 		row_cookie_file.addStretch(1)
-		adv_layout.addLayout(row_cookie_file)
+		cookies_layout.addLayout(row_cookie_file)
 		# Cookie check status label
 		self.lbl_cookie_status = QLabel("")
 		self.lbl_cookie_status.setVisible(False)
 		self.lbl_cookie_status.setFont(QFont(retro_font_family, max(default_pt - 1, 8)))
-		adv_layout.addWidget(self.lbl_cookie_status)
+		cookies_layout.addWidget(self.lbl_cookie_status)
+		adv_layout.addWidget(cookies_section)
+		adv_layout.addStretch(1)
 		self.advanced_panel.setVisible(False)
 		vl.addWidget(self.advanced_panel)
 
@@ -770,8 +892,8 @@ class MainWindow(QMainWindow):
 		# ── Format + options + actions ────────────────────────────────────────────
 		row3 = QHBoxLayout()
 		row3.setSpacing(self._px(10))
-		self.rb_m4a = QRadioButton("m4a (AAC, preferred)"); self.rb_m4a.setChecked(True)
-		self.rb_mp3 = QRadioButton("mp3")
+		self.rb_m4a = RetroRadioButton("m4a (AAC, preferred)"); self.rb_m4a.setChecked(True)
+		self.rb_mp3 = RetroRadioButton("mp3")
 		self.grp_fmt = QButtonGroup(self); self.grp_fmt.addButton(self.rb_m4a); self.grp_fmt.addButton(self.rb_mp3)
 		self.grp_fmt.buttonToggled.connect(lambda _button, checked: self._persist_settings() if checked else None)
 		self.cb_m3u8 = QCheckBox("Write .m3u8")
@@ -780,6 +902,8 @@ class MainWindow(QMainWindow):
 		controls_font = QFont(retro_font_family, default_pt + 2)
 		for w in (self.rb_m4a, self.rb_mp3, self.cb_m3u8, self.cb_m3u_plain, self.cb_album_art):
 			w.setFont(controls_font)
+		for w in (self.rb_m4a, self.rb_mp3):
+			w.setMinimumHeight(self._px(24))
 		lbl_fmt = QLabel("Format:")
 		lbl_fmt.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		lbl_fmt.setFixedWidth(self._px(78))
@@ -1378,6 +1502,7 @@ class MainWindow(QMainWindow):
 			"eq_bass_gain": self.slider_bass.value(),
 			"eq_treble_gain": self.slider_treble.value(),
 			"mp3_quality": self._mp3_quality_value(),
+			"force_download_mode": self.cb_force_download.isChecked(),
 			"format": "m4a" if self.rb_m4a.isChecked() else "mp3",
 		}
 		if include_paths:
@@ -1426,6 +1551,9 @@ class MainWindow(QMainWindow):
 		block_readability = QSignalBlocker(self.cb_readability_mode)
 		self.cb_readability_mode.setChecked(bool(cfg.get("readability_mode", False)))
 		del block_readability
+		block_force = QSignalBlocker(self.cb_force_download)
+		self.cb_force_download.setChecked(bool(cfg.get("force_download_mode", False)))
+		del block_force
 		self._readability_mode = bool(cfg.get("readability_mode", False))
 		self._apply_font_family(self._readable_font_family if self._readability_mode else self._retro_font_family)
 		ff_path = cfg.get("ffmpeg_path") or ""
@@ -1588,6 +1716,7 @@ class MainWindow(QMainWindow):
 			self._cookies_file(),
 			self._audio_processing_options(),
 			mp3_quality=self._mp3_quality_value(),
+			force_download=bool(self.cb_force_download.isChecked()),
 			tracks_override=active_tracks,
 			row_indices=queued_rows,
 			parent=self,
@@ -1732,6 +1861,8 @@ class MainWindow(QMainWindow):
 			if status.startswith("Fail"):
 				self._set_row_highlight(row_idx, RED)
 			elif status.startswith("Skipped"):
+				self._set_row_highlight(row_idx, YELLOW)
+			elif status.startswith("Low confidence"):
 				self._set_row_highlight(row_idx, YELLOW)
 			elif status.startswith("Done") or status.startswith("Already downloaded"):
 				self._set_row_highlight(row_idx, GREEN)
