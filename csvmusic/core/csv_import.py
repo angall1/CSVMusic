@@ -94,13 +94,6 @@ def load_csv(path: Union[str, pathlib.Path]) -> pd.DataFrame:
 		# Best-effort numeric
 		df["Duration (ms)"] = pd.to_numeric(df["Duration (ms)"], errors="coerce").fillna(0).astype(int)
 
-	playlists = list_playlists(df)
-	if len(playlists) > 1:
-		raise ValueError(
-			f"CSV contains multiple playlists ({len(playlists)} found). "
-			"Export one playlist at a time from TuneMyMusic and try again."
-		)
-
 	return df
 
 def list_playlists(df: pd.DataFrame) -> List[str]:
@@ -160,5 +153,35 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 			"cover_url": None,     # CSV doesn't include cover
 			"track_no": 0,
 			"disc_no": 1,
+			"playlists": [str(r.get("Playlist name", "")).strip()],  # list for multi-playlist support
 		})
+	return out
+
+
+def deduplicate_tracks(tracks: List[Dict]) -> List[Dict]:
+	"""
+	Deduplicate tracks by (title, artists). When the same song appears in
+	multiple playlists, the returned entry carries a merged 'playlists' list
+	containing every playlist the song belongs to. The 'playlist' field (single
+	string) is set to the first playlist seen, for backward compatibility.
+	"""
+	seen: dict = {}  # key -> index in out
+	out: List[Dict] = []
+	for t in tracks:
+		key = (t.get("title", "").lower().strip(), t.get("artists", "").lower().strip())
+		if key in seen:
+			# merge playlists into existing entry
+			existing = out[seen[key]]
+			for pl in t.get("playlists", [t.get("playlist", "")]):
+				if pl and pl not in existing["playlists"]:
+					existing["playlists"].append(pl)
+		else:
+			entry = dict(t)
+			# ensure playlists is always a list
+			if "playlists" not in entry or not isinstance(entry["playlists"], list):
+				entry["playlists"] = [entry.get("playlist", "")]
+			else:
+				entry["playlists"] = list(entry["playlists"])
+			seen[key] = len(out)
+			out.append(entry)
 	return out
