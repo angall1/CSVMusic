@@ -1,10 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
+import sys
 from PyInstaller.utils.hooks import collect_all
 
 ROOT = Path.cwd()
 WINDOWS_FFMPEG = ROOT / 'resources' / 'ffmpeg' / 'windows' / 'ffmpeg.exe'
 APP_ICON = ROOT / 'resources' / 'app.ico'
+MAC_ICON = ROOT / 'resources' / 'app.icns'
 
 datas = [('resources', 'resources'), ('licenses', 'licenses')]
 binaries = []
@@ -59,3 +61,11 @@ exe = EXE(
     entitlements_file=None,
     icon=[str(APP_ICON)] if APP_ICON.exists() else None,
 )
+
+if sys.platform.startswith('darwin'):
+    app = BUNDLE(
+        exe,
+        name='CSVMusic.app',
+        icon=str(MAC_ICON) if MAC_ICON.exists() else None,
+        bundle_identifier='com.angall1.csvmusic',
+    )
