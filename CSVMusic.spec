@@ -1,8 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
+ROOT = Path.cwd()
+WINDOWS_FFMPEG = ROOT / 'resources' / 'ffmpeg' / 'windows' / 'ffmpeg.exe'
+APP_ICON = ROOT / 'resources' / 'app.ico'
+
 datas = [('resources', 'resources'), ('licenses', 'licenses')]
-binaries = [('resources\\ffmpeg\\windows\\ffmpeg.exe', 'ffmpeg\\windows')]
+binaries = []
+if WINDOWS_FFMPEG.exists():
+    binaries.append((str(WINDOWS_FFMPEG), 'ffmpeg/windows'))
 hiddenimports = []
 tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -17,8 +24,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['csvmusic\\app.py'],
-    pathex=['C:\\users\\austin\\desktop\\csvmusic'],
+    [str(ROOT / 'csvmusic' / 'app.py')],
+    pathex=[str(ROOT)],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -50,5 +57,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['resources\\app.ico'],
+    icon=[str(APP_ICON)] if APP_ICON.exists() else None,
 )
