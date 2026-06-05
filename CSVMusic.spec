@@ -1,18 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-from pathlib import Path
-import sys
-
 from PyInstaller.utils.hooks import collect_all
 
-project_root = Path.cwd()
-app_entry = str(Path("csvmusic") / "app.py")
 datas = [('resources', 'resources'), ('licenses', 'licenses')]
-binaries = []
-if sys.platform.startswith("win"):
-    binaries.append(
-        (str(Path("resources") / "ffmpeg" / "windows" / "ffmpeg.exe"), str(Path("ffmpeg") / "windows"))
-    )
-app_icon = None if sys.platform.startswith("darwin") else [str(Path("resources") / "app.ico")]
+binaries = [('resources\\ffmpeg\\windows\\ffmpeg.exe', 'ffmpeg\\windows')]
 hiddenimports = []
 tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -27,8 +17,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    [app_entry],
-    pathex=[str(project_root)],
+    ['csvmusic\\app.py'],
+    pathex=['C:\\users\\austin\\desktop\\csvmusic'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -60,12 +50,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=app_icon,
+    icon=['resources\\app.ico'],
 )
-
-if sys.platform.startswith("darwin"):
-    app = BUNDLE(
-        exe,
-        name='CSVMusic.app',
-        bundle_identifier='com.angall1.csvmusic',
-    )

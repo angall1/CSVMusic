@@ -1,9 +1,10 @@
 # tabs only
 from PySide6.QtCore import QObject, Signal, QThread
-import pathlib, traceback, time
+import pathlib, traceback, time, random
 import subprocess
 import sys, json
 import sqlite3
+import re, unicodedata
 from typing import List, Dict
 
 from ytmusicapi import YTMusic
@@ -16,9 +17,40 @@ from csvmusic.core.downloader import (
 	youtube_batch_mitigation, build_ytdlp_mitigation_args, detect_youtube_risk,
 	YOUTUBE_MITIGATION_NONE, YOUTUBE_MITIGATION_AGGRESSIVE, YouTubeMitigationProfile
 )
-from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp
+from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp, INTERNAL_YTDLP
 
 _WINDOWS = sys.platform.startswith("win")
+_FORCE_FALLBACK_MIN_SCORE = 0.45
+
+def _legacy_cover_size(legacy_options: Dict | None, *, embed_art: bool) -> int:
+	if not embed_art:
+		return 0
+	mode = str((legacy_options or {}).get("cover_art_mode") or "standard").lower()
+	if mode == "off":
+		return 0
+	if mode == "small":
+		return 300
+	if mode == "medium":
+		return 450
+	return 600
+
+def _legacy_cbr_bitrate(legacy_options: Dict | None) -> int | None:
+	if not legacy_options or not legacy_options.get("enabled"):
+		return None
+	mode = str(legacy_options.get("mp3_mode") or "").lower()
+	if mode == "cbr_192":
+		return 192
+	if mode == "cbr_256":
+		return 256
+	if mode == "cbr_320":
+		return 320
+	return None
+
+def _norm_text(text: str) -> str:
+	return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", (text or "").casefold())).strip()
+
+def _tokens(text: str) -> set[str]:
+	return {tok for tok in re.findall(r"\w+", _norm_text(text), flags=re.UNICODE) if any(ch.isalnum() for ch in tok)}
 
 def _hidden_subprocess_kwargs() -> dict:
 	if not _WINDOWS:
@@ -27,6 +59,42 @@ def _hidden_subprocess_kwargs() -> dict:
 	startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 	flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 	return {"startupinfo": startupinfo, "creationflags": flags}
+
+def _run_yt_dlp_command(cmd: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+	if cmd and cmd[0] == INTERNAL_YTDLP:
+		stdout_buf: list[str] = []
+		stderr_buf: list[str] = []
+		try:
+			from yt_dlp import main as yt_dlp_main
+		except Exception as exc:
+			return subprocess.CompletedProcess(cmd, 1, "", f"failed to import yt_dlp module: {exc}")
+		import io
+		import contextlib
+		out = io.StringIO()
+		err = io.StringIO()
+		with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+			try:
+				rc = yt_dlp_main(cmd[1:])
+			except SystemExit as exc:
+				code = exc.code
+				if isinstance(code, int):
+					rc = code
+				elif code is None:
+					rc = 0
+				else:
+					rc = 1
+			except Exception as exc:
+				rc = 1
+				err.write(str(exc))
+		return subprocess.CompletedProcess(cmd, rc, out.getvalue(), err.getvalue())
+	return subprocess.run(
+		cmd,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		text=True,
+		timeout=timeout,
+		**_hidden_subprocess_kwargs()
+	)
 
 class PipelineWorker(QThread):
 	sig_log = Signal(str)                       # log strings
@@ -48,6 +116,7 @@ class PipelineWorker(QThread):
 	             cookies_file: str | None,
 	             audio_processing: Dict | None = None,
 	             mp3_quality: int = 0,
+	             legacy_options: Dict | None = None,
 	             force_download: bool = False,
 	             tracks_override: List[Dict] | None = None,
 	             row_indices: List[int] | None = None,
@@ -66,6 +135,7 @@ class PipelineWorker(QThread):
 		self.cookies_file = cookies_file
 		self.audio_processing = audio_processing or {}
 		self.mp3_quality = max(0, min(10, int(mp3_quality)))
+		self.legacy_options = legacy_options or {}
 		self.force_download = bool(force_download)
 		self.tracks_override = tracks_override
 		self.row_indices = row_indices or []
@@ -84,7 +154,7 @@ class PipelineWorker(QThread):
 		extra_args += build_ytdlp_mitigation_args(profile)
 		if self.fmt == "m4a":
 			return download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing)
-		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality)
+		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options))
 
 	def _apply_mitigation(self, profile: YouTubeMitigationProfile, reason: str | None = None) -> None:
 		if profile.label == self._mitigation.label:
@@ -96,6 +166,83 @@ class PipelineWorker(QThread):
 				msg = f"{msg}\n\nDetected: {reason}"
 			self.sig_log.emit(f"[warn] {msg}")
 			self.sig_warning.emit(msg)
+
+	def _track_pause_s(self) -> float:
+		if self._mitigation.track_sleep_s <= 0:
+			return RATE_LIMIT_S
+		jitter = min(1.0, self._mitigation.track_sleep_s * 0.2)
+		return max(RATE_LIMIT_S, random.uniform(self._mitigation.track_sleep_s - jitter, self._mitigation.track_sleep_s + jitter))
+
+	def _is_official_candidate(self, cand: Dict) -> bool:
+		source = str(cand.get("source") or "").lower()
+		author = str(cand.get("author") or "").lower()
+		title = str(cand.get("title") or "").lower()
+		if source == "music":
+			return True
+		return any(term in author for term in ("topic", "official", "vevo")) or "official" in title
+
+	def _candidate_relevant_to_track(self, track: Dict, cand: Dict) -> bool:
+		track_artist_tokens = _tokens(track.get("artists", ""))
+		track_title_tokens = _tokens(track.get("title", ""))
+		cand_author_tokens = _tokens(cand.get("author", ""))
+		cand_title_tokens = _tokens(cand.get("title", ""))
+		artist_ok = bool(track_artist_tokens & (cand_author_tokens | cand_title_tokens))
+		title_overlap = len(track_title_tokens & cand_title_tokens)
+		return artist_ok and title_overlap >= max(1, min(2, len(track_title_tokens)))
+
+	def _force_download_candidates(self, track: Dict, options: List[Dict]) -> List[Dict]:
+		if not options:
+			return []
+		relevant = [opt for opt in options if self._candidate_relevant_to_track(track, opt)]
+		pool = relevant or options
+		official = [opt for opt in pool if self._is_official_candidate(opt)]
+		standard = [opt for opt in pool if opt not in official]
+
+		sequence: list[Dict] = []
+
+		def _append_group(group: list[Dict]) -> None:
+			if not group:
+				return
+			sequence.append(group[0])
+			if len(group) > 1 and float(group[1].get("score", 0.0) or 0.0) >= _FORCE_FALLBACK_MIN_SCORE:
+				sequence.append(group[1])
+
+		_append_group(official)
+		_append_group(standard)
+
+		seen: set[str] = set()
+		unique: list[Dict] = []
+		for opt in sequence:
+			vid = opt.get("videoId")
+			if not vid or vid in seen:
+				continue
+			seen.add(vid)
+			unique.append(opt)
+		return unique
+
+	def _ordered_force_candidates(self, track: Dict, match: Dict | None, options: List[Dict]) -> List[Dict]:
+		if not self.force_download:
+			return [match] if match else []
+		ordered = self._force_download_candidates(track, options)
+		if match and match.get("videoId"):
+			match_vid = match.get("videoId")
+			if not ordered:
+				return [match]
+			if ordered[0].get("videoId") != match_vid:
+				ordered = [match] + [opt for opt in ordered if opt.get("videoId") != match_vid]
+		return ordered or ([match] if match else [])
+
+	def _attempt_status_text(self, candidate: Dict, attempt_idx: int, total_attempts: int, *, safe_mode: bool = False) -> str:
+		source_label = "official result" if self._is_official_candidate(candidate) else "YouTube result"
+		if total_attempts <= 1:
+			base = f"Trying {source_label} ({self.fmt})…"
+		elif attempt_idx == 1:
+			base = f"Trying {source_label} 1/{total_attempts} ({self.fmt})…"
+		else:
+			base = f"Trying fallback {source_label} {attempt_idx}/{total_attempts} ({self.fmt})…"
+		if safe_mode:
+			return f"Safe mode: {base[0].lower()}{base[1:]}"
+		return base
 
 	def run(self):
 		try:
@@ -161,7 +308,8 @@ class PipelineWorker(QThread):
 				}
 
 				if match is None and self.force_download and options:
-					match = options[0]
+					forced_candidates = self._force_download_candidates(t, options)
+					match = forced_candidates[0] if forced_candidates else options[0]
 					confidence = float(match.get("score", confidence or 0.0) or 0.0)
 					payload["match"] = match
 					payload["confidence"] = confidence
@@ -183,7 +331,7 @@ class PipelineWorker(QThread):
 					skipped_count += 1
 					self.sig_match_stats.emit(matched, skipped_count)
 					if not self._stop and idx < total - 1:
-						time.sleep(RATE_LIMIT_S)
+						time.sleep(self._track_pause_s())
 					continue
 
 				payload["match"] = match
@@ -196,16 +344,32 @@ class PipelineWorker(QThread):
 				else:
 					self.sig_row_status.emit(row_idx, f"Downloading ({self.fmt})…")
 				error_msg = None
+				candidate_sequence = self._ordered_force_candidates(t, match, options)
+				fallback_attempts_enabled = self.force_download and len(candidate_sequence) > 1
 
 				try:
 					base = f"{artists} - {title}"
-					fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
-					self.sig_row_status.emit(row_idx, "Tagging…")
-					cover = yt_thumbnail_bytes(vid)
-					if self.embed_art:
-						tag_file(fp, t, cover)
-					else:
-						tag_file(fp, t, None)
+					last_err = None
+					fp = None
+					cover = None
+					for attempt_idx, candidate in enumerate(candidate_sequence, start=1):
+						vid = candidate["videoId"]
+						if fallback_attempts_enabled:
+							self.sig_row_status.emit(
+								row_idx,
+								self._attempt_status_text(candidate, attempt_idx, len(candidate_sequence))
+							)
+						try:
+							fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
+							self.sig_row_status.emit(row_idx, "Tagging…")
+							cover = yt_thumbnail_bytes(vid)
+							tag_file(fp, t, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
+							payload["match"] = candidate
+							break
+						except Exception as candidate_exc:
+							last_err = str(candidate_exc)
+					if fp is None:
+						raise RuntimeError(last_err or "Download failed.")
 					if low_confidence:
 						self.sig_row_status.emit(row_idx, f"Low confidence → {fp.name}")
 					else:
@@ -219,13 +383,27 @@ class PipelineWorker(QThread):
 						self._apply_mitigation(YOUTUBE_MITIGATION_AGGRESSIVE, risk_reason)
 						try:
 							self.sig_row_status.emit(row_idx, "Retrying with YouTube safe mode…")
-							fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
-							self.sig_row_status.emit(row_idx, "Tagging…")
-							cover = yt_thumbnail_bytes(vid)
-							if self.embed_art:
-								tag_file(fp, t, cover)
-							else:
-								tag_file(fp, t, None)
+							last_retry_err = None
+							fp = None
+							cover = None
+							for attempt_idx, candidate in enumerate(candidate_sequence, start=1):
+								vid = candidate["videoId"]
+								if fallback_attempts_enabled:
+									self.sig_row_status.emit(
+										row_idx,
+										self._attempt_status_text(candidate, attempt_idx, len(candidate_sequence), safe_mode=True)
+									)
+								try:
+									fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
+									self.sig_row_status.emit(row_idx, "Tagging…")
+									cover = yt_thumbnail_bytes(vid)
+									tag_file(fp, t, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
+									payload["match"] = candidate
+									break
+								except Exception as retry_candidate_exc:
+									last_retry_err = str(retry_candidate_exc)
+							if fp is None:
+								raise RuntimeError(last_retry_err or "Download failed.")
 							if low_confidence:
 								self.sig_row_status.emit(row_idx, f"Low confidence → {fp.name}")
 							else:
@@ -250,7 +428,7 @@ class PipelineWorker(QThread):
 					payload["cover_bytes"] = cover
 				self.sig_track_result.emit(row_idx, payload)
 				if not self._stop and idx < total - 1:
-					time.sleep(max(RATE_LIMIT_S, self._mitigation.track_sleep_s))
+					time.sleep(self._track_pause_s())
 				time.sleep(0.02)
 			if done_tracks:
 				ext = "m4a" if self.fmt == "m4a" else "mp3"
@@ -281,6 +459,7 @@ class SingleDownloadWorker(QThread):
 	             cookies_file: str | None,
 	             audio_processing: Dict | None = None,
 	             mp3_quality: int = 0,
+	             legacy_options: Dict | None = None,
 	             force_download: bool = False,
 	             parent: QObject | None = None):
 		super().__init__(parent)
@@ -297,6 +476,7 @@ class SingleDownloadWorker(QThread):
 		self.cookies_file = cookies_file
 		self.audio_processing = audio_processing or {}
 		self.mp3_quality = max(0, min(10, int(mp3_quality)))
+		self.legacy_options = legacy_options or {}
 		self.force_download = bool(force_download)
 
 	def run(self):
@@ -317,13 +497,10 @@ class SingleDownloadWorker(QThread):
 			if self.fmt == "m4a":
 				fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing)
 			else:
-				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality)
+				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options))
 			self.sig_status.emit(self.row_idx, "Tagging…")
 			cover = yt_thumbnail_bytes(vid)
-			if self.embed_art:
-				tag_file(fp, self.track, cover)
-			else:
-				tag_file(fp, self.track, None)
+			tag_file(fp, self.track, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
 			self.sig_status.emit(self.row_idx, f"Done → {fp.name}")
 			payload = {
 				"track": self.track,
@@ -411,14 +588,7 @@ class CookiesCheckWorker(QThread):
 				cmd += ["--cookies-from-browser", self.cookies_browser]
 			# Use YouTube homepage extraction to trigger cookie loading without requiring media formats.
 			cmd += ["--skip-download", "--flat-playlist", "--playlist-items", "0", "https://www.youtube.com/"]
-			proc = subprocess.run(
-				cmd,
-				stdout=subprocess.PIPE,
-				stderr=subprocess.PIPE,
-				text=True,
-				timeout=12,
-				**_hidden_subprocess_kwargs()
-			)
+			proc = _run_yt_dlp_command(cmd, timeout=12)
 			if proc.returncode == 0:
 				# Even on success, detect cookie DB issues from logs
 				stderr = (proc.stderr or ""); stdout = (proc.stdout or "")
@@ -449,7 +619,7 @@ class CookiesCheckWorker(QThread):
 						pass
 					# Try to extract account hint via yt-dlp JSON of feed/you
 					probe = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/feed/you"]
-					proc_acc = subprocess.run(probe, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12, **_hidden_subprocess_kwargs())
+					proc_acc = _run_yt_dlp_command(probe, timeout=12)
 					if proc_acc.returncode == 0 and proc_acc.stdout:
 						try:
 							obj = json.loads(proc_acc.stdout)
@@ -462,14 +632,7 @@ class CookiesCheckWorker(QThread):
 					if not account_hint:
 						try:
 							probe2 = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/"]
-							proc_home = subprocess.run(
-								probe2,
-								stdout=subprocess.PIPE,
-								stderr=subprocess.PIPE,
-								text=True,
-								timeout=12,
-								**_hidden_subprocess_kwargs(),
-							)
+							proc_home = _run_yt_dlp_command(probe2, timeout=12)
 							if proc_home.returncode == 0 and proc_home.stdout:
 								try:
 									obj2 = json.loads(proc_home.stdout)

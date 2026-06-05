@@ -8,6 +8,8 @@ SEARCH_LIMIT = 12
 ALT_SEARCH_LIMIT = 24
 RATE_LIMIT_S = 0.35
 DURATION_TOLERANCE_RATIO = 0.10
+SEARCH_RETRY_COUNT = 2
+SEARCH_RETRY_SLEEP_S = 0.9
 
 _PENALTY_TERMS = {"live","remix","cover","sped","slowed","nightcore","8d","reverb","extended","mashup","edit","karaoke","instrumental","demo","tribute","soundalike"}
 _CAST_PENALTY_TERMS = {"cast","original cast","tribute band","musical","orchestra"}
@@ -233,6 +235,20 @@ def _rank_candidates(yt: YTMusic, track: Dict, limit: int = SEARCH_LIMIT, source
 
 def find_best(yt: YTMusic, track: Dict) -> Tuple[Optional[Dict], float, List[Dict]]:
 	options = _rank_candidates(yt, track)
+	if not options:
+		last_exc: Exception | None = None
+		for _ in range(SEARCH_RETRY_COUNT):
+			time.sleep(SEARCH_RETRY_SLEEP_S)
+			try:
+				fresh = YTMusic()
+				options = _rank_candidates(fresh, track)
+			except Exception as exc:
+				last_exc = exc
+				continue
+			if options:
+				break
+		if not options and last_exc is not None:
+			raise last_exc
 	if not options:
 		return None, 0.0, []
 	best = options[0]

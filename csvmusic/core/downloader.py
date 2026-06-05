@@ -53,12 +53,12 @@ class YouTubeMitigationProfile:
 YOUTUBE_MITIGATION_NONE = YouTubeMitigationProfile(label="normal")
 YOUTUBE_MITIGATION_LARGE_BATCH = YouTubeMitigationProfile(
 	label="large-batch",
-	track_sleep_s=2.0,
+	track_sleep_s=5.0,
 	request_sleep_s=0.75,
 	sleep_interval_s=5.0,
 	max_sleep_interval_s=10.0,
 	limit_rate="1.5M",
-	warning="Large YouTube batch detected. Downloads will be paced to reduce rate-limit risk.",
+	warning="Large YouTube batch detected. Downloads will be paced with randomized waits to reduce rate-limit risk.",
 	reason="large playlist size",
 )
 YOUTUBE_MITIGATION_AGGRESSIVE = YouTubeMitigationProfile(
@@ -137,6 +137,18 @@ def _summarize_tool_output(stderr: str, stdout: str) -> str:
 	lines = _clean_lines(stderr) + _clean_lines(stdout)
 	if not lines:
 		return "no diagnostic output"
+	full_text = " | ".join(lines)
+	lower_full = full_text.lower()
+	if "sign in to confirm your age" in lower_full or "this video may be inappropriate for some users" in lower_full:
+		return "Age-restricted video. Sign into YouTube with Firefox cookies or choose another result."
+	if "login_required" in lower_full and "age-restricted" in lower_full:
+		return "Age-restricted video. Sign into YouTube with Firefox cookies or choose another result."
+	if "sign in to confirm you're not a bot" in lower_full or "sign in to confirm you’re not a bot" in lower_full:
+		return "YouTube asked for bot verification. Try Firefox cookies or wait and retry."
+	if "no supported javascript runtime could be found" in lower_full:
+		return "yt-dlp could not solve the YouTube player challenge. Install a supported JS runtime or update yt-dlp."
+	if "requested format is not available" in lower_full:
+		return "Requested audio format is not available for this result."
 	interesting = lines[-3:]
 	msg = " | ".join(interesting)
 	msg = re.sub(r"\s+", " ", msg).strip()
@@ -146,7 +158,7 @@ def _summarize_tool_output(stderr: str, stdout: str) -> str:
 def youtube_batch_mitigation(track_count: int, *, using_cookies: bool) -> YouTubeMitigationProfile:
 	if track_count >= _YOUTUBE_EXTREME_BATCH_THRESHOLD:
 		return YOUTUBE_MITIGATION_AGGRESSIVE
-	if track_count >= _YOUTUBE_LARGE_BATCH_THRESHOLD and not using_cookies:
+	if track_count >= _YOUTUBE_LARGE_BATCH_THRESHOLD:
 		return YOUTUBE_MITIGATION_LARGE_BATCH
 	return YOUTUBE_MITIGATION_NONE
 
@@ -180,6 +192,11 @@ def _strip_cookie_args(cmd: list[str]) -> list[str]:
 		if skip_next:
 			skip_next = False
 			continue
+		if tok == "--cookies":
+			skip_next = True
+			continue
+		if tok.startswith("--cookies="):
+			continue
 		if tok == "--cookies-from-browser":
 			skip_next = True
 			continue
@@ -187,6 +204,35 @@ def _strip_cookie_args(cmd: list[str]) -> list[str]:
 			continue
 		new.append(tok)
 	return new
+
+def _should_retry_without_cookies(stderr: str, stdout: str) -> bool:
+	text = f"{stderr or ''}\n{stdout or ''}".lower()
+	return any(phrase in text for phrase in (
+		"requested format is not available",
+		"only images are available for download",
+		"signature solving failed",
+		"n challenge solving failed",
+		"nsig extraction failed",
+		"unable to extract initial player response",
+		"unable to download api page",
+		"video unavailable",
+		"this content isn't available",
+		"this video is unavailable",
+		"sign in to confirm your age",
+		"sign in to confirm you're not a bot",
+		"sign in to confirm you’re not a bot",
+		"login required",
+		"login_required",
+		"precondition check failed",
+	))
+
+def _cmd_uses_cookies(cmd: list[str]) -> bool:
+	return any(
+		tok in ("--cookies", "--cookies-from-browser")
+		or tok.startswith("--cookies=")
+		or tok.startswith("--cookies-from-browser=")
+		for tok in cmd
+	)
 
 def _run_ytdlp(cmd: list[str]) -> int:
 	"""
@@ -210,12 +256,17 @@ def _run_ytdlp(cmd: list[str]) -> int:
 	if rc == 0:
 		return 0
 	log(f"yt-dlp command failed rc={rc} cmd={' '.join(cmd)} stderr={stderr[:500]} stdout={stdout[:200]}")
-	# Detect cookie DB copy failure and retry without cookies
-	if any(t.startswith("--cookies-from-browser") or t == "--cookies-from-browser" for t in cmd):
+	# If cookie-backed extraction fails, retry once without cookies so
+	# public videos are not blocked by a bad auth/session state.
+	if _cmd_uses_cookies(cmd):
 		lower_err = stderr.lower()
-		if "could not copy" in lower_err and "cookie" in lower_err:
+		if (
+			("could not copy" in lower_err and "cookie" in lower_err)
+			or ("locked" in lower_err and "cookie" in lower_err)
+			or _should_retry_without_cookies(stderr, stdout)
+		):
 			no_cookie_cmd = _strip_cookie_args(cmd)
-			log("yt-dlp retrying without browser cookies due to cookie DB copy error")
+			log("yt-dlp retrying without cookies after cookie/session-specific extraction failure")
 			if no_cookie_cmd and no_cookie_cmd[0] == INTERNAL_YTDLP:
 				rc2, stdout2, stderr2 = _run_ytdlp_module(no_cookie_cmd[1:])
 			else:
@@ -247,11 +298,15 @@ def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
 		return 0, ""
 	detail = _summarize_tool_output(stderr, stdout)
 	log(f"yt-dlp detail rc={rc} cmd={' '.join(cmd)} detail={detail}")
-	if any(t.startswith("--cookies-from-browser") or t == "--cookies-from-browser" for t in cmd):
+	if _cmd_uses_cookies(cmd):
 		lower_err = stderr.lower()
-		if "could not copy" in lower_err and "cookie" in lower_err:
+		if (
+			("could not copy" in lower_err and "cookie" in lower_err)
+			or ("locked" in lower_err and "cookie" in lower_err)
+			or _should_retry_without_cookies(stderr, stdout)
+		):
 			no_cookie_cmd = _strip_cookie_args(cmd)
-			log("yt-dlp retrying without browser cookies due to cookie DB copy error")
+			log("yt-dlp retrying without cookies after cookie/session-specific extraction failure")
 			if no_cookie_cmd and no_cookie_cmd[0] == INTERNAL_YTDLP:
 				rc2, stdout2, stderr2 = _run_ytdlp_module(no_cookie_cmd[1:])
 			else:
@@ -449,6 +504,30 @@ def _square_cover_art_bytes(cover_bytes: bytes, *, size: int = 600) -> Optional[
 	if not cover_bytes:
 		return None
 	try:
+		from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+		from PySide6.QtGui import QImage
+		src = QImage()
+		if src.loadFromData(cover_bytes):
+			cropped = src.convertToFormat(QImage.Format_RGB32)
+			cropped = cropped.scaled(
+				size,
+				size,
+				Qt.KeepAspectRatioByExpanding,
+				Qt.SmoothTransformation
+			)
+			x = max(0, (cropped.width() - size) // 2)
+			y = max(0, (cropped.height() - size) // 2)
+			cropped = cropped.copy(x, y, size, size)
+			out = QByteArray()
+			buf = QBuffer(out)
+			buf.open(QIODevice.WriteOnly)
+			if cropped.save(buf, "JPEG"):
+				data = bytes(out)
+				if len(data) > 1024:
+					return data
+	except Exception as exc:
+		log(f"cover art Qt square normalization skipped: {exc}")
+	try:
 		ffmpeg_bin = ffmpeg_path()
 		proc = subprocess.run(
 			[
@@ -474,9 +553,11 @@ def _square_cover_art_bytes(cover_bytes: bytes, *, size: int = 600) -> Optional[
 		log(f"cover art square normalization skipped: {exc}")
 	return None
 
-def tag_file(path: pathlib.Path, meta: Dict, cover_bytes: Optional[bytes]) -> None:
-	if cover_bytes:
-		cover_bytes = _square_cover_art_bytes(cover_bytes) or cover_bytes
+def tag_file(path: pathlib.Path, meta: Dict, cover_bytes: Optional[bytes], *, cover_size: int = 600) -> None:
+	if cover_bytes and cover_size > 0:
+		cover_bytes = _square_cover_art_bytes(cover_bytes, size=cover_size) or cover_bytes
+	elif cover_size <= 0:
+		cover_bytes = None
 	if path.suffix.lower() == ".mp3":
 		# ID3 (MP3)
 		try:
@@ -594,7 +675,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
 	return _normalize_to_m4a(src, dst, ffmpeg_bin, video_id, audio_processing)
 
-def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None, mp3_quality: int = 0) -> pathlib.Path:
+def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None, mp3_quality: int = 0, cbr_bitrate_kbps: int | None = None) -> pathlib.Path:
 	dst_dir.mkdir(parents=True, exist_ok=True)
 	safe_base = _safe(base_name)
 	tmp = dst_dir / (safe_base + ".tmp")
@@ -659,7 +740,9 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	args = [ffmpeg_bin, "-y", "-i", str(src)]
 	_append_audio_filter(args, audio_processing, src=src, ffmpeg_bin=ffmpeg_bin)
 	mp3_quality = max(0, min(10, int(mp3_quality)))
-	if cbr_320:
+	if cbr_bitrate_kbps is not None:
+		args += ["-codec:a","libmp3lame","-b:a", f"{max(96, int(cbr_bitrate_kbps))}k"]
+	elif cbr_320:
 		args += ["-codec:a","libmp3lame","-b:a","320k"]
 	else:
 		args += ["-codec:a","libmp3lame","-q:a", str(mp3_quality)]

@@ -217,6 +217,7 @@ class MainWindow(QMainWindow):
 		self.track_results: dict[int, dict] = {}
 		self.action_buttons: dict[int, QPushButton] = {}
 		self.resolve_items: dict[int, dict] = {}
+		self.manual_download_workers: dict[int, SingleDownloadWorker] = {}
 		self.last_playlist_name: str | None = None
 		self._allow_path_persist = False
 		self.cookie_check_worker: CookiesCheckWorker | None = None
@@ -657,6 +658,15 @@ class MainWindow(QMainWindow):
 		note.setWordWrap(True)
 		note.setFont(QFont(retro_font_family, default_pt + 1))
 		adv_layout.addWidget(note)
+		settings_columns = QHBoxLayout()
+		settings_columns.setSpacing(self._px(12))
+		adv_layout.addLayout(settings_columns, 1)
+		settings_left = QVBoxLayout()
+		settings_left.setSpacing(self._px(12))
+		settings_right = QVBoxLayout()
+		settings_right.setSpacing(self._px(12))
+		settings_columns.addLayout(settings_left, 1)
+		settings_columns.addLayout(settings_right, 1)
 
 		display_section = QFrame()
 		display_section.setFrameShape(QFrame.StyledPanel)
@@ -674,7 +684,7 @@ class MainWindow(QMainWindow):
 		display_note.setWordWrap(True)
 		display_note.setFont(QFont(retro_font_family, default_pt))
 		display_layout.addWidget(display_note)
-		adv_layout.addWidget(display_section)
+		settings_left.addWidget(display_section)
 
 		paths_section = QFrame()
 		paths_section.setFrameShape(QFrame.StyledPanel)
@@ -725,7 +735,7 @@ class MainWindow(QMainWindow):
 		row_ffmpeg.addWidget(btn_ffmpeg_clear)
 		row_ffmpeg.addStretch(1)
 		paths_layout.addLayout(row_ffmpeg)
-		adv_layout.addWidget(paths_section)
+		settings_left.addWidget(paths_section)
 
 		audio_section = QFrame()
 		audio_section.setFrameShape(QFrame.StyledPanel)
@@ -769,7 +779,50 @@ class MainWindow(QMainWindow):
 		force_note.setWordWrap(True)
 		force_note.setFont(QFont(retro_font_family, default_pt))
 		audio_layout.addWidget(force_note)
-		adv_layout.addWidget(audio_section)
+		settings_left.addWidget(audio_section)
+		legacy_section = QFrame()
+		legacy_section.setFrameShape(QFrame.StyledPanel)
+		legacy_layout = QVBoxLayout(legacy_section)
+		legacy_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
+		legacy_layout.setSpacing(self._px(8))
+		legacy_heading = QLabel("Legacy iPod")
+		legacy_heading.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
+		legacy_layout.addWidget(legacy_heading)
+		self.cb_legacy_ipod_mode = QCheckBox("Legacy iPod mode")
+		self.cb_legacy_ipod_mode.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_legacy_ipod_mode.toggled.connect(self.on_toggle_legacy_ipod_mode)
+		legacy_layout.addWidget(self.cb_legacy_ipod_mode)
+		legacy_note = QLabel("Applies older-device-friendly MP3 defaults and safer artwork handling for classic iPods and similar players.")
+		legacy_note.setWordWrap(True)
+		legacy_note.setFont(QFont(retro_font_family, default_pt))
+		legacy_layout.addWidget(legacy_note)
+		lbl_legacy_mp3 = QLabel("MP3 encoding")
+		lbl_legacy_mp3.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		legacy_layout.addWidget(lbl_legacy_mp3)
+		self.combo_legacy_mp3_mode = QComboBox()
+		self.combo_legacy_mp3_mode.setFont(QFont(retro_font_family, default_pt + 1))
+		self.combo_legacy_mp3_mode.addItem("Use current VBR setting", "vbr")
+		self.combo_legacy_mp3_mode.addItem("CBR 192 kbps", "cbr_192")
+		self.combo_legacy_mp3_mode.addItem("CBR 256 kbps", "cbr_256")
+		self.combo_legacy_mp3_mode.addItem("CBR 320 kbps", "cbr_320")
+		self.combo_legacy_mp3_mode.currentIndexChanged.connect(lambda _=None: self._persist_settings())
+		legacy_layout.addWidget(self.combo_legacy_mp3_mode)
+		lbl_legacy_art = QLabel("Album art")
+		lbl_legacy_art.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		legacy_layout.addWidget(lbl_legacy_art)
+		self.combo_legacy_cover_art = QComboBox()
+		self.combo_legacy_cover_art.setFont(QFont(retro_font_family, default_pt + 1))
+		self.combo_legacy_cover_art.addItem("Standard 600x600", "standard")
+		self.combo_legacy_cover_art.addItem("Medium 450x450", "medium")
+		self.combo_legacy_cover_art.addItem("Small 300x300", "small")
+		self.combo_legacy_cover_art.addItem("Disable embedded art", "off")
+		self.combo_legacy_cover_art.currentIndexChanged.connect(lambda _=None: self._persist_settings())
+		legacy_layout.addWidget(self.combo_legacy_cover_art)
+		legacy_tip = QLabel("If an iPod freezes on some songs, try CBR 192 kbps and Small 300x300 artwork first.")
+		legacy_tip.setWordWrap(True)
+		legacy_tip.setFont(QFont(retro_font_family, default_pt))
+		legacy_layout.addWidget(legacy_tip)
+		settings_right.addWidget(legacy_section)
 		# Firefox is the only browser-cookie path reliable enough to expose directly.
 		self._detected_firefox_profile: str | None = None
 		self._cookies_test_ok = False
@@ -839,8 +892,9 @@ class MainWindow(QMainWindow):
 		self.lbl_cookie_status.setVisible(False)
 		self.lbl_cookie_status.setFont(QFont(retro_font_family, max(default_pt - 1, 8)))
 		cookies_layout.addWidget(self.lbl_cookie_status)
-		adv_layout.addWidget(cookies_section)
-		adv_layout.addStretch(1)
+		settings_right.addWidget(cookies_section)
+		settings_left.addStretch(1)
+		settings_right.addStretch(1)
 		self.advanced_panel.setVisible(False)
 		vl.addWidget(self.advanced_panel)
 
@@ -851,7 +905,7 @@ class MainWindow(QMainWindow):
 		self.help_dialog = self._create_panel_dialog(vl, self.help_panel, "Tutorial", self._px(720), self._px(360))
 		self.load_dialog = self._create_panel_dialog(vl, self.load_panel, "Load Playlist", self._px(720), self._px(420))
 		self.equalizer_dialog = self._create_panel_dialog(vl, self.equalizer_panel, "Equalizer", self._px(720), self._px(360))
-		self.advanced_dialog = self._create_panel_dialog(vl, self.advanced_panel, "Settings", self._px(760), self._px(620))
+		self.advanced_dialog = self._create_panel_dialog(vl, self.advanced_panel, "Settings", self._px(980), self._px(620))
 		self._top_dialogs = {
 			self.btn_tutorial: (self.help_dialog, "TUTORIAL"),
 			self.btn_load_existing: (self.load_dialog, "LOAD PLAYLIST"),
@@ -1128,6 +1182,22 @@ class MainWindow(QMainWindow):
 
 	def _mp3_quality_value(self) -> int:
 		return max(0, min(10, int(self.slider_mp3_quality.value())))
+
+	def _legacy_export_options(self) -> dict:
+		enabled = bool(self.cb_legacy_ipod_mode.isChecked())
+		return {
+			"enabled": enabled,
+			"mp3_mode": self.combo_legacy_mp3_mode.currentData() or "vbr",
+			"cover_art_mode": self.combo_legacy_cover_art.currentData() or "standard",
+		}
+
+	def _set_legacy_controls_enabled(self, enabled: bool) -> None:
+		self.combo_legacy_mp3_mode.setEnabled(enabled)
+		self.combo_legacy_cover_art.setEnabled(enabled)
+
+	def on_toggle_legacy_ipod_mode(self, checked: bool) -> None:
+		self._set_legacy_controls_enabled(bool(checked))
+		self._persist_settings()
 
 	def _on_mp3_quality_changed(self, value: int) -> None:
 		value = max(0, min(10, int(value)))
@@ -1503,6 +1573,9 @@ class MainWindow(QMainWindow):
 			"eq_treble_gain": self.slider_treble.value(),
 			"mp3_quality": self._mp3_quality_value(),
 			"force_download_mode": self.cb_force_download.isChecked(),
+			"legacy_ipod_mode": self.cb_legacy_ipod_mode.isChecked(),
+			"legacy_mp3_mode": self.combo_legacy_mp3_mode.currentData(),
+			"legacy_cover_art_mode": self.combo_legacy_cover_art.currentData(),
 			"format": "m4a" if self.rb_m4a.isChecked() else "mp3",
 		}
 		if include_paths:
@@ -1554,6 +1627,24 @@ class MainWindow(QMainWindow):
 		block_force = QSignalBlocker(self.cb_force_download)
 		self.cb_force_download.setChecked(bool(cfg.get("force_download_mode", False)))
 		del block_force
+		block_legacy = QSignalBlocker(self.cb_legacy_ipod_mode)
+		self.cb_legacy_ipod_mode.setChecked(bool(cfg.get("legacy_ipod_mode", False)))
+		del block_legacy
+		legacy_mp3_mode = str(cfg.get("legacy_mp3_mode") or "vbr")
+		legacy_cover_mode = str(cfg.get("legacy_cover_art_mode") or "standard")
+		for idx in range(self.combo_legacy_mp3_mode.count()):
+			if self.combo_legacy_mp3_mode.itemData(idx) == legacy_mp3_mode:
+				block_legacy_mp3 = QSignalBlocker(self.combo_legacy_mp3_mode)
+				self.combo_legacy_mp3_mode.setCurrentIndex(idx)
+				del block_legacy_mp3
+				break
+		for idx in range(self.combo_legacy_cover_art.count()):
+			if self.combo_legacy_cover_art.itemData(idx) == legacy_cover_mode:
+				block_legacy_art = QSignalBlocker(self.combo_legacy_cover_art)
+				self.combo_legacy_cover_art.setCurrentIndex(idx)
+				del block_legacy_art
+				break
+		self._set_legacy_controls_enabled(self.cb_legacy_ipod_mode.isChecked())
 		self._readability_mode = bool(cfg.get("readability_mode", False))
 		self._apply_font_family(self._readable_font_family if self._readability_mode else self._retro_font_family)
 		ff_path = cfg.get("ffmpeg_path") or ""
@@ -1716,6 +1807,7 @@ class MainWindow(QMainWindow):
 			self._cookies_file(),
 			self._audio_processing_options(),
 			mp3_quality=self._mp3_quality_value(),
+			legacy_options=self._legacy_export_options(),
 			force_download=bool(self.cb_force_download.isChecked()),
 			tracks_override=active_tracks,
 			row_indices=queued_rows,
@@ -1833,9 +1925,8 @@ class MainWindow(QMainWindow):
 	def on_clear(self):
 		if self.worker:
 			return
-		for info in self.resolve_items.values():
-			download_worker = info.get("download_worker")
-			if download_worker and download_worker.isRunning():
+		for worker in self.manual_download_workers.values():
+			if worker and worker.isRunning():
 				QMessageBox.information(self, "Busy", "Wait for in-progress manual downloads to finish before clearing.")
 				return
 		self.tracks = []
@@ -1853,6 +1944,7 @@ class MainWindow(QMainWindow):
 		self._persist_settings(include_paths=True)
 		self.track_results = {}
 		self.action_buttons = {}
+		self.manual_download_workers = {}
 		self._clear_resolution_panel()
 
 	def on_row_status(self, row_idx: int, status: str):
@@ -1975,6 +2067,16 @@ class MainWindow(QMainWindow):
 					combo.setCurrentIndex(idx)
 					break
 
+	def _resolution_has_running_worker(self, row_idx: int) -> bool:
+		record = self.resolve_items.get(row_idx)
+		if not record:
+			return False
+		for key in ("alt_worker",):
+			worker = record.get(key)
+			if worker and worker.isRunning():
+				return True
+		return False
+
 	def _create_resolution_item(self, row_idx: int, track: dict, options: list) -> dict:
 		widget = QFrame()
 		widget.setFrameShape(QFrame.StyledPanel)
@@ -2014,7 +2116,6 @@ class MainWindow(QMainWindow):
 			"btn_skip": btn_skip,
 			"btn_close": btn_close,
 			"row_idx": row_idx,
-			"download_worker": None,
 			"alt_worker": None,
 			"loaded_more": False
 		}
@@ -2067,6 +2168,10 @@ class MainWindow(QMainWindow):
 		record = self.resolve_items.get(row_idx)
 		if not record:
 			return
+		active_worker = self.manual_download_workers.get(row_idx)
+		if active_worker and active_worker.isRunning():
+			QMessageBox.information(self, "Already Downloading", "This song already has an alternative download in progress.")
+			return
 		out_dir = self.ed_out.text().strip()
 		if not out_dir:
 			QMessageBox.warning(self, "Missing Output", "Choose an output folder before downloading.")
@@ -2092,26 +2197,43 @@ class MainWindow(QMainWindow):
 			self._cookies_file(),
 			self._audio_processing_options(),
 			self._mp3_quality_value(),
-			self
+			self._legacy_export_options(),
+			parent=self
 		)
-		record["download_worker"] = worker
+		self.manual_download_workers[row_idx] = worker
 		worker.sig_status.connect(self.on_row_status)
 		worker.sig_finished.connect(self.on_resolution_finished)
 		worker.start()
 		self.lbl_log.setText(f"Manual download queued: {record['track'].get('artists','')} — {record['track'].get('title','')}")
+		self.on_row_status(row_idx, "Queued (manual alternative)")
 
 	def on_resolution_skip(self, row_idx: int) -> None:
-		record = self.resolve_items.pop(row_idx, None)
-		if not record:
+		download_worker = self.manual_download_workers.get(row_idx)
+		if download_worker and download_worker.isRunning():
+			QMessageBox.information(
+				self,
+				"Please wait",
+				"Finish the manual alternative download for this song before skipping it."
+			)
 			return
-		for key in ("download_worker", "alt_worker"):
-			worker = record.get(key)
-			if worker and worker.isRunning():
-				worker.quit()
-				worker.wait(1000)
-		self.lbl_log.setText(f"Skipped track: {record['track'].get('artists','')} — {record['track'].get('title','')}")
-		self.on_row_status(row_idx, "Skipped (removed)")
+		if self._resolution_has_running_worker(row_idx):
+			QMessageBox.information(
+				self,
+				"Please wait",
+				"Finish loading this alternatives list before skipping the song."
+			)
+			return
+		record = self.resolve_items.pop(row_idx, None)
 		info = self.track_results.get(row_idx)
+		track = None
+		if record:
+			track = record.get("track")
+		elif info:
+			track = info.get("track")
+		if not track:
+			return
+		self.lbl_log.setText(f"Skipped track: {track.get('artists','')} — {track.get('title','')}")
+		self.on_row_status(row_idx, "Skipped (removed)")
 		if info:
 			fp = info.get("file_path")
 			if fp:
@@ -2124,8 +2246,9 @@ class MainWindow(QMainWindow):
 		btn = self.action_buttons.get(row_idx)
 		if btn:
 			btn.setEnabled(False)
-		record["widget"].setParent(None)
-		record["widget"].deleteLater()
+		if record:
+			record["widget"].setParent(None)
+			record["widget"].deleteLater()
 		if not self.resolve_items:
 			self.resolve_box.setVisible(False)
 
@@ -2133,20 +2256,19 @@ class MainWindow(QMainWindow):
 		record = self.resolve_items.pop(row_idx, None)
 		if not record:
 			return
-		for key in ("download_worker", "alt_worker"):
-			worker = record.get(key)
-			if worker and worker.isRunning():
-				worker.quit()
-				worker.wait(1000)
+		alt_worker = record.get("alt_worker")
+		if alt_worker and alt_worker.isRunning():
+			self._shutdown_thread(alt_worker, wait_ms=500)
+			record["alt_worker"] = None
 		record["widget"].setParent(None)
 		record["widget"].deleteLater()
 		if not self.resolve_items:
 			self.resolve_box.setVisible(False)
 
 	def on_resolution_finished(self, row_idx: int, payload: dict) -> None:
+		self.manual_download_workers.pop(row_idx, None)
 		record = self.resolve_items.get(row_idx)
 		if record:
-			record["download_worker"] = None
 			record["btn_download"].setEnabled(True)
 			record["btn_skip"].setEnabled(True)
 			record["btn_close"].setEnabled(True)
@@ -2170,10 +2292,16 @@ class MainWindow(QMainWindow):
 		else:
 			err = info.get("error") or "Unknown error"
 			self.lbl_log.setText(f"Manual download failed: {err}")
+			if record:
+				record["status_label"].setText(f"Download failed: {err}")
 		self._rewrite_playlists()
 
 	def _clear_resolution_panel(self) -> None:
 		for record in list(self.resolve_items.values()):
+			alt_worker = record.get("alt_worker")
+			if alt_worker and alt_worker.isRunning():
+				self._shutdown_thread(alt_worker, wait_ms=500)
+				record["alt_worker"] = None
 			widget = record.get("widget")
 			if widget is not None:
 				widget.setParent(None)
@@ -2301,8 +2429,11 @@ class MainWindow(QMainWindow):
 
 		# Stop resolution workers if running
 		for record in list(self.resolve_items.values()):
-			for key in ("download_worker", "alt_worker"):
+			for key in ("alt_worker",):
 				self._shutdown_thread(record.get(key), wait_ms=1000)
 				record[key] = None
+		for row_idx, worker in list(self.manual_download_workers.items()):
+			self._shutdown_thread(worker, wait_ms=1000)
+			self.manual_download_workers.pop(row_idx, None)
 
 		event.accept()
