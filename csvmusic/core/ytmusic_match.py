@@ -30,6 +30,28 @@ def _candidate_artist_text(cand: Dict) -> str:
 			pass
 	return cand.get("author", "") or ""
 
+def _artist_names(artists) -> List[str]:
+	names: List[str] = []
+	if not isinstance(artists, list):
+		return names
+	for artist in artists:
+		if not isinstance(artist, dict):
+			continue
+		name = (artist.get("name") or "").strip()
+		if name:
+			names.append(name)
+	return names
+
+def _result_author(result: Dict, artists) -> str:
+	for key in ("author", "channel", "uploader", "name"):
+		value = result.get(key)
+		if isinstance(value, str) and value.strip():
+			return value.strip()
+	artist_names = _artist_names(artists)
+	if artist_names:
+		return ", ".join(artist_names)
+	return ""
+
 def _overlap_ratio(needle: set, haystack: set) -> float:
 	return len(needle & haystack) / max(1, len(needle))
 
@@ -190,11 +212,13 @@ def _search_filter(yt: YTMusic, q: str, search_filter: str, limit: int) -> List[
 		if not vid:
 			continue
 		artists = r.get("artists")
+		author = _result_author(r, artists)
 		cands.append({
 			"videoId": vid,
 			"title": r.get("title"),
 			"artists": artists if search_filter == "songs" else None,
-			"author": (artists[0]["name"] if artists and search_filter == "songs" else r.get("author") or ""),
+			"author": author,
+			"channel": author,
 			"duration_seconds": _duration_s(r.get("duration_seconds") or r.get("duration")),
 			"source": source,
 		})

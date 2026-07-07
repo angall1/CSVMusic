@@ -2,7 +2,7 @@
 from PySide6.QtCore import QObject, Signal, QThread
 import pathlib, traceback, time, random
 import subprocess
-import sys, json
+import json
 import sqlite3
 import re, unicodedata
 from typing import List, Dict
@@ -18,8 +18,8 @@ from csvmusic.core.downloader import (
 	YOUTUBE_MITIGATION_NONE, YOUTUBE_MITIGATION_AGGRESSIVE, YouTubeMitigationProfile
 )
 from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp, INTERNAL_YTDLP
+from csvmusic.core.subprocess_env import subprocess_kwargs
 
-_WINDOWS = sys.platform.startswith("win")
 _FORCE_FALLBACK_MIN_SCORE = 0.45
 
 def _legacy_cover_size(legacy_options: Dict | None, *, embed_art: bool) -> int:
@@ -51,14 +51,6 @@ def _norm_text(text: str) -> str:
 
 def _tokens(text: str) -> set[str]:
 	return {tok for tok in re.findall(r"\w+", _norm_text(text), flags=re.UNICODE) if any(ch.isalnum() for ch in tok)}
-
-def _hidden_subprocess_kwargs() -> dict:
-	if not _WINDOWS:
-		return {}
-	startupinfo = subprocess.STARTUPINFO()
-	startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-	flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-	return {"startupinfo": startupinfo, "creationflags": flags}
 
 def _run_yt_dlp_command(cmd: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
 	if cmd and cmd[0] == INTERNAL_YTDLP:
@@ -93,7 +85,7 @@ def _run_yt_dlp_command(cmd: list[str], *, timeout: int) -> subprocess.Completed
 		stderr=subprocess.PIPE,
 		text=True,
 		timeout=timeout,
-		**_hidden_subprocess_kwargs()
+		**subprocess_kwargs()
 	)
 
 class PipelineWorker(QThread):

@@ -36,17 +36,10 @@ from csvmusic.core.paths import (
 	resource_base,
 )
 from csvmusic.core.log import log
+from csvmusic.core.subprocess_env import subprocess_kwargs
 from csvmusic.version import APP_VERSION
 
 _WINDOWS = sys.platform.startswith("win")
-
-def _hidden_subprocess_kwargs() -> dict:
-	if not _WINDOWS:
-		return {}
-	startupinfo = subprocess.STARTUPINFO()
-	startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-	flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-	return {"startupinfo": startupinfo, "creationflags": flags}
 
 def probe_ffmpeg() -> None:
 	path = ffmpeg_path()
@@ -57,7 +50,7 @@ def probe_ffmpeg() -> None:
 			capture_output=True,
 			text=True,
 			timeout=2,
-			**_hidden_subprocess_kwargs()
+			**subprocess_kwargs()
 		)
 	except Exception:
 		pass

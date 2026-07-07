@@ -2054,11 +2054,14 @@ class MainWindow(QMainWindow):
 		if not options:
 			combo.addItem("No matches found yet", None)
 			record["btn_download"].setEnabled(False)
+			record["btn_listen"].setEnabled(False)
 			status.setText("No matches found yet.")
 		else:
 			record["btn_download"].setEnabled(True)
+			record["btn_listen"].setEnabled(True)
 			for opt in options:
 				combo.addItem(self._format_option(opt), opt)
+				combo.setItemData(combo.count() - 1, self._format_option_tooltip(opt), Qt.ToolTipRole)
 			status.setText(f"Showing {len(options)} result(s).")
 		if current_vid:
 			for idx in range(combo.count()):
@@ -2095,12 +2098,14 @@ class MainWindow(QMainWindow):
 		btn_row = QHBoxLayout()
 		btn_row.setSpacing(self._px(6))
 		btn_download = QPushButton("Download")
+		btn_listen = QPushButton("Listen")
 		btn_skip = QPushButton("Skip Song")
 		btn_close = QPushButton("Close")
 		panel_font = self._button_font
-		for w in (btn_download, btn_skip, btn_close):
+		for w in (btn_download, btn_listen, btn_skip, btn_close):
 			w.setFont(panel_font)
 		btn_row.addWidget(btn_download)
+		btn_row.addWidget(btn_listen)
 		btn_row.addWidget(btn_skip)
 		btn_row.addWidget(btn_close)
 		btn_row.addStretch(1)
@@ -2113,6 +2118,7 @@ class MainWindow(QMainWindow):
 			"combo": combo,
 			"status_label": status_label,
 			"btn_download": btn_download,
+			"btn_listen": btn_listen,
 			"btn_skip": btn_skip,
 			"btn_close": btn_close,
 			"row_idx": row_idx,
@@ -2121,6 +2127,7 @@ class MainWindow(QMainWindow):
 		}
 		self._refresh_option_combo(record)
 		btn_download.clicked.connect(partial(self.on_resolution_download, row_idx))
+		btn_listen.clicked.connect(partial(self.on_resolution_listen, row_idx))
 		btn_skip.clicked.connect(partial(self.on_resolution_skip, row_idx))
 		btn_close.clicked.connect(partial(self.on_resolution_close, row_idx))
 		return record
@@ -2128,12 +2135,34 @@ class MainWindow(QMainWindow):
 	def _format_option(self, option: dict) -> str:
 		score = option.get("score") or 0.0
 		title = option.get("title") or ""
-		author = option.get("author") or ""
+		author = option.get("author") or option.get("channel") or "Unknown uploader"
 		dur = option.get("duration_seconds") or 0
 		mins = dur // 60
 		secs = dur % 60
 		source = "Official Song" if option.get("source") == "music" else "YouTube Result"
-		return f"[{source}] {score:.2f} • {title} ({author}) [{mins}:{secs:02d}]"
+		return f"[{author}] {title} | {source} {score:.2f} [{mins}:{secs:02d}]"
+
+	def _format_option_tooltip(self, option: dict) -> str:
+		title = option.get("title") or ""
+		author = option.get("author") or option.get("channel") or "Unknown uploader"
+		video_id = option.get("videoId") or ""
+		dur = option.get("duration_seconds") or 0
+		mins = dur // 60
+		secs = dur % 60
+		source = "Official Song" if option.get("source") == "music" else "YouTube Result"
+		return f"{source}\nUploader: {author}\nTitle: {title}\nDuration: {mins}:{secs:02d}\nVideo ID: {video_id}"
+
+	def on_resolution_listen(self, row_idx: int) -> None:
+		record = self.resolve_items.get(row_idx)
+		if not record:
+			return
+		option = record["combo"].currentData()
+		if not isinstance(option, dict) or not option.get("videoId"):
+			QMessageBox.warning(self, "No Selection", "Select a candidate before opening it.")
+			return
+		url = f"https://www.youtube.com/watch?v={option['videoId']}"
+		if not QDesktopServices.openUrl(QUrl(url)):
+			QMessageBox.warning(self, "Open Failed", f"Could not open {url}")
 
 	def on_refresh_alternatives(self, row_idx: int) -> None:
 		record = self.resolve_items.get(row_idx)
@@ -2182,6 +2211,7 @@ class MainWindow(QMainWindow):
 			return
 		fmt = "m4a" if self.rb_m4a.isChecked() else "mp3"
 		record["btn_download"].setEnabled(False)
+		record["btn_listen"].setEnabled(False)
 		record["btn_skip"].setEnabled(False)
 		record["btn_close"].setEnabled(False)
 		worker = SingleDownloadWorker(
@@ -2270,6 +2300,7 @@ class MainWindow(QMainWindow):
 		record = self.resolve_items.get(row_idx)
 		if record:
 			record["btn_download"].setEnabled(True)
+			record["btn_listen"].setEnabled(True)
 			record["btn_skip"].setEnabled(True)
 			record["btn_close"].setEnabled(True)
 		info = self.track_results.setdefault(row_idx, {})

@@ -2,12 +2,14 @@
 import os, pathlib, subprocess, requests, io, contextlib, json
 from dataclasses import dataclass
 from typing import Dict, Optional, List
-import re, sys
+import re, unicodedata
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4, MP4Cover
 from csvmusic.core.paths import ffmpeg_path, ytdlp_path, INTERNAL_YTDLP
 from csvmusic.core.log import log
+from csvmusic.core.js_runtime import ytdlp_js_runtime_args
+from csvmusic.core.subprocess_env import subprocess_kwargs
 
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
 YT_URL = "https://www.youtube.com/watch?v={vid}"
@@ -72,17 +74,8 @@ YOUTUBE_MITIGATION_AGGRESSIVE = YouTubeMitigationProfile(
 	reason="YouTube rate-limit response",
 )
 
-_WINDOWS = sys.platform.startswith("win")
 _TARGET_LOUDNESS_I = -16.0
 _TARGET_TRUE_PEAK_DB = -2.5
-
-def _hidden_subprocess_kwargs() -> dict:
-	if not _WINDOWS:
-		return {}
-	startupinfo = subprocess.STARTUPINFO()
-	startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-	flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-	return {"startupinfo": startupinfo, "creationflags": flags}
 
 def _run(cmd: list[str]) -> int:
 	proc = _run_capture(cmd)
@@ -98,7 +91,7 @@ def _run_capture(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 		stdout=subprocess.PIPE,
 		stderr=subprocess.PIPE,
 		text=True,
-		**_hidden_subprocess_kwargs()
+		**subprocess_kwargs()
 	)
 
 def _run_ytdlp_module(args: list[str]) -> tuple[int, str, str]:
@@ -123,7 +116,7 @@ def _run_ytdlp_module(args: list[str]) -> tuple[int, str, str]:
 			return 1, stdout_buf.getvalue(), f"{stderr_buf.getvalue()}\n{exc}".strip()
 	return int(rc or 0), stdout_buf.getvalue(), stderr_buf.getvalue()
 
-def _summarize_tool_output(stderr: str, stdout: str) -> str:
+def _summarize_tool_output(stderr: str, stdout: str, *, using_cookies: bool = False) -> str:
 	def _clean_lines(text: str) -> list[str]:
 		lines: list[str] = []
 		for raw in text.splitlines():
@@ -140,13 +133,19 @@ def _summarize_tool_output(stderr: str, stdout: str) -> str:
 	full_text = " | ".join(lines)
 	lower_full = full_text.lower()
 	if "sign in to confirm your age" in lower_full or "this video may be inappropriate for some users" in lower_full:
+		if using_cookies:
+			return "Age-restricted video. Cookies were used, but YouTube still rejected this result. Re-test cookies, export fresh cookies, or choose another result."
 		return "Age-restricted video. Sign into YouTube with Firefox cookies or choose another result."
 	if "login_required" in lower_full and "age-restricted" in lower_full:
+		if using_cookies:
+			return "Age-restricted video. Cookies were used, but YouTube still rejected this result. Re-test cookies, export fresh cookies, or choose another result."
 		return "Age-restricted video. Sign into YouTube with Firefox cookies or choose another result."
 	if "sign in to confirm you're not a bot" in lower_full or "sign in to confirm you’re not a bot" in lower_full:
+		if using_cookies:
+			return "YouTube asked for bot verification even with cookies enabled. Re-test cookies, wait and retry, or choose another result."
 		return "YouTube asked for bot verification. Try Firefox cookies or wait and retry."
 	if "no supported javascript runtime could be found" in lower_full:
-		return "yt-dlp could not solve the YouTube player challenge. Install a supported JS runtime or update yt-dlp."
+		return "yt-dlp could not solve the YouTube player challenge. Install Deno 2.3+ or Node 22+, then update yt-dlp with the default extras."
 	if "requested format is not available" in lower_full:
 		return "Requested audio format is not available for this result."
 	interesting = lines[-3:]
@@ -207,6 +206,13 @@ def _strip_cookie_args(cmd: list[str]) -> list[str]:
 
 def _should_retry_without_cookies(stderr: str, stdout: str) -> bool:
 	text = f"{stderr or ''}\n{stdout or ''}".lower()
+	if (
+		"sign in to confirm" in text
+		or "login required" in text
+		or "login_required" in text
+		or "precondition check failed" in text
+	):
+		return False
 	return any(phrase in text for phrase in (
 		"requested format is not available",
 		"only images are available for download",
@@ -218,12 +224,6 @@ def _should_retry_without_cookies(stderr: str, stdout: str) -> bool:
 		"video unavailable",
 		"this content isn't available",
 		"this video is unavailable",
-		"sign in to confirm your age",
-		"sign in to confirm you're not a bot",
-		"sign in to confirm you’re not a bot",
-		"login required",
-		"login_required",
-		"precondition check failed",
 	))
 
 def _cmd_uses_cookies(cmd: list[str]) -> bool:
@@ -248,7 +248,7 @@ def _run_ytdlp(cmd: list[str]) -> int:
 			stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE,
 			text=True,
-			**_hidden_subprocess_kwargs()
+			**subprocess_kwargs()
 		)
 		rc = proc.returncode
 		stdout = proc.stdout or ""
@@ -275,7 +275,7 @@ def _run_ytdlp(cmd: list[str]) -> int:
 					stdout=subprocess.PIPE,
 					stderr=subprocess.PIPE,
 					text=True,
-					**_hidden_subprocess_kwargs()
+					**subprocess_kwargs()
 				)
 				rc2 = proc2.returncode
 				stdout2 = proc2.stdout or ""
@@ -296,9 +296,10 @@ def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
 		stderr = proc.stderr or ""
 	if rc == 0:
 		return 0, ""
-	detail = _summarize_tool_output(stderr, stdout)
+	uses_cookies = _cmd_uses_cookies(cmd)
+	detail = _summarize_tool_output(stderr, stdout, using_cookies=uses_cookies)
 	log(f"yt-dlp detail rc={rc} cmd={' '.join(cmd)} detail={detail}")
-	if _cmd_uses_cookies(cmd):
+	if uses_cookies:
 		lower_err = stderr.lower()
 		if (
 			("could not copy" in lower_err and "cookie" in lower_err)
@@ -334,7 +335,7 @@ _FILENAME_CHAR_MAP = str.maketrans({
 })
 
 def sanitize_name(name: str) -> str:
-	text = (name or "").translate(_FILENAME_CHAR_MAP)
+	text = unicodedata.normalize("NFC", name or "").translate(_FILENAME_CHAR_MAP)
 	text = re.sub(r"[\x00-\x1f]+", "", text)
 	text = re.sub(r"\s+", " ", text).strip()
 	text = text.rstrip(". ")
@@ -344,15 +345,23 @@ def _safe(name: str) -> str:
 	# Backward-compatible helper kept for internal use
 	return sanitize_name(name)
 
+def _filename_starts_with_base(filename: str, base: str) -> bool:
+	for form in ("NFC", "NFD", "NFKC", "NFKD"):
+		name_norm = unicodedata.normalize(form, filename)
+		base_norm = unicodedata.normalize(form, base)
+		if name_norm.startswith(base_norm + "."):
+			return True
+	return False
+
 def _list_downloads(dir: pathlib.Path, base: str) -> list[pathlib.Path]:
-	# Find files that start with our sanitized base (yt-dlp may alter punctuation)
+	# Find files that start with our sanitized base, allowing Unicode normalization differences.
 	return sorted(
-		[p for p in dir.iterdir() if p.is_file() and p.name.startswith(base + ".")],
+		[p for p in dir.iterdir() if p.is_file() and _filename_starts_with_base(p.name, base)],
 		key=lambda x: x.stat().st_mtime, reverse=True
 	)
 
 def _cleanup_outputs(dir: pathlib.Path, base: str) -> None:
-	for p in dir.glob(f"{base}.*"):
+	for p in _list_downloads(dir, base):
 		try:
 			p.unlink()
 		except Exception:
@@ -545,7 +554,7 @@ def _square_cover_art_bytes(cover_bytes: bytes, *, size: int = 600) -> Optional[
 			input=cover_bytes,
 			stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE,
-			**_hidden_subprocess_kwargs()
+			**subprocess_kwargs()
 		)
 		if proc.returncode == 0 and proc.stdout and len(proc.stdout) > 1024:
 			return proc.stdout
@@ -607,6 +616,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	# Resolve yt-dlp automatically if not provided
 	yt_bin = yt_dlp_bin or ytdlp_path()
 	cookies_args: list[str] = list(extra_yt_dlp_args or [])
+	js_runtime_args = ytdlp_js_runtime_args(yt_bin)
 	primary_base = [
 		yt_bin,
 		"-f", "ba[ext=m4a]/bestaudio[ext=m4a]/bestaudio",
@@ -631,7 +641,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
-			cmd_primary = primary_base + extractor_args + cookies_args + ["-o", out_tpl, base_url]
+			cmd_primary = primary_base + extractor_args + js_runtime_args + cookies_args + ["-o", out_tpl, base_url]
 			rc, detail = _run_ytdlp_detail(cmd_primary)
 			if rc == 0:
 				success = True
@@ -639,7 +649,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 				break
 			last_detail = detail
 			log(f"download_m4a: primary failed video_id={video_id} client={client} url={base_url}")
-			cmd_fallback = fallback_base + extractor_args + cookies_args + ["-o", out_tpl, base_url]
+			cmd_fallback = fallback_base + extractor_args + js_runtime_args + cookies_args + ["-o", out_tpl, base_url]
 			rc, detail = _run_ytdlp_detail(cmd_fallback)
 			if rc == 0:
 				success = True
@@ -653,7 +663,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		search_url = f"ytsearch1:{base_name}"
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
-			cmd_search = primary_base + extractor_args + cookies_args + ["-o", out_tpl, search_url]
+			cmd_search = primary_base + extractor_args + js_runtime_args + cookies_args + ["-o", out_tpl, search_url]
 			rc, detail = _run_ytdlp_detail(cmd_search)
 			if rc == 0:
 				success = True
@@ -685,6 +695,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	_cleanup_outputs(dst_dir, safe_base)
 	yt_bin = yt_dlp_bin or ytdlp_path()
 	cookies_args: list[str] = list(extra_yt_dlp_args or [])
+	js_runtime_args = ytdlp_js_runtime_args(yt_bin)
 	cmd_base = [
 		yt_bin,
 		"-f", "bestaudio",
@@ -699,7 +710,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
-			cmd = cmd_base + extractor_args + cookies_args + ["-o", str(tmp), base_url]
+			cmd = cmd_base + extractor_args + js_runtime_args + cookies_args + ["-o", str(tmp), base_url]
 			rc, detail = _run_ytdlp_detail(cmd)
 			if rc == 0:
 				success = True
@@ -713,7 +724,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		search_url = f"ytsearch1:{base_name}"
 		for client in YOUTUBE_CLIENTS:
 			extractor_args = _extractor_args(client)
-			cmd = cmd_base + extractor_args + cookies_args + ["-o", str(tmp), search_url]
+			cmd = cmd_base + extractor_args + js_runtime_args + cookies_args + ["-o", str(tmp), search_url]
 			rc, detail = _run_ytdlp_detail(cmd)
 			if rc == 0:
 				success = True
