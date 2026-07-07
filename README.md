@@ -23,27 +23,27 @@ CSVMusic takes a playlist exported as CSV from TuneMyMusic and automatically:
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.4.8
+https://github.com/angall1/CSVMusic/releases/tag/v1.4.9
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.4.8/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.4.9/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.4.8/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.4.9/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.4.8/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.4.9/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.4.8/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.4.9/CSVMusic-linux.zip
 
 Unzip the file and run the app.
 
 ---
 
-# What's New In 1.4.8
+# What's New In 1.4.9
 
 - Alternative match results now show the uploader first, making same-title results easier to tell apart.
 - Alternative rows include a **Listen** button that opens the selected YouTube result before downloading.

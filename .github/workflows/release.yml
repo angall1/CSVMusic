@@ -72,10 +72,37 @@ jobs:
       - name: Fetch FFmpeg (Linux)
         if: ${{ matrix.ffmpeg_platform == 'linux' }}
         run: |
+          set -euo pipefail
           mkdir -p resources/ffmpeg/linux
-          curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-          tar -xf ffmpeg.tar.xz
-          cp ffmpeg-*-amd64-static/ffmpeg resources/ffmpeg/linux/ffmpeg
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          urls=(
+            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+          )
+          archive="$tmp_dir/ffmpeg.tar.xz"
+          downloaded=0
+          for url in "${urls[@]}"; do
+            echo "Downloading FFmpeg from $url"
+            if curl --fail --location --retry 3 --retry-delay 5 --output "$archive" "$url" && tar -tf "$archive" >/dev/null; then
+              downloaded=1
+              break
+            fi
+            echo "FFmpeg download was unavailable or not a valid tar archive; trying next source."
+            rm -f "$archive"
+          done
+          if [ "$downloaded" -ne 1 ]; then
+            echo "Unable to download a valid Linux FFmpeg archive." >&2
+            exit 1
+          fi
+          tar -xf "$archive" -C "$tmp_dir"
+          ffmpeg_bin="$(find "$tmp_dir" -type f -path '*/bin/ffmpeg' -o -type f -name ffmpeg | head -n 1)"
+          if [ -z "$ffmpeg_bin" ]; then
+            echo "ffmpeg binary not found in downloaded archive." >&2
+            find "$tmp_dir" -maxdepth 3 -type f >&2
+            exit 1
+          fi
+          cp "$ffmpeg_bin" resources/ffmpeg/linux/ffmpeg
           chmod +x resources/ffmpeg/linux/ffmpeg
 
       - name: Fetch FFmpeg (macOS)
