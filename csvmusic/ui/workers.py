@@ -10,6 +10,7 @@ from typing import List, Dict
 from ytmusicapi import YTMusic
 
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
+from csvmusic.core.url_import import fetch_music_url
 from csvmusic.core.log import log
 from csvmusic.core.ytmusic_match import find_best, more_candidates, RATE_LIMIT_S, CONFIDENCE_MIN
 from csvmusic.core.downloader import (
@@ -21,6 +22,29 @@ from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp, INTERNAL_YTDLP
 from csvmusic.core.subprocess_env import subprocess_kwargs
 
 _FORCE_FALLBACK_MIN_SCORE = 0.45
+
+class MusicURLImportWorker(QThread):
+	sig_done = Signal(bool, dict, str)
+
+	def __init__(self, playlist_url: str, parent: QObject | None = None):
+		super().__init__(parent)
+		self.playlist_url = playlist_url
+
+	def run(self):
+		try:
+			playlist = fetch_music_url(self.playlist_url)
+			self.sig_done.emit(True, {
+				"id": playlist.id,
+				"name": playlist.name,
+				"tracks": playlist.tracks,
+				"total_count": playlist.total_count,
+				"source_type": playlist.source_type,
+				"platform": playlist.platform,
+				"warning": playlist.warning,
+			}, "")
+		except Exception as exc:
+			log(f"url import failure: url='{self.playlist_url}' error={exc}")
+			self.sig_done.emit(False, {}, str(exc))
 
 def _legacy_cover_size(legacy_options: Dict | None, *, embed_art: bool) -> int:
 	if not embed_art:

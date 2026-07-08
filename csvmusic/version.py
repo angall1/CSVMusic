@@ -1,2 +1,2 @@
 # tabs only
-APP_VERSION = "1.4.9"
+APP_VERSION = "1.5.0"

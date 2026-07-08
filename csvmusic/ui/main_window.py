@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 	QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
 	QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox,
 	QRadioButton, QButtonGroup, QProgressBar, QToolButton, QSizePolicy, QFrame,
-	QComboBox, QSlider, QDialog
+	QComboBox, QSlider, QDialog, QInputDialog, QAbstractItemView
 )
 from PySide6.QtCore import Qt, QSignalBlocker, QUrl, Signal, QRect, QSize
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication, QDesktopServices, QPainter, QPen
@@ -18,7 +18,7 @@ from csvmusic.core.settings import load_settings, save_settings
 from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation
 from csvmusic.core.preflight import run_preflight_checks
 from csvmusic.core.paths import app_icon_path, resource_base
-from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker, AlternativesFetchWorker
+from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker, AlternativesFetchWorker, MusicURLImportWorker
 from csvmusic.core.browsers import list_profiles
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
@@ -212,6 +212,8 @@ class MainWindow(QMainWindow):
 		self.resize(max(min_w, init_w), max(min_h, init_h))
 
 		self.worker: PipelineWorker | None = None
+		self.spotify_worker: MusicURLImportWorker | None = None
+		self.load_url_worker: MusicURLImportWorker | None = None
 		self.tracks: list[dict] = []
 		self.total = 0
 		self.track_results: dict[int, dict] = {}
@@ -219,6 +221,10 @@ class MainWindow(QMainWindow):
 		self.resolve_items: dict[int, dict] = {}
 		self.manual_download_workers: dict[int, SingleDownloadWorker] = {}
 		self.last_playlist_name: str | None = None
+		self.source_tracks: list[dict] | None = None
+		self.source_description: str = ""
+		self.load_source_tracks: list[dict] | None = None
+		self.load_source_description: str = ""
 		self._allow_path_persist = False
 		self.cookie_check_worker: CookiesCheckWorker | None = None
 		icon_p = app_icon_path()
@@ -430,14 +436,6 @@ class MainWindow(QMainWindow):
 		# ── Top help row: link + utility toggles ──────────────────────────────────
 		top = QHBoxLayout()
 		top.setSpacing(self._px(6))
-		lbl_link = QLabel('<a href="https://www.tunemymusic.com/home">TuneMyMusic (export CSV)</a>')
-		link_font = QFont(retro_font_family, default_pt + 3, QFont.Bold)
-		lbl_link.setFont(link_font)
-		lbl_link.setOpenExternalLinks(False)
-		lbl_link.setTextInteractionFlags(Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
-		lbl_link.linkActivated.connect(self.on_open_external_link)
-		lbl_link.setStyleSheet("a { color: #000080; text-decoration: none; }")
-		top.addWidget(lbl_link)
 		btn_help = QToolButton()
 		btn_help.setText("TUTORIAL ▸")
 		btn_help.setCheckable(True)
@@ -446,7 +444,6 @@ class MainWindow(QMainWindow):
 		btn_help.setFont(btn_font)
 		self.btn_tutorial = btn_help
 		self._button_font = btn_font
-		top.addStretch(1)
 		top.addWidget(btn_help)
 		btn_load = QToolButton()
 		btn_load.setText("LOAD PLAYLIST ▸")
@@ -469,6 +466,7 @@ class MainWindow(QMainWindow):
 		btn_adv.setFont(btn_font)
 		self.btn_advanced = btn_adv
 		top.addWidget(btn_adv)
+		top.addStretch(1)
 		vl.addLayout(top)
 
 		self.help_panel = QFrame()
@@ -476,11 +474,11 @@ class MainWindow(QMainWindow):
 		help_layout = QVBoxLayout(self.help_panel)
 		help_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
 		help_layout.setSpacing(self._px(8))
-		help_heading = QLabel("Export one playlist as CSV, then import it here.")
+		help_heading = QLabel("Load a playlist link or CSV, then download its tracks.")
 		help_heading.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		help_heading.setWordWrap(True)
 		help_layout.addWidget(help_heading)
-		help_intro = QLabel("Follow these steps:")
+		help_intro = QLabel("Getting started:")
 		help_intro.setFont(QFont(retro_font_family, default_pt + 1))
 		help_layout.addWidget(help_intro)
 		help_steps_box = QFrame()
@@ -489,11 +487,11 @@ class MainWindow(QMainWindow):
 		steps_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
 		steps_layout.setSpacing(self._px(6))
 		for line in (
-			"1. Click the TuneMyMusic link above.",
-			"2. Select your music platform.",
-			"3. Paste your playlist URL.",
-			"4. Choose Export to file → CSV.",
-			"5. Save the CSV, then select it in CSVMusic.",
+			"1. Select Choose, then Music URL or CSV File.",
+			"2. Paste a public playlist or album link, or select an exported CSV.",
+			"3. Choose an output folder and review the tracks that were loaded.",
+			"4. Adjust format, quality, equalizer, or settings as needed.",
+			"5. Select Start to match and download the queued tracks.",
 		):
 			step_label = QLabel(line)
 			step_label.setFont(QFont(retro_font_family, default_pt + 1))
@@ -509,9 +507,11 @@ class MainWindow(QMainWindow):
 		tips_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
 		tips_layout.setSpacing(self._px(6))
 		for line in (
+			"• Direct links support Spotify, Apple Music, YouTube Music, YouTube, SoundCloud, Deezer, and Amazon Music.",
+			"• If a site cannot expose every track, CSVMusic displays a partial-import warning. Use TuneMyMusic from the Choose window to export a CSV fallback.",
 			"• Use EQUALIZER for volume matching, gain, bass, or treble changes.",
-			"• Use LOAD PLAYLIST when the folder already has songs and you only want the missing ones.",
-			"• LOAD PLAYLIST accepts the playlist CSV plus the output folder, playlist folder, or that playlist's .m3u/.m3u8 file.",
+			"• Use LOAD PLAYLIST when a playlist folder already contains some downloaded songs.",
+			"• LOAD PLAYLIST accepts the original playlist URL or CSV plus the output folder, playlist folder, or that playlist's .m3u/.m3u8 file.",
 		):
 			tip_label = QLabel(line)
 			tip_label.setFont(QFont(retro_font_family, default_pt + 1))
@@ -529,10 +529,13 @@ class MainWindow(QMainWindow):
 		load_layout = QVBoxLayout(self.load_panel)
 		load_layout.setContentsMargins(self._px(12), self._px(10), self._px(12), self._px(10))
 		load_layout.setSpacing(self._px(10))
-		load_heading = QLabel("Refresh an existing playlist folder")
+		load_heading = QLabel("Resume a partially downloaded playlist")
 		load_heading.setFont(QFont(retro_font_family, default_pt + 4, QFont.Bold))
 		load_layout.addWidget(load_heading)
-		load_note = QLabel("Point CSVMusic at the original playlist CSV and the folder that already contains the downloaded songs.")
+		load_note = QLabel(
+			"Load the original playlist from a public link or CSV, then select the location containing its existing songs. "
+			"CSVMusic will queue only the missing tracks."
+		)
 		load_note.setWordWrap(True)
 		load_note.setFont(QFont(retro_font_family, default_pt + 1))
 		load_layout.addWidget(load_note)
@@ -541,17 +544,18 @@ class MainWindow(QMainWindow):
 		csv_layout = QVBoxLayout(csv_section)
 		csv_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
 		csv_layout.setSpacing(self._px(6))
-		lbl_load_csv = QLabel("1. Playlist CSV")
+		lbl_load_csv = QLabel("1. Original playlist source")
 		lbl_load_csv.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		csv_layout.addWidget(lbl_load_csv)
 		self.ed_load_csv = QLineEdit()
-		self.ed_load_csv.setPlaceholderText("CSV for the playlist you want to refresh")
+		self.ed_load_csv.setPlaceholderText("Choose the playlist URL or CSV used for this folder")
 		self.ed_load_csv.setFont(QFont(retro_font_family, default_pt + 1))
 		csv_layout.addWidget(self.ed_load_csv)
 		load_row_csv = QHBoxLayout()
 		btn_load_csv = QPushButton("Browse…")
 		btn_load_csv.setFont(btn_font)
-		btn_load_csv.clicked.connect(self.on_browse_load_csv)
+		btn_load_csv.setText("Choose...")
+		btn_load_csv.clicked.connect(self.on_choose_load_playlist_source)
 		load_row_csv.addWidget(btn_load_csv)
 		load_row_csv.addStretch(1)
 		csv_layout.addLayout(load_row_csv)
@@ -561,7 +565,7 @@ class MainWindow(QMainWindow):
 		source_layout = QVBoxLayout(source_section)
 		source_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
 		source_layout.setSpacing(self._px(6))
-		lbl_load_source = QLabel("2. Current music location")
+		lbl_load_source = QLabel("2. Existing download location")
 		lbl_load_source.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		source_layout.addWidget(lbl_load_source)
 		self.ed_load_source = QLineEdit()
@@ -575,7 +579,10 @@ class MainWindow(QMainWindow):
 		load_row_source.addWidget(btn_load_source)
 		load_row_source.addStretch(1)
 		source_layout.addLayout(load_row_source)
-		load_hint = QLabel("Accepted locations: the output folder, the playlist folder, or that playlist's .m3u/.m3u8 file.")
+		load_hint = QLabel(
+			"Select the main output folder, the playlist's own folder, or its .m3u/.m3u8 file. "
+			"The playlist folder name must match the loaded playlist."
+		)
 		load_hint.setFont(QFont(retro_font_family, default_pt + 1))
 		load_hint.setWordWrap(True)
 		source_layout.addWidget(load_hint)
@@ -585,17 +592,19 @@ class MainWindow(QMainWindow):
 		action_layout = QVBoxLayout(action_section)
 		action_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
 		action_layout.setSpacing(self._px(6))
-		lbl_load_action = QLabel("3. Scan existing files")
+		lbl_load_action = QLabel("3. Find and queue missing tracks")
 		lbl_load_action.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		action_layout.addWidget(lbl_load_action)
 		load_action_row = QHBoxLayout()
-		self.btn_scan_existing = QPushButton("Load Existing Playlist")
+		self.btn_scan_existing = QPushButton("Scan Playlist Folder")
 		self.btn_scan_existing.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		self.btn_scan_existing.clicked.connect(self.on_load_playlist)
 		load_action_row.addWidget(self.btn_scan_existing)
 		load_action_row.addStretch(1)
 		action_layout.addLayout(load_action_row)
-		load_warning = QLabel("The selected CSV must match the playlist folder you are scanning.")
+		load_warning = QLabel(
+			"CSVMusic compares the loaded playlist with files in the selected folder using the current MP3/M4A format."
+		)
 		load_warning.setFont(QFont(retro_font_family, default_pt))
 		load_warning.setWordWrap(True)
 		action_layout.addWidget(load_warning)
@@ -916,10 +925,29 @@ class MainWindow(QMainWindow):
 			dialog.finished.connect(lambda _result=0, btn=button, text=label: self._on_top_dialog_closed(btn, text))
 
 		# ── CSV picker ─────────────────────────────────────────────────────────────
+		row_spotify = QHBoxLayout()
+		row_spotify.setSpacing(self._px(6))
+		self.ed_spotify_url = QLineEdit()
+		self.ed_spotify_url.setPlaceholderText("Paste a supported music playlist or album link")
+		self.ed_spotify_url.setFont(QFont(retro_font_family, default_pt + 1))
+		self.ed_spotify_url.returnPressed.connect(self.on_load_spotify_link)
+		btn_spotify = QPushButton("Load Link")
+		btn_spotify.clicked.connect(self.on_load_spotify_link)
+		btn_spotify.setFont(btn_font)
+		self.btn_spotify_load = btn_spotify
+		lbl_spotify = QLabel("Spotify:")
+		lbl_spotify.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		lbl_spotify.setFixedWidth(self._px(78))
+		row_spotify.addWidget(lbl_spotify)
+		row_spotify.addWidget(self.ed_spotify_url, 1)
+		row_spotify.addWidget(btn_spotify)
+		vl.addLayout(row_spotify)
+
 		row1 = QHBoxLayout()
 		row1.setSpacing(self._px(6))
-		self.ed_csv = QLineEdit(); self.ed_csv.setPlaceholderText("Path to one playlist CSV file")
+		self.ed_csv = QLineEdit(); self.ed_csv.setPlaceholderText("Path to one playlist CSV file (optional if Spotify link is loaded)")
 		self.ed_csv.setFont(QFont(retro_font_family, default_pt + 1))
+		self.ed_csv.textEdited.connect(self._clear_loaded_source)
 		btn_csv = QPushButton("Browse…"); btn_csv.clicked.connect(self.on_browse_csv)
 		btn_csv.setFont(btn_font)
 		lbl_csv = QLabel("CSV:")
@@ -927,6 +955,25 @@ class MainWindow(QMainWindow):
 		lbl_csv.setFixedWidth(self._px(78))
 		row1.addWidget(lbl_csv); row1.addWidget(self.ed_csv, 1); row1.addWidget(btn_csv)
 		vl.addLayout(row1)
+		for hidden_source_widget in (lbl_spotify, self.ed_spotify_url, btn_spotify, lbl_csv, self.ed_csv, btn_csv):
+			hidden_source_widget.setVisible(False)
+
+		row_source = QHBoxLayout()
+		row_source.setSpacing(self._px(6))
+		self.ed_source_summary = QLineEdit()
+		self.ed_source_summary.setReadOnly(True)
+		self.ed_source_summary.setPlaceholderText("Choose a music URL or playlist CSV")
+		self.ed_source_summary.setFont(QFont(retro_font_family, default_pt + 1))
+		self.btn_spotify_load = QPushButton("Choose...")
+		self.btn_spotify_load.clicked.connect(self.on_choose_source)
+		self.btn_spotify_load.setFont(btn_font)
+		lbl_source = QLabel("Source:")
+		lbl_source.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		lbl_source.setFixedWidth(self._px(78))
+		row_source.addWidget(lbl_source)
+		row_source.addWidget(self.ed_source_summary, 1)
+		row_source.addWidget(self.btn_spotify_load)
+		vl.addLayout(row_source)
 
 		# ── Output folder ─────────────────────────────────────────────────────────
 		row2 = QHBoxLayout()
@@ -1219,17 +1266,188 @@ class MainWindow(QMainWindow):
 		max_h = max(int(geo.height() * 0.95), 480)
 		return min(int(width), max_w), min(int(height), max_h)
 
+	def _clear_loaded_source(self) -> None:
+		self.source_tracks = None
+		self.source_description = ""
+		if hasattr(self, "ed_source_summary"):
+			self.ed_source_summary.clear()
+
+	def _set_source_summary(self, text: str) -> None:
+		if hasattr(self, "ed_source_summary"):
+			self.ed_source_summary.setText(text)
+
+	def on_choose_source(self) -> None:
+		msg = QMessageBox(self)
+		msg.setWindowTitle("Choose Playlist Source")
+		msg.setText("Choose how to load the playlist.")
+		link_btn = msg.addButton("Music URL", QMessageBox.AcceptRole)
+		csv_btn = msg.addButton("CSV File", QMessageBox.AcceptRole)
+		tune_btn = msg.addButton("TuneMyMusic", QMessageBox.ActionRole)
+		msg.addButton(QMessageBox.Cancel)
+		msg.exec()
+		clicked = msg.clickedButton()
+		if clicked == link_btn:
+			url, ok = QInputDialog.getText(
+				self,
+				"Music URL",
+				"Paste a public Spotify, Apple Music, YouTube Music, YouTube, SoundCloud, Deezer, or Amazon Music link:",
+				text=self.ed_spotify_url.text().strip(),
+			)
+			if ok and url.strip():
+				self.ed_spotify_url.setText(url.strip())
+				self.on_load_spotify_link()
+			return
+		if clicked == csv_btn:
+			self.on_browse_csv()
+			return
+		if clicked == tune_btn:
+			self.on_open_external_link("https://www.tunemymusic.com/home")
+
 	def on_browse_csv(self):
 		p, _ = QFileDialog.getOpenFileName(self, "Select CSV", "", "CSV files (*.csv);;All files (*)")
 		if p:
+			self.source_tracks = None
+			self.source_description = ""
 			self.ed_csv.setText(p)
+			self.ed_spotify_url.clear()
+			self._set_source_summary(f"CSV: {pathlib.Path(p).name}")
 			self.btn_clear.setEnabled(True)
 			self._allow_path_persist = True
 			self._persist_settings(include_paths=True)
 
+	def on_load_spotify_link(self):
+		url = self.ed_spotify_url.text().strip()
+		if not url:
+			QMessageBox.warning(
+				self,
+				"Missing Music Link",
+				"Paste a Spotify, Apple Music, YouTube Music, YouTube, SoundCloud, Deezer, or Amazon Music link first.",
+			)
+			return
+		if self.spotify_worker and self.spotify_worker.isRunning():
+			QMessageBox.information(self, "Music Import", "A music URL is already loading.")
+			return
+		self.btn_spotify_load.setEnabled(False)
+		self.btn_start.setEnabled(False)
+		self._set_source_summary("Loading music URL...")
+		self.lbl_log.setText("Loading music URL...")
+		self.spotify_worker = MusicURLImportWorker(url, self)
+		self.spotify_worker.sig_done.connect(self.on_spotify_loaded)
+		self.spotify_worker.start()
+
+	def on_spotify_loaded(self, ok: bool, payload: dict, error: str) -> None:
+		self.btn_spotify_load.setEnabled(True)
+		self.spotify_worker = None
+		if not ok:
+			self.btn_start.setEnabled(True)
+			self._set_source_summary("Music URL import failed")
+			QMessageBox.critical(self, "Music Import Error", error or "Could not load this music URL.")
+			self.lbl_log.setText(error or "Music URL import failed.")
+			return
+		tracks = payload.get("tracks") or []
+		if not tracks:
+			self.btn_start.setEnabled(True)
+			self._set_source_summary("Music URL contained no tracks")
+			QMessageBox.information(self, "No Tracks", "The music URL loaded, but no playable tracks were found.")
+			self.lbl_log.setText("Music URL contained no playable tracks.")
+			return
+		platform = str(payload.get("platform") or "Music")
+		name = str(payload.get("name") or "Imported Playlist")
+		source_type = str(payload.get("source_type") or "playlist")
+		source_label = "album" if source_type == "album" else "playlist"
+		self.source_tracks = tracks
+		self.source_description = f"{platform} {source_label}: {name}"
+		self._set_source_summary(f"{platform} {source_label}: {name}")
+		self.ed_csv.clear()
+		warning = str(payload.get("warning") or "")
+		if warning:
+			QMessageBox.warning(self, "Partial Music Import", warning)
+		try:
+			tracks, queued_rows = self._build_track_preview()
+		except ValueError as e:
+			QMessageBox.warning(self, "Missing Output", str(e))
+			self.lbl_log.setText(f"Loaded {platform} {source_label} '{name}'. Choose an output folder before starting.")
+			self.btn_start.setEnabled(True)
+			self.btn_clear.setEnabled(True)
+			return
+		except Exception as e:
+			self.source_tracks = None
+			self.source_description = ""
+			self._set_source_summary("Music URL import failed")
+			QMessageBox.critical(self, "Music Import Error", f"Failed to load music URL:\n{e}")
+			self.lbl_log.setText("Music URL import failed.")
+			self.btn_start.setEnabled(True)
+			return
+		self.btn_start.setEnabled(bool(queued_rows))
+		self.btn_stop.setEnabled(False)
+		self.btn_clear.setEnabled(True)
+		self.lbl_log.setText(
+			f"Loaded {platform} {source_label} '{name}' with {len(tracks)} track(s): "
+			f"{len(queued_rows)} queued, {len(tracks) - len(queued_rows)} already downloaded."
+		)
+
+	def on_choose_load_playlist_source(self) -> None:
+		msg = QMessageBox(self)
+		msg.setWindowTitle("Original Playlist Source")
+		msg.setText("How do you want to reload the original playlist?")
+		msg.setInformativeText("Use the same playlist that was originally downloaded into this folder.")
+		url_btn = msg.addButton("Music URL", QMessageBox.AcceptRole)
+		csv_btn = msg.addButton("CSV File", QMessageBox.AcceptRole)
+		msg.addButton(QMessageBox.Cancel)
+		msg.exec()
+		clicked = msg.clickedButton()
+		if clicked == url_btn:
+			url, ok = QInputDialog.getText(
+				self,
+				"Original Playlist URL",
+				"Paste the public playlist or album link:",
+			)
+			if ok and url.strip():
+				self.on_load_playlist_url(url.strip())
+			return
+		if clicked == csv_btn:
+			self.on_browse_load_csv()
+
+	def on_load_playlist_url(self, url: str) -> None:
+		if self.load_url_worker and self.load_url_worker.isRunning():
+			QMessageBox.information(self, "Playlist Import", "A playlist URL is already loading.")
+			return
+		self.load_source_tracks = None
+		self.load_source_description = ""
+		self.ed_load_csv.setText("Loading playlist URL...")
+		self.btn_scan_existing.setEnabled(False)
+		self.load_url_worker = MusicURLImportWorker(url, self)
+		self.load_url_worker.sig_done.connect(self.on_load_playlist_url_loaded)
+		self.load_url_worker.start()
+
+	def on_load_playlist_url_loaded(self, ok: bool, payload: dict, error: str) -> None:
+		self.load_url_worker = None
+		self.btn_scan_existing.setEnabled(True)
+		if not ok:
+			self.ed_load_csv.setText("Playlist URL import failed")
+			QMessageBox.critical(self, "Playlist Import Error", error or "Could not load this playlist URL.")
+			return
+		tracks = payload.get("tracks") or []
+		if not tracks:
+			self.ed_load_csv.setText("Playlist URL contained no tracks")
+			QMessageBox.information(self, "No Tracks", "The playlist URL loaded, but no playable tracks were found.")
+			return
+		platform = str(payload.get("platform") or "Music")
+		name = str(payload.get("name") or "Imported Playlist")
+		source_type = str(payload.get("source_type") or "playlist")
+		source_label = "album" if source_type == "album" else "playlist"
+		self.load_source_tracks = list(tracks)
+		self.load_source_description = f"{platform} {source_label}: {name}"
+		self.ed_load_csv.setText(self.load_source_description)
+		warning = str(payload.get("warning") or "")
+		if warning:
+			QMessageBox.warning(self, "Partial Playlist Import", warning)
+
 	def on_browse_load_csv(self):
 		p, _ = QFileDialog.getOpenFileName(self, "Select Playlist CSV", "", "CSV files (*.csv);;All files (*)")
 		if p:
+			self.load_source_tracks = None
+			self.load_source_description = ""
 			self.ed_load_csv.setText(p)
 			self._persist_settings(include_paths=True)
 
@@ -1313,6 +1531,8 @@ class MainWindow(QMainWindow):
 			)
 
 	def _collect_tracks_preview(self, csv_path: str | None = None) -> List[dict]:
+		if csv_path is None and self.source_tracks is not None:
+			return list(self.source_tracks)
 		target_csv = csv_path or self.ed_csv.text().strip()
 		df = load_csv(target_csv)
 		return tracks_from_csv(df, None)  # use entire CSV
@@ -1362,7 +1582,7 @@ class MainWindow(QMainWindow):
 	def _build_track_preview(self) -> tuple[list[dict], list[int]]:
 		csv_path = self.ed_csv.text().strip()
 		out_dir = self.ed_out.text().strip()
-		if not csv_path or not pathlib.Path(csv_path).exists():
+		if self.source_tracks is None and (not csv_path or not pathlib.Path(csv_path).exists()):
 			raise FileNotFoundError("Please choose a valid CSV file.")
 		if not out_dir:
 			raise ValueError("Please choose an output folder.")
@@ -1594,8 +1814,10 @@ class MainWindow(QMainWindow):
 			blocker_csv = QSignalBlocker(self.ed_csv)
 			self.ed_csv.setText(csv_path)
 			del blocker_csv
+			self._set_source_summary(f"CSV: {pathlib.Path(csv_path).name}")
 		else:
 			self.ed_csv.clear()
+			self._set_source_summary("")
 		if out_dir and pathlib.Path(out_dir).exists():
 			self._allow_path_persist = True
 			blocker_out = QSignalBlocker(self.ed_out)
@@ -1723,8 +1945,8 @@ class MainWindow(QMainWindow):
 	def on_start(self):
 		csv_path = self.ed_csv.text().strip()
 		out_dir = self.ed_out.text().strip()
-		if not csv_path or not pathlib.Path(csv_path).exists():
-			QMessageBox.warning(self, "Missing CSV", "Please choose a valid CSV file.")
+		if self.source_tracks is None and (not csv_path or not pathlib.Path(csv_path).exists()):
+			QMessageBox.warning(self, "Missing Playlist", "Paste and load a Spotify, Apple Music, or YouTube Music link, or choose a valid CSV file.")
 			return
 		if not out_dir:
 			QMessageBox.warning(self, "Missing Output", "Please choose an output folder.")
@@ -1753,10 +1975,10 @@ class MainWindow(QMainWindow):
 		try:
 			self.tracks, queued_rows = self._build_track_preview()
 		except Exception as e:
-			QMessageBox.critical(self, "CSV Error", f"Failed to parse CSV:\n{e}")
+			QMessageBox.critical(self, "Playlist Error", f"Failed to load playlist:\n{e}")
 			return
 		if not self.tracks:
-			QMessageBox.information(self, "No Tracks", "No tracks found in the CSV.")
+			QMessageBox.information(self, "No Tracks", "No tracks found in the playlist.")
 			return
 		if not queued_rows:
 			self.btn_clear.setEnabled(True)
@@ -1830,19 +2052,24 @@ class MainWindow(QMainWindow):
 			self.btn_clear.setEnabled(False)
 
 	def on_load_playlist(self):
+		self.source_tracks = None
+		self.source_description = ""
 		try:
 			load_csv = self.ed_load_csv.text().strip()
-			if not load_csv or not pathlib.Path(load_csv).exists():
-				raise FileNotFoundError("Choose the playlist CSV in the Load Playlist panel first.")
-			tracks = self._collect_tracks_preview(load_csv)
+			if self.load_source_tracks is not None:
+				tracks = list(self.load_source_tracks)
+			else:
+				if not load_csv or not pathlib.Path(load_csv).exists():
+					raise FileNotFoundError("Choose the original playlist URL or CSV in the Load Playlist panel first.")
+				tracks = self._collect_tracks_preview(load_csv)
 		except FileNotFoundError as e:
-			QMessageBox.warning(self, "Missing CSV", str(e))
+			QMessageBox.warning(self, "Missing Playlist Source", str(e))
 			return
 		except Exception as e:
-			QMessageBox.critical(self, "CSV Error", f"Failed to parse CSV:\n{e}")
+			QMessageBox.critical(self, "Playlist Source Error", f"Failed to load the playlist source:\n{e}")
 			return
 		if not tracks:
-			QMessageBox.information(self, "No Tracks", "No tracks found in the CSV.")
+			QMessageBox.information(self, "No Tracks", "No tracks were found in the playlist source.")
 			return
 		try:
 			selected_source = self.ed_load_source.text().strip()
@@ -1852,7 +2079,17 @@ class MainWindow(QMainWindow):
 		except ValueError as e:
 			QMessageBox.warning(self, "Invalid Playlist Selection", str(e))
 			return
-		self.ed_csv.setText(load_csv)
+		self.source_tracks = tracks if self.load_source_tracks is not None else None
+		if self.source_tracks is None:
+			self.ed_csv.setText(load_csv)
+		else:
+			self.ed_csv.clear()
+		self.ed_spotify_url.clear()
+		self.source_description = self.load_source_description
+		if self.source_tracks is None:
+			self._set_source_summary(f"CSV: {pathlib.Path(load_csv).name}")
+		else:
+			self._set_source_summary(self.load_source_description)
 		self.ed_out.setText(str(resolved_out_root))
 		try:
 			tracks, queued_rows = self._build_track_preview()
@@ -1933,6 +2170,10 @@ class MainWindow(QMainWindow):
 		self.total = 0
 		self.table.setRowCount(0)
 		self.ed_csv.clear()
+		self.ed_spotify_url.clear()
+		self.source_tracks = None
+		self.source_description = ""
+		self._set_source_summary("")
 		self.lbl_log.clear()
 		self.progress.setMaximum(0)
 		self.progress.setValue(0)
@@ -1964,6 +2205,10 @@ class MainWindow(QMainWindow):
 				self._set_row_highlight(row_idx, None)
 			item.setBackground(self.table.item(row_idx, 1).background())
 			self.table.setItem(row_idx, 2, item)
+			if status.startswith(("Downloading", "Retrying", "Tagging")):
+				active_item = self.table.item(row_idx, 1)
+				if active_item is not None:
+					self.table.scrollToItem(active_item, QAbstractItemView.PositionAtCenter)
 
 	def on_progress(self, processed: int, total: int):
 		self.progress.setMaximum(total)
