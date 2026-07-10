@@ -6,6 +6,8 @@ from urllib.parse import parse_qs, urlparse
 
 from ytmusicapi import YTMusic
 
+from csvmusic.core.import_warnings import incomplete_import_warning
+
 
 class YouTubeMusicImportError(Exception):
 	pass
@@ -37,10 +39,7 @@ def fetch_youtube_music_source(value: str, *, limit: int | None = None) -> YouTu
 		raise YouTubeMusicImportError("YouTube Music loaded the playlist, but no playable tracks were found.")
 	warning = None
 	if total_count and len(tracks) < total_count:
-		warning = (
-			f"YouTube Music only exposed {len(tracks)} of {total_count} playlist tracks. "
-			"Try making the playlist public or exporting it as CSV."
-		)
+		warning = incomplete_import_warning("YouTube Music", len(tracks), total_count)
 	return YouTubeMusicSource(id=playlist_id, name=name, tracks=tracks, total_count=total_count, warning=warning)
 
 

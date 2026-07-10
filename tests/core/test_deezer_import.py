@@ -37,3 +37,21 @@ def test_fetch_deezer_playlist_follows_track_pages():
 	assert source.name == "Road Trip"
 	assert source.total_count == 2
 	assert [track["title"] for track in source.tracks] == ["First", "Second"]
+
+
+class _PartialSession:
+	def get(self, url, timeout):
+		return _Response({
+			"title": "Partial Trip",
+			"tracks": {
+				"data": [{"id": 1, "title": "First", "artist": {"name": "One"}, "duration": 180}],
+				"total": 2,
+			},
+		})
+
+
+def test_fetch_deezer_warns_when_partial():
+	source = fetch_deezer_source("https://www.deezer.com/playlist/123", session=_PartialSession())
+
+	assert "Deezer only let CSVMusic load 1 of 2 playlist tracks from this link" in source.warning
+	assert "Export the playlist as a CSV file" in source.warning

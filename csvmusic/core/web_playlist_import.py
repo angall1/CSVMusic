@@ -6,6 +6,8 @@ from urllib.parse import parse_qs, urlparse
 
 from yt_dlp import YoutubeDL
 
+from csvmusic.core.import_warnings import incomplete_import_warning
+
 
 class WebPlaylistImportError(Exception):
 	pass
@@ -47,10 +49,7 @@ def fetch_web_playlist(value: str, platform: str) -> WebPlaylistSource:
 	total_count = _integer(info.get("playlist_count") or info.get("n_entries"))
 	warning = None
 	if total_count and len(tracks) < total_count:
-		warning = (
-			f"{platform} only exposed {len(tracks)} of {total_count} playlist tracks. "
-			"Make sure the playlist and all its tracks are public."
-		)
+		warning = incomplete_import_warning(platform, len(tracks), total_count)
 	return WebPlaylistSource(
 		id=_text(info.get("id")) or _source_id(url),
 		name=name,

@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from csvmusic.core.import_warnings import incomplete_import_warning
+
 
 class AmazonMusicImportError(Exception):
 	pass
@@ -74,7 +76,8 @@ def parse_amazon_music_page(page: str, source_id: str, source_type: str) -> Amaz
 	name = name or f"Amazon Music {source_type.title()}"
 	for track in tracks:
 		track["playlist"] = name
-	return AmazonMusicSource(source_id, name, tracks, len(tracks), source_type)
+	warning = incomplete_import_warning("Amazon Music", len(tracks), None, source_type)
+	return AmazonMusicSource(source_id, name, tracks, len(tracks), source_type, warning)
 
 
 def _json_objects(page: str) -> list[Any]:

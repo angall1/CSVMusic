@@ -136,7 +136,48 @@ def test_parse_spotify_playlist_page_warns_when_partial():
 
 	playlist = parse_spotify_playlist_page(_page(state), "37i9dQZF1DXcBWIGoYBM5M")
 
-	assert playlist.warning == "Spotify only exposed 1 of 2 playlist tracks publicly. Make sure the playlist is public, or export it as CSV for a complete import."
+	assert "Spotify only let CSVMusic load 1 of 2 playlist tracks from this link" in playlist.warning
+	assert "the missing tracks will be skipped" in playlist.warning
+	assert "Open TuneMyMusic from CSVMusic" in playlist.warning
+	assert "Export the playlist as a CSV file" in playlist.warning
+	assert "Back in CSVMusic, choose CSV File and load that CSV" in playlist.warning
+
+
+def test_parse_spotify_playlist_page_warns_when_exactly_100_tracks():
+	items = []
+	for index in range(100):
+		items.append({
+			"itemV2": {
+				"data": {
+					"__typename": "Track",
+					"name": f"Song {index}",
+					"uri": f"spotify:track:{index:016d}",
+					"artists": {"items": [{"profile": {"name": "Artist"}}]},
+				}
+			}
+		})
+	state = {
+		"entities": {
+			"items": {
+				"spotify:playlist:37i9dQZF1DXcBWIGoYBM5M": {
+					"__typename": "Playlist",
+					"id": "37i9dQZF1DXcBWIGoYBM5M",
+					"name": "Possibly Capped",
+					"content": {
+						"totalCount": 100,
+						"items": items,
+					},
+				}
+			}
+		}
+	}
+
+	playlist = parse_spotify_playlist_page(_page(state), "37i9dQZF1DXcBWIGoYBM5M")
+
+	assert len(playlist.tracks) == 100
+	assert "Spotify only let CSVMusic load 100 playlist tracks from this link" in playlist.warning
+	assert "If the original playlist has more tracks than this" in playlist.warning
+	assert "Open TuneMyMusic from CSVMusic" in playlist.warning
 
 
 def test_parse_spotify_album_page_tracks():
@@ -209,3 +250,29 @@ def test_parse_spotify_embed_album_page_tracks():
 	assert album.tracks[0]["title"] == "Science Is Fun"
 	assert album.tracks[0]["album"] == "Portal 2"
 	assert album.tracks[0]["cover_url"] == "cover.jpg"
+
+
+def test_parse_spotify_embed_playlist_warns_when_exactly_100_tracks():
+	entity = {
+		"type": "playlist",
+		"id": "37i9dQZF1DXcBWIGoYBM5M",
+		"title": "Possibly Capped",
+		"trackCount": 100,
+		"trackList": [
+			{
+				"uri": f"spotify:track:{index:016d}",
+				"title": f"Song {index}",
+				"subtitle": "Artist",
+				"duration": 180000,
+				"entityType": "track",
+			}
+			for index in range(100)
+		],
+	}
+
+	playlist = parse_spotify_embed_page(_embed_page(entity), SpotifySource("playlist", "37i9dQZF1DXcBWIGoYBM5M"))
+
+	assert len(playlist.tracks) == 100
+	assert "Spotify only let CSVMusic load 100 playlist tracks from this link" in playlist.warning
+	assert "If the original playlist has more tracks than this" in playlist.warning
+	assert "Open TuneMyMusic from CSVMusic" in playlist.warning

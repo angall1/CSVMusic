@@ -27,3 +27,5 @@ def test_parse_amazon_embedded_track_data():
 	assert source.name == "Favorites"
 	assert source.tracks[0]["title"] == "Song"
 	assert source.tracks[0]["duration_ms"] == 210000
+	assert "Amazon Music only let CSVMusic load 1 playlist tracks from this link" in source.warning
+	assert "If the original playlist has more tracks than this" in source.warning

@@ -23,32 +23,35 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.5.0
+https://github.com/angall1/CSVMusic/releases/tag/v1.5.1
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.5.0/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.5.0/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.5.0/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.5.0/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-linux.zip
 
 Unzip the file and run the app.
 
 ---
 
-# What's New In 1.5.0
+# What's New In 1.5.1
 
 - Paste playlist or album links directly into the app instead of exporting a CSV first.
 - Supported direct links include Spotify, Apple Music, YouTube Music, YouTube playlists, SoundCloud sets, Deezer, and Amazon Music pages when public track data is available.
 - Large Spotify, Deezer, YouTube, and YouTube Music playlists can load across multiple pages where the service exposes them.
-- The app now warns when a service appears to hold back tracks from a larger playlist.
+- The app now shows a generic **Playlist May Be Incomplete** warning when any direct URL import appears partial or cannot prove it found every track.
+- Incomplete-import warnings explain that missing tracks will be skipped and include TuneMyMusic CSV export steps.
+- Spotify playlist links may expose only the first 100 tracks publicly; use TuneMyMusic CSV export for complete large Spotify playlists.
+- The tutorial now includes a general TuneMyMusic CSV workflow with a direct TuneMyMusic link.
 - **Load Playlist** can resume from either the original link or a CSV export.
 - Downloads now auto-scroll to keep the active item in view.
 
@@ -62,12 +65,13 @@ Unzip the file and run the app.
 4. Choose an output folder.
 5. Click **Start**.
 
-CSV import is still available when a service link is unsupported or private:
+CSV import is still available when a service link is unsupported, private, incomplete, or when CSVMusic warns that a URL import may not contain every track:
 
 1. Click **Choose...** next to **Source**.
 2. Select **CSV File**.
 3. Use the TuneMyMusic link in that window if you need to create a CSV:
-   - Import your playlist from Spotify, Apple Music, or another service.
+   - Choose the original music service as the source.
+   - Paste the same playlist link, or connect the service if TuneMyMusic asks.
    - Export to file as a **CSV file**.
 4. Load the CSV, choose an output folder, and click **Start**.
 
@@ -104,6 +108,7 @@ Everything is ready to drop into iTunes, a phone, an MP3 player, or a local musi
 - Cookies are optional, but may help with age-restricted or sign-in-only videos.
 - Current YouTube extraction may require a supported JavaScript runtime. Packaged releases include the needed `yt-dlp` extras; source installs should use `pip install -e .` so `yt-dlp[default]` is installed. Node 22+ or Deno 2.3+ is recommended if YouTube reports player challenge errors.
 - Private playlists or pages that hide track data may not import directly. If that happens, export a CSV from TuneMyMusic and load that instead.
+- Large Spotify playlist links can be capped at 100 tracks by Spotify's public page data. If CSVMusic warns about this, open **Choose... > TuneMyMusic**, choose Spotify as the source, paste the same playlist link, export as CSV, then load that CSV through **Choose... > CSV File**.
 
 ---
 

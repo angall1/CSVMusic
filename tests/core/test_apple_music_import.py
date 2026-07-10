@@ -56,3 +56,27 @@ def test_parse_apple_music_server_data_tracks():
 	assert source.tracks[0]["artists"] == "Gracie Abrams"
 	assert source.tracks[0]["duration_ms"] == 190533
 	assert source.tracks[0]["cover_url"] == "https://example.com/1200x1200bb.jpg"
+
+
+def test_parse_apple_music_warns_when_partial():
+	server = {
+		"data": [{
+			"items": [{
+				"title": "One",
+				"artistName": "Artist",
+				"contentDescriptor": {"kind": "song", "identifiers": {"storeAdamID": "1"}},
+			}]
+		}]
+	}
+	ld = {"@type": "MusicPlaylist", "name": "Apple List", "numTracks": 2}
+	page = (
+		"<html>"
+		f"<script id=\"serialized-server-data\">{html.escape(json.dumps(server))}</script>"
+		f"<script type=\"application/ld+json\">{html.escape(json.dumps(ld))}</script>"
+		"</html>"
+	)
+
+	source = parse_apple_music_page(page, "https://music.apple.com/us/playlist/apple-list/pl.abc")
+
+	assert "Apple Music only let CSVMusic load 1 of 2 playlist tracks from this link" in source.warning
+	assert "Export the playlist as a CSV file" in source.warning

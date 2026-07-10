@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from csvmusic.core.import_warnings import incomplete_import_warning
+
 
 class DeezerImportError(Exception):
 	pass
@@ -49,7 +51,7 @@ def fetch_deezer_source(value: str, *, timeout: int = 20, session: requests.Sess
 	total_count = _integer(page.get("total")) or len(items)
 	warning = None
 	if len(tracks) < total_count:
-		warning = f"Deezer returned {len(tracks)} of {total_count} tracks. Some tracks may be unavailable in your region."
+		warning = incomplete_import_warning("Deezer", len(tracks), total_count)
 	return DeezerSource(source_id, name, tracks, total_count, source_type, warning)
 
 

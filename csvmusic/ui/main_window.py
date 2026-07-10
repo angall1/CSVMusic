@@ -498,6 +498,34 @@ class MainWindow(QMainWindow):
 			step_label.setWordWrap(True)
 			steps_layout.addWidget(step_label)
 		help_layout.addWidget(help_steps_box)
+		help_tunemymusic_heading = QLabel("Using TuneMyMusic CSV")
+		help_tunemymusic_heading.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		help_layout.addWidget(help_tunemymusic_heading)
+		help_tunemymusic_box = QFrame()
+		help_tunemymusic_box.setFrameShape(QFrame.StyledPanel)
+		tunemymusic_layout = QVBoxLayout(help_tunemymusic_box)
+		tunemymusic_layout.setContentsMargins(self._px(10), self._px(8), self._px(10), self._px(8))
+		tunemymusic_layout.setSpacing(self._px(6))
+		for line in (
+			"Use TuneMyMusic when direct URL import is incomplete, unsupported, private, or when you want the most reliable full playlist list.",
+			"1. Open TuneMyMusic.",
+			"2. Choose the service your playlist comes from, such as Spotify, Apple Music, YouTube Music, Deezer, or another supported source.",
+			"3. Paste the playlist link or connect the service if TuneMyMusic asks for access.",
+			"4. Choose Export to File, then export as CSV.",
+			"5. Back in CSVMusic, select Choose > CSV File and load the exported CSV.",
+			"Spotify note: public Spotify playlist links often expose only the first 100 tracks to CSVMusic. If you see that warning, use this CSV workflow for the full playlist.",
+		):
+			tunemymusic_label = QLabel(line)
+			tunemymusic_label.setFont(QFont(retro_font_family, default_pt + 1))
+			tunemymusic_label.setWordWrap(True)
+			tunemymusic_layout.addWidget(tunemymusic_label)
+		tune_link = QLabel('<a href="https://www.tunemymusic.com/">Open TuneMyMusic</a>')
+		tune_link.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		tune_link.setTextFormat(Qt.RichText)
+		tune_link.setTextInteractionFlags(Qt.TextBrowserInteraction)
+		tune_link.setOpenExternalLinks(True)
+		tunemymusic_layout.addWidget(tune_link)
+		help_layout.addWidget(help_tunemymusic_box)
 		help_tip_heading = QLabel("Tips")
 		help_tip_heading.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		help_layout.addWidget(help_tip_heading)
@@ -508,7 +536,7 @@ class MainWindow(QMainWindow):
 		tips_layout.setSpacing(self._px(6))
 		for line in (
 			"• Direct links support Spotify, Apple Music, YouTube Music, YouTube, SoundCloud, Deezer, and Amazon Music.",
-			"• If a site cannot expose every track, CSVMusic displays a partial-import warning. Use TuneMyMusic from the Choose window to export a CSV fallback.",
+			"• If any site cannot expose every track, CSVMusic displays a partial-import warning. CSV import is the reliable fallback.",
 			"• Use EQUALIZER for volume matching, gain, bass, or treble changes.",
 			"• Use LOAD PLAYLIST when a playlist folder already contains some downloaded songs.",
 			"• LOAD PLAYLIST accepts the original playlist URL or CSV plus the output folder, playlist folder, or that playlist's .m3u/.m3u8 file.",
@@ -1361,7 +1389,7 @@ class MainWindow(QMainWindow):
 		self.ed_csv.clear()
 		warning = str(payload.get("warning") or "")
 		if warning:
-			QMessageBox.warning(self, "Partial Music Import", warning)
+			QMessageBox.warning(self, "Playlist May Be Incomplete", warning)
 		try:
 			tracks, queued_rows = self._build_track_preview()
 		except ValueError as e:
@@ -1441,7 +1469,7 @@ class MainWindow(QMainWindow):
 		self.ed_load_csv.setText(self.load_source_description)
 		warning = str(payload.get("warning") or "")
 		if warning:
-			QMessageBox.warning(self, "Partial Playlist Import", warning)
+			QMessageBox.warning(self, "Playlist May Be Incomplete", warning)
 
 	def on_browse_load_csv(self):
 		p, _ = QFileDialog.getOpenFileName(self, "Select Playlist CSV", "", "CSV files (*.csv);;All files (*)")

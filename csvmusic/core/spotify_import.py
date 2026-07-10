@@ -10,6 +10,8 @@ import time
 
 import requests
 
+from csvmusic.core.import_warnings import incomplete_import_warning
+
 
 class SpotifyImportError(Exception):
 	"""Base class for user-facing Spotify import errors."""
@@ -162,10 +164,9 @@ def parse_spotify_embed_page(html_text: str, source: SpotifySource) -> SpotifyPl
 	warning = None
 	if total_count and len(tracks) < total_count:
 		label = "album" if source.type == "album" else "playlist"
-		warning = (
-			f"Spotify only exposed {len(tracks)} of {total_count} {label} tracks publicly. "
-			"Export it as CSV for a complete import."
-		)
+		warning = incomplete_import_warning("Spotify", len(tracks), total_count, label)
+	elif source.type == "playlist" and len(tracks) == 100:
+		warning = incomplete_import_warning("Spotify", len(tracks), total_count, "playlist")
 	return SpotifyPlaylist(id=source.id, name=name, tracks=tracks, total_count=total_count, source_type=source.type, warning=warning)
 
 
@@ -182,10 +183,9 @@ def _parse_playlist_state(state: dict[str, Any], playlist_id: str) -> SpotifyPla
 		raise SpotifyImportError("Spotify loaded the playlist, but no playable tracks were found.")
 	warning = None
 	if total_count and len(tracks) < total_count:
-		warning = (
-			f"Spotify only exposed {len(tracks)} of {total_count} playlist tracks publicly. "
-			"Make sure the playlist is public, or export it as CSV for a complete import."
-		)
+		warning = incomplete_import_warning("Spotify", len(tracks), total_count, "playlist")
+	elif len(tracks) == 100:
+		warning = incomplete_import_warning("Spotify", len(tracks), total_count, "playlist")
 	return SpotifyPlaylist(id=playlist_id, name=name, tracks=tracks, total_count=total_count, source_type="playlist", warning=warning)
 
 
@@ -202,10 +202,7 @@ def _parse_album_state(state: dict[str, Any], album_id: str) -> SpotifyPlaylist:
 		raise SpotifyImportError("Spotify loaded the album, but no playable tracks were found.")
 	warning = None
 	if total_count and len(tracks) < total_count:
-		warning = (
-			f"Spotify only exposed {len(tracks)} of {total_count} album tracks publicly. "
-			"Try a Spotify playlist link or CSV export for a complete import."
-		)
+		warning = incomplete_import_warning("Spotify", len(tracks), total_count, "album")
 	return SpotifyPlaylist(id=album_id, name=name, tracks=tracks, total_count=total_count, source_type="album", warning=warning)
 
 

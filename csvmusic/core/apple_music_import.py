@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from csvmusic.core.import_warnings import incomplete_import_warning
+
 
 class AppleMusicImportError(Exception):
 	pass
@@ -59,10 +61,7 @@ def parse_apple_music_page(html_text: str, url: str = "") -> AppleMusicSource:
 		raise AppleMusicImportError("Apple Music loaded the page, but no playable tracks were found.")
 	warning = None
 	if total_count and len(tracks) < total_count:
-		warning = (
-			f"Apple Music only exposed {len(tracks)} of {total_count} tracks publicly. "
-			"Try CSV export for a complete import."
-		)
+		warning = incomplete_import_warning("Apple Music", len(tracks), total_count)
 	return AppleMusicSource(id=_apple_source_id(url), name=name, tracks=tracks, total_count=total_count, warning=warning)
 
 
