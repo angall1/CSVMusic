@@ -579,6 +579,8 @@ def tag_file(path: pathlib.Path, meta: Dict, cover_bytes: Optional[bytes], *, co
 		audio["artist"] = meta.get("artists","")
 		audio["album"] = meta.get("album","")
 		if meta.get("year"): audio["date"] = str(meta["year"])
+		if meta.get("track_no"): audio["tracknumber"] = str(meta["track_no"])
+		if meta.get("disc_no"): audio["discnumber"] = str(meta["disc_no"])
 		audio.save()
 		id3 = ID3(path)
 		if cover_bytes:
@@ -591,6 +593,8 @@ def tag_file(path: pathlib.Path, meta: Dict, cover_bytes: Optional[bytes], *, co
 		mp4["\xa9ART"] = [meta.get("artists","")]
 		mp4["\xa9alb"] = [meta.get("album","")]
 		if meta.get("year"): mp4["\xa9day"] = [str(meta["year"])]
+		if meta.get("track_no"): mp4["trkn"] = [(int(meta["track_no"]), 0)]
+		if meta.get("disc_no"): mp4["disk"] = [(int(meta["disc_no"]), 0)]
 		if cover_bytes:
 			mp4["covr"] = [MP4Cover(cover_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
 		mp4.save()

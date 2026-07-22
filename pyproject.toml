@@ -17,6 +17,9 @@ dependencies = [
 	"pandas>=2.2.0",
 ]
 
+[project.scripts]
+csvmusic = "csvmusic.app:main"
+
 [tool.setuptools]
 package-dir = {"" = "."}
 include-package-data = true

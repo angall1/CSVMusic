@@ -39,7 +39,28 @@ https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-macos-inte
 ### Linux
 https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-linux.zip
 
-Unzip the file and run the app.
+Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
+
+```bash
+chmod +x CSVMusic yt-dlp
+./CSVMusic
+```
+
+If launch fails, copy the terminal output along with `uname -m` and the contents of `/etc/os-release` when reporting the problem.
+
+---
+
+# Python Wheel / Source Install
+
+Install the wheel with `python -m pip install CSVMusic-*.whl`, or install a source checkout with `python -m pip install -e .`.
+Then launch CSVMusic with either:
+
+```text
+csvmusic
+python -m csvmusic
+```
+
+Python installations still require a supported graphical desktop environment for the Qt interface. Android, Andronix, and other phone-hosted Linux environments are not currently supported or tested.
 
 ---
 

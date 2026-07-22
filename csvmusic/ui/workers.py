@@ -293,6 +293,9 @@ class PipelineWorker(QThread):
 			done_tracks: List[Dict] = []
 			failed_tracks: List[Dict] = []
 			skipped_tracks: List[Dict] = []
+			consecutive_search_errors = 0
+			consecutive_empty_searches = 0
+			search_abort_reason: str | None = None
 			processed = 0
 			for idx, track in enumerate(tracks):
 				row_idx = self.row_indices[idx] if idx < len(self.row_indices) else idx
@@ -309,6 +312,15 @@ class PipelineWorker(QThread):
 					match, confidence, options = find_best(yt, t)
 				except Exception as exc:
 					search_error = str(exc)
+				if search_error:
+					consecutive_search_errors += 1
+					consecutive_empty_searches = 0
+				elif not options:
+					consecutive_empty_searches += 1
+					consecutive_search_errors = 0
+				else:
+					consecutive_search_errors = 0
+					consecutive_empty_searches = 0
 				payload = {
 					"track": t,
 					"options": options,
@@ -334,18 +346,33 @@ class PipelineWorker(QThread):
 				if match is None:
 					if search_error:
 						log(f"match skip: query='{t['title']} {t['artists']}' error={search_error}")
+						status = f"Search failed: {search_error[:100]}"
+					elif not options:
+						status = "Skipped (no search results)"
 					else:
 						log(f"match skip: query='{t['title']} {t['artists']}' no candidate >= threshold (confidence={confidence:.2f})")
+						status = "Skipped (low confidence)"
 					payload["skipped"] = True
 					payload["error"] = search_error
-					reason = search_error or "No confident match"
+					reason = search_error or ("No search results" if not options else "No confident match")
 					skipped_tracks.append({"track": t, "reason": reason, "options": options})
-					self.sig_row_status.emit(row_idx, "Skipped (no good match)")
+					self.sig_row_status.emit(row_idx, status)
 					processed += 1
 					self.sig_progress.emit(processed, total)
 					self.sig_track_result.emit(row_idx, payload)
 					skipped_count += 1
 					self.sig_match_stats.emit(matched, skipped_count)
+					if consecutive_search_errors >= 3:
+						search_abort_reason = f"YouTube Music search failed repeatedly: {search_error}"
+						self.sig_warning.emit(search_abort_reason)
+						break
+					if consecutive_empty_searches >= 5:
+						search_abort_reason = (
+							"YouTube Music returned no results for five tracks in a row. "
+							"Check the network connection or try again later."
+						)
+						self.sig_warning.emit(search_abort_reason)
+						break
 					if not self._stop and idx < total - 1:
 						time.sleep(self._track_pause_s())
 					continue
@@ -457,6 +484,8 @@ class PipelineWorker(QThread):
 			msg = "All tasks finished."
 			if self._stop:
 				msg = "Stopped (partial results saved)."
+			elif search_abort_reason:
+				msg = f"Stopped because search is unavailable. {search_abort_reason}"
 			self.sig_done.emit(msg, done_tracks, skipped_tracks, failed_tracks)
 		except Exception:
 			self.sig_done.emit("Fatal error:\n" + traceback.format_exc(), [], [], [])

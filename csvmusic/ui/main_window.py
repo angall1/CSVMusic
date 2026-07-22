@@ -17,6 +17,8 @@ from csvmusic.core.csv_import import load_csv, tracks_from_csv
 from csvmusic.core.settings import load_settings, save_settings
 from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation
 from csvmusic.core.preflight import run_preflight_checks
+from csvmusic.core.output_folder import OutputFolderError, validate_output_folder
+from csvmusic.core.track_output import duplicate_output_rows, expected_track_path
 from csvmusic.core.paths import app_icon_path, resource_base
 from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker, AlternativesFetchWorker, MusicURLImportWorker
 from csvmusic.core.browsers import list_profiles
@@ -217,6 +219,9 @@ class MainWindow(QMainWindow):
 		self.tracks: list[dict] = []
 		self.total = 0
 		self.track_results: dict[int, dict] = {}
+		self.duplicate_rows_by_primary: dict[int, list[int]] = {}
+		self.preview_duplicate_count = 0
+		self.preview_existing_count = 0
 		self.action_buttons: dict[int, QPushButton] = {}
 		self.resolve_items: dict[int, dict] = {}
 		self.manual_download_workers: dict[int, SingleDownloadWorker] = {}
@@ -1603,9 +1608,7 @@ class MainWindow(QMainWindow):
 		raise ValueError("Load Playlist expects a folder or an .m3u/.m3u8 playlist file.")
 
 	def _expected_track_path(self, track: dict, out_root: pathlib.Path, fmt: str) -> pathlib.Path:
-		playlist_name = track.get("playlist") or "Playlist"
-		base = f"{track.get('artists','')} - {track.get('title','')}"
-		return out_root / sanitize_name(playlist_name) / f"{sanitize_name(base)}.{fmt}"
+		return expected_track_path(track, out_root, fmt)
 
 	def _build_track_preview(self) -> tuple[list[dict], list[int]]:
 		csv_path = self.ed_csv.text().strip()
@@ -1619,6 +1622,12 @@ class MainWindow(QMainWindow):
 			return [], []
 		fmt = "m4a" if self.rb_m4a.isChecked() else "mp3"
 		out_root = pathlib.Path(out_dir)
+		duplicate_rows = duplicate_output_rows(tracks, out_root, fmt)
+		self.preview_duplicate_count = len(duplicate_rows)
+		self.preview_existing_count = 0
+		self.duplicate_rows_by_primary = {}
+		for duplicate_row, primary_row in duplicate_rows.items():
+			self.duplicate_rows_by_primary.setdefault(primary_row, []).append(duplicate_row)
 		self.tracks = tracks
 		self.track_results = {}
 		self.action_buttons = {}
@@ -1638,7 +1647,29 @@ class MainWindow(QMainWindow):
 			self.table.setCellWidget(i, 3, btn_alt)
 			self.action_buttons[i] = btn_alt
 			expected_path = self._expected_track_path(track, out_root, fmt)
-			if expected_path.exists():
+			primary_row = duplicate_rows.get(i)
+			if primary_row is not None:
+				primary_path = self._expected_track_path(tracks[primary_row], out_root, fmt)
+				is_existing = primary_path.exists()
+				self.track_results[i] = {
+					"track": track,
+					"options": [],
+					"match": None,
+					"confidence": 1.0 if is_existing else 0.0,
+					"skipped": False,
+					"error": None,
+					"playlist_name": track.get("playlist") or "Playlist",
+					"file_path": str(primary_path) if is_existing else None,
+					"downloaded": is_existing,
+					"existing": is_existing,
+					"duplicate_entry": True,
+					"duplicate_of": primary_row,
+					"cover_bytes": None,
+				}
+				self.on_row_status(i, f"Duplicate entry → same file as row {primary_row + 1}")
+				btn_alt.setEnabled(is_existing)
+			elif expected_path.exists():
+				self.preview_existing_count += 1
 				self.track_results[i] = {
 					"track": track,
 					"options": [],
@@ -1979,6 +2010,12 @@ class MainWindow(QMainWindow):
 		if not out_dir:
 			QMessageBox.warning(self, "Missing Output", "Please choose an output folder.")
 			return
+		try:
+			validate_output_folder(out_dir)
+		except OutputFolderError as exc:
+			QMessageBox.critical(self, "Output Folder Error", str(exc))
+			self.lbl_log.setText("The output folder is not safe or writable. Choose another folder.")
+			return
 		yt_override = self._yt_dlp_override()
 		ff_override = self._ffmpeg_override()
 		result = run_preflight_checks(yt_override, ff_override, skip_network=False)
@@ -2040,7 +2077,12 @@ class MainWindow(QMainWindow):
 		self.btn_start.setEnabled(False)
 		self.btn_stop.setEnabled(True)
 		self.btn_clear.setEnabled(False)
-		self.lbl_log.setText(f"Starting… {len(queued_rows)} new track(s) queued, {len(self.tracks) - len(queued_rows)} already in folder.")
+		entry_word = "entry" if self.preview_duplicate_count == 1 else "entries"
+		self.lbl_log.setText(
+			f"Starting… {len(queued_rows)} unique track(s) queued, "
+			f"{self.preview_existing_count} already in folder, "
+			f"{self.preview_duplicate_count} duplicate playlist {entry_word}."
+		)
 
 		# playlist=None → worker picks a default name internally
 		self.worker = PipelineWorker(
@@ -2131,7 +2173,9 @@ class MainWindow(QMainWindow):
 		self.btn_stop.setEnabled(False)
 		self.btn_clear.setEnabled(True)
 		self.lbl_log.setText(
-			f"Loaded {len(tracks)} track(s): {len(queued_rows)} queued, {len(tracks) - len(queued_rows)} already downloaded."
+			f"Loaded {len(tracks)} playlist entries: {len(queued_rows)} unique track(s) queued, "
+			f"{self.preview_existing_count} already downloaded, "
+			f"{self.preview_duplicate_count} duplicate entries."
 		)
 		self._allow_path_persist = True
 		self._persist_settings(include_paths=True)
@@ -2148,6 +2192,23 @@ class MainWindow(QMainWindow):
 		playlist_name = payload.get("playlist_name")
 		if playlist_name:
 			self.last_playlist_name = playlist_name
+		for duplicate_row in self.duplicate_rows_by_primary.get(row_idx, []):
+			duplicate_track = self.tracks[duplicate_row]
+			duplicate_payload = dict(payload)
+			duplicate_payload["track"] = duplicate_track
+			duplicate_payload["duplicate_entry"] = True
+			duplicate_payload["duplicate_of"] = row_idx
+			self.track_results[duplicate_row] = duplicate_payload
+			if payload.get("downloaded"):
+				self.on_row_status(duplicate_row, f"Duplicate entry → same file as row {row_idx + 1}")
+			elif payload.get("skipped"):
+				self.on_row_status(duplicate_row, f"Duplicate entry → row {row_idx + 1} was skipped")
+			else:
+				self.on_row_status(duplicate_row, f"Duplicate entry → row {row_idx + 1} failed")
+			button = self.action_buttons.get(duplicate_row)
+			if button:
+				button.setEnabled(True)
+			self._update_track_icon(duplicate_row, payload.get("cover_bytes"))
 
 	def _update_track_icon(self, row_idx: int, cover_bytes: bytes | None) -> None:
 		if not (0 <= row_idx < self.table.rowCount()):
@@ -2219,13 +2280,13 @@ class MainWindow(QMainWindow):
 	def on_row_status(self, row_idx: int, status: str):
 		if 0 <= row_idx < self.table.rowCount():
 			item = QTableWidgetItem(status)
-			if status.startswith("Fail"):
+			if status.startswith(("Fail", "Search failed")):
 				self._set_row_highlight(row_idx, RED)
 			elif status.startswith("Skipped"):
 				self._set_row_highlight(row_idx, YELLOW)
 			elif status.startswith("Low confidence"):
 				self._set_row_highlight(row_idx, YELLOW)
-			elif status.startswith("Done") or status.startswith("Already downloaded"):
+			elif status.startswith(("Done", "Already downloaded", "Duplicate entry")):
 				self._set_row_highlight(row_idx, GREEN)
 			elif status.startswith("Queued"):
 				self._set_row_highlight(row_idx, YELLOW)
@@ -2257,13 +2318,18 @@ class MainWindow(QMainWindow):
 			self.worker = None
 		self._rewrite_playlists()
 		requested = self.total or (len(matched) + len(skipped) + len(failed))
-		already_downloaded = sum(1 for info in self.track_results.values() if info.get("existing"))
-		processed = len(matched) + len(skipped) + len(failed) + already_downloaded
+		already_downloaded = sum(
+			1 for info in self.track_results.values()
+			if info.get("existing") and not info.get("duplicate_entry")
+		)
+		duplicate_entries = sum(1 for info in self.track_results.values() if info.get("duplicate_entry"))
+		processed = len(matched) + len(skipped) + len(failed) + already_downloaded + duplicate_entries
 		pending = max(requested - processed, 0)
 		lines = [
 			f"Tracks requested: {requested}",
 			f"Downloaded: {len(matched)}",
 			f"Already in folder: {already_downloaded}",
+			f"Duplicate playlist entries: {duplicate_entries}",
 			f"Skipped (no confident match): {len(skipped)}",
 			f"Failed (errors): {len(failed)}"
 		]

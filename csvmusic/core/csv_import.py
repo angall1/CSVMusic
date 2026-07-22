@@ -15,6 +15,10 @@ _CANON = {
 	"type": "Type",
 	"duration ms": "Duration (ms)",
 	"duration (ms)": "Duration (ms)",
+	"track number": "Track number",
+	"track no": "Track number",
+	"disc number": "Disc number",
+	"disc no": "Disc number",
 }
 
 # Minimum set required to build track entries. External IDs and ISRC are useful
@@ -93,6 +97,9 @@ def load_csv(path: Union[str, pathlib.Path]) -> pd.DataFrame:
 	if "Duration (ms)" in df.columns:
 		# Best-effort numeric
 		df["Duration (ms)"] = pd.to_numeric(df["Duration (ms)"], errors="coerce").fillna(0).astype(int)
+	for column in ("Track number", "Disc number"):
+		if column in df.columns:
+			df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
 
 	playlists = list_playlists(df)
 	if len(playlists) > 1:
@@ -136,7 +143,7 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 	work = work[mask]
 
 	out: List[Dict] = []
-	for _, r in work.iterrows():
+	for position, (_, r) in enumerate(work.iterrows(), start=1):
 		isrc = str(r.get("ISRC", "")).strip()
 		spid = str(r.get("Spotify - id", "")).strip()
 		# duration if present
@@ -148,6 +155,8 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 		else:
 			dur_ms = 0
 
+		track_no = int(r.get("Track number", 0) or 0) if "Track number" in work.columns else 0
+		disc_no = int(r.get("Disc number", 0) or 0) if "Disc number" in work.columns else 0
 		out.append({
 			"title": str(r.get("Track name", "")).strip(),
 			"artists": str(r.get("Artist name", "")).strip(),
@@ -158,7 +167,7 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 			"duration_ms": dur_ms,
 			"year": None,          # CSV doesn't include year
 			"cover_url": None,     # CSV doesn't include cover
-			"track_no": 0,
-			"disc_no": 1,
+			"track_no": track_no or position,
+			"disc_no": disc_no or 1,
 		})
 	return out

@@ -63,3 +63,49 @@ def test_cleanup_outputs_removes_decomposed_accents(tmp_path):
 	downloader._cleanup_outputs(tmp_path, base)
 
 	assert not path.exists()
+
+
+def test_tag_file_writes_mp3_track_and_disc_numbers(monkeypatch, tmp_path):
+	tags = {}
+
+	class FakeEasyID3(dict):
+		def save(self, *_args, **_kwargs):
+			pass
+
+	class FakeID3:
+		def __init__(self, _path):
+			pass
+
+	def fake_easy_id3(_path=None):
+		return tags_object
+
+	tags_object = FakeEasyID3()
+	monkeypatch.setattr(downloader, "EasyID3", fake_easy_id3)
+	monkeypatch.setattr(downloader, "ID3", FakeID3)
+
+	downloader.tag_file(
+		tmp_path / "track.mp3",
+		{"title": "Song", "artists": "Artist", "album": "Album", "track_no": 7, "disc_no": 2},
+		None,
+	)
+
+	assert tags_object["tracknumber"] == "7"
+	assert tags_object["discnumber"] == "2"
+
+
+def test_tag_file_writes_m4a_track_and_disc_numbers(monkeypatch, tmp_path):
+	class FakeMP4(dict):
+		def save(self):
+			pass
+
+	tags = FakeMP4()
+	monkeypatch.setattr(downloader, "MP4", lambda _path: tags)
+
+	downloader.tag_file(
+		tmp_path / "track.m4a",
+		{"title": "Song", "artists": "Artist", "album": "Album", "track_no": 7, "disc_no": 2},
+		None,
+	)
+
+	assert tags["trkn"] == [(7, 0)]
+	assert tags["disk"] == [(2, 0)]
