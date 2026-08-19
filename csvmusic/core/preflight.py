@@ -152,7 +152,7 @@ def _check_network(warnings: List[str], details: Dict[str, str]) -> None:
 		warnings.append(f"Could not reach {url}: {exc}")
 
 
-def _check_js_runtime(warnings: List[str], details: Dict[str, str], yt_dlp_override: str | None = None) -> None:
+def _check_js_runtime(errors: List[str], warnings: List[str], details: Dict[str, str], yt_dlp_override: str | None = None) -> None:
 	try:
 		yt_bin = yt_dlp_override or ytdlp_path()
 	except Exception:
@@ -160,19 +160,19 @@ def _check_js_runtime(warnings: List[str], details: Dict[str, str], yt_dlp_overr
 	runtimes = detect_js_runtimes()
 	supported = [rt for rt in runtimes if rt.supported]
 	if supported:
-		details["JavaScript runtime"] = "; ".join(f"{rt.name} {rt.version}" for rt in supported)
+		details["JavaScript runtime"] = "; ".join(f"{rt.name} {rt.version} ({rt.path})" for rt in supported)
 	else:
 		if runtimes:
 			details["JavaScript runtime"] = "; ".join(f"{rt.name} {rt.version} ({rt.reason})" for rt in runtimes)
 		else:
 			details["JavaScript runtime"] = "not found"
-		warnings.append(
-			"YouTube may fail with player challenge errors because no supported JavaScript runtime was found. "
-			"Install Deno 2.3+ (recommended) or Node 22+."
+		errors.append(
+			"YouTube downloads require a JavaScript runtime, but no supported runtime was found. "
+			"This CSVMusic package should include Deno 2.3+; reinstall the latest release or configure DENO_BIN."
 		)
 		return
-	if not any(rt.yt_dlp_name == "deno" for rt in supported) and not ytdlp_supports_js_runtimes(yt_bin):
-		warnings.append(
+	if not ytdlp_supports_js_runtimes(yt_bin):
+		errors.append(
 			"A supported JavaScript runtime is installed, but this yt-dlp version is too old for CSVMusic to enable it automatically. "
 			"Update yt-dlp with the default extras."
 		)
@@ -184,7 +184,7 @@ def run_preflight_checks(yt_dlp_override: str | None = None, ffmpeg_override: st
 	details: Dict[str, str] = {}
 	_check_yt_dlp(errors, warnings, details, yt_dlp_override)
 	_check_ffmpeg(errors, warnings, details, ffmpeg_override)
-	_check_js_runtime(warnings, details, yt_dlp_override)
+	_check_js_runtime(errors, warnings, details, yt_dlp_override)
 	if not skip_network:
 		_check_network(warnings, details)
 	return PreflightCheckResult(errors=errors, warnings=warnings, details=details)

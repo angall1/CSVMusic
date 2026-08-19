@@ -8,7 +8,7 @@ def test_ytdlp_js_runtime_args_enable_supported_node():
 
 	with patch("csvmusic.core.js_runtime.ytdlp_supports_js_runtimes", return_value=True), \
 			patch("csvmusic.core.js_runtime.detect_js_runtimes", return_value=(runtime,)):
-		assert ytdlp_js_runtime_args("yt-dlp") == ["--js-runtimes", "node"]
+		assert ytdlp_js_runtime_args("yt-dlp") == ["--js-runtimes", "node:node"]
 
 
 def test_ytdlp_js_runtime_args_skip_old_ytdlp():
@@ -19,9 +19,9 @@ def test_ytdlp_js_runtime_args_skip_old_ytdlp():
 		assert ytdlp_js_runtime_args("yt-dlp") == []
 
 
-def test_ytdlp_js_runtime_args_do_not_need_deno_flag():
+def test_ytdlp_js_runtime_args_pass_explicit_deno_path():
 	runtime = JsRuntimeInfo("Deno", "deno", "deno", "deno 2.5.0", True)
 
 	with patch("csvmusic.core.js_runtime.ytdlp_supports_js_runtimes", return_value=True), \
 			patch("csvmusic.core.js_runtime.detect_js_runtimes", return_value=(runtime,)):
-		assert ytdlp_js_runtime_args("yt-dlp") == []
+		assert ytdlp_js_runtime_args("yt-dlp") == ["--js-runtimes", "deno:deno"]

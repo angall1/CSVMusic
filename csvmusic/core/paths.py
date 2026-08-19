@@ -16,6 +16,7 @@ def _debug(msg: str) -> None:
 		pass
 
 _FFMPEG_CACHE: pathlib.Path | None = None
+_DENO_CACHE: pathlib.Path | None = None
 INTERNAL_YTDLP = "__internal_yt_dlp__"
 
 
@@ -220,6 +221,59 @@ def ffmpeg_path() -> str:
 	raise RuntimeError("ffmpeg binary not found (packaged or system).")
 
 
+def _deno_candidates() -> list[pathlib.Path]:
+	plat = platform_key()
+	name = "deno.exe" if plat == "windows" else "deno"
+	paths: list[pathlib.Path] = []
+	meipass = _meipass_dir()
+	if meipass:
+		paths.extend([
+			meipass / "deno" / plat / name,
+			meipass / "resources" / "deno" / plat / name,
+		])
+	try:
+		exe_dir = pathlib.Path(sys.executable).resolve().parent
+		paths.extend([
+			exe_dir / name,
+			exe_dir / "deno" / plat / name,
+			exe_dir / "resources" / "deno" / plat / name,
+		])
+	except Exception:
+		pass
+	try:
+		base = resource_base()
+		paths.extend([base / "deno" / plat / name, base.parent / "deno" / plat / name])
+	except Exception:
+		pass
+	return _dedup(paths)
+
+
+def deno_path() -> str | None:
+	"""Resolve a bundled or system Deno runtime suitable for yt-dlp."""
+	global _DENO_CACHE
+	override = os.environ.get("DENO_BIN")
+	if override:
+		candidate = pathlib.Path(override)
+		if candidate.exists() and candidate.is_file():
+			ensure_executable(candidate)
+			return str(candidate)
+		which_override = shutil.which(override)
+		if which_override:
+			return which_override
+	if _DENO_CACHE and _DENO_CACHE.exists():
+		return str(_DENO_CACHE)
+	for candidate in _deno_candidates():
+		if candidate.exists() and candidate.is_file():
+			ensure_executable(candidate)
+			_DENO_CACHE = candidate
+			return str(candidate)
+	which = shutil.which("deno")
+	if which:
+		_DENO_CACHE = pathlib.Path(which)
+		return which
+	return None
+
+
 # --- yt-dlp resolution ---
 
 def _ytdlp_candidates() -> list[pathlib.Path]:
@@ -248,7 +302,7 @@ def _ytdlp_candidates() -> list[pathlib.Path]:
 def ytdlp_path() -> str:
 	"""
 	Resolve a usable yt-dlp binary path.
-	Order: env override -> bundled Python module in frozen app -> nearby venv
+	Order: env override -> standalone executable beside the app -> nearby venv
 	locations -> PATH -> bundled Python module.
 	Raises RuntimeError if not found.
 	"""
@@ -259,11 +313,6 @@ def ytdlp_path() -> str:
 			return str(override_path)
 		if shutil.which(override):
 			return override
-	try:
-		if _is_frozen() and importlib.util.find_spec("yt_dlp") is not None:
-			return INTERNAL_YTDLP
-	except Exception:
-		pass
 	for cand in _ytdlp_candidates():
 		try:
 			if cand.exists() and cand.is_file() and os.access(cand, os.X_OK):

@@ -14,7 +14,7 @@ from csvmusic.core.url_import import fetch_music_url
 from csvmusic.core.log import log
 from csvmusic.core.ytmusic_match import find_best, more_candidates, RATE_LIMIT_S, CONFIDENCE_MIN
 from csvmusic.core.downloader import (
-	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name,
+	download_m4a, download_mp3, download_opus, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name,
 	youtube_batch_mitigation, build_ytdlp_mitigation_args, detect_youtube_risk,
 	YOUTUBE_MITIGATION_NONE, YOUTUBE_MITIGATION_AGGRESSIVE, YouTubeMitigationProfile
 )
@@ -170,6 +170,8 @@ class PipelineWorker(QThread):
 		extra_args += build_ytdlp_mitigation_args(profile)
 		if self.fmt == "m4a":
 			return download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing)
+		if self.fmt == "opus":
+			return download_opus(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None)
 		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options))
 
 	def _apply_mitigation(self, profile: YouTubeMitigationProfile, reason: str | None = None) -> None:
@@ -474,7 +476,7 @@ class PipelineWorker(QThread):
 					time.sleep(self._track_pause_s())
 				time.sleep(0.02)
 			if done_tracks:
-				ext = "m4a" if self.fmt == "m4a" else "mp3"
+				ext = self.fmt if self.fmt in ("m4a", "mp3", "opus") else "mp3"
 				if self.write_m3u8:
 					m3u = write_m3u(self.out_dir, playlist_name, done_tracks, ext, suffix=".m3u8", encoding="utf-8")
 					self.sig_log.emit(f"[m3u] wrote: {m3u}")
@@ -541,6 +543,8 @@ class SingleDownloadWorker(QThread):
 				cookies_args = None
 			if self.fmt == "m4a":
 				fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing)
+			elif self.fmt == "opus":
+				fp = download_opus(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
 			else:
 				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options))
 			self.sig_status.emit(self.row_idx, "Tagging…")

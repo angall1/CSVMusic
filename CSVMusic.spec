@@ -12,12 +12,19 @@ datas = [('resources', 'resources'), ('licenses', 'licenses')]
 binaries = []
 if WINDOWS_FFMPEG.exists():
     binaries.append((str(WINDOWS_FFMPEG), 'ffmpeg/windows'))
+deno_platform = 'windows' if sys.platform.startswith('win') else 'darwin' if sys.platform.startswith('darwin') else 'linux'
+deno_name = 'deno.exe' if deno_platform == 'windows' else 'deno'
+DENO = ROOT / 'resources' / 'deno' / deno_platform / deno_name
+if DENO.exists():
+    binaries.append((str(DENO), f'deno/{deno_platform}'))
 hiddenimports = []
 tmp_ret = collect_all('PySide6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('shiboken6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('yt_dlp')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('yt_dlp_ejs')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('ytmusicapi')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]

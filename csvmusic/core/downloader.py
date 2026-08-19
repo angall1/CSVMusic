@@ -1,11 +1,13 @@
 # tabs only
-import os, pathlib, subprocess, requests, io, contextlib, json
+import os, pathlib, subprocess, requests, io, contextlib, json, base64
 from dataclasses import dataclass
 from typing import Dict, Optional, List
 import re, unicodedata
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4, MP4Cover
+from mutagen.oggopus import OggOpus
+from mutagen.flac import Picture
 from csvmusic.core.paths import ffmpeg_path, ytdlp_path, INTERNAL_YTDLP
 from csvmusic.core.log import log
 from csvmusic.core.js_runtime import ytdlp_js_runtime_args
@@ -13,7 +15,7 @@ from csvmusic.core.subprocess_env import subprocess_kwargs
 
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
 YT_URL = "https://www.youtube.com/watch?v={vid}"
-YOUTUBE_CLIENTS: list[str] = ["ios", "tv_embedded", "webremix"]
+YOUTUBE_CLIENTS: list[str] = ["web_embedded", "ios", "tv", "android_vr"]
 _YOUTUBE_RISK_PATTERNS: tuple[tuple[str, str], ...] = (
 	("http error 429", "YouTube returned HTTP 429"),
 	("too many requests", "YouTube is rate limiting requests"),
@@ -148,7 +150,9 @@ def _summarize_tool_output(stderr: str, stdout: str, *, using_cookies: bool = Fa
 		return "yt-dlp could not solve the YouTube player challenge. Install Deno 2.3+ or Node 22+, then update yt-dlp with the default extras."
 	if "requested format is not available" in lower_full:
 		return "Requested audio format is not available for this result."
-	interesting = lines[-3:]
+	error_lines = [line for line in lines if line.lower().startswith("error:") or " error:" in line.lower()]
+	warning_lines = [line for line in lines if line.lower().startswith("warning:") or " warning:" in line.lower()]
+	interesting = (error_lines[-2:] or warning_lines[-2:] or lines[-3:])
 	msg = " | ".join(interesting)
 	msg = re.sub(r"\s+", " ", msg).strip()
 	return msg[:280]
@@ -586,6 +590,22 @@ def tag_file(path: pathlib.Path, meta: Dict, cover_bytes: Optional[bytes], *, co
 		if cover_bytes:
 			id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=cover_bytes))
 			id3.save(v2_version=3)
+	elif path.suffix.lower() in (".opus", ".ogg"):
+		opus = OggOpus(path)
+		opus["title"] = [meta.get("title", "")]
+		opus["artist"] = [meta.get("artists", "")]
+		opus["album"] = [meta.get("album", "")]
+		if meta.get("year"): opus["date"] = [str(meta["year"])]
+		if meta.get("track_no"): opus["tracknumber"] = [str(meta["track_no"])]
+		if meta.get("disc_no"): opus["discnumber"] = [str(meta["disc_no"])]
+		if cover_bytes:
+			picture = Picture()
+			picture.type = 3
+			picture.mime = "image/jpeg"
+			picture.desc = "Cover"
+			picture.data = cover_bytes
+			opus["metadata_block_picture"] = [base64.b64encode(picture.write()).decode("ascii")]
+		opus.save()
 	else:
 		# MP4/M4A
 		mp4 = MP4(path)
@@ -688,6 +708,57 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	dst = dst_dir / (safe_base + ".m4a")
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
 	return _normalize_to_m4a(src, dst, ffmpeg_bin, video_id, audio_processing)
+
+def download_opus(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
+	"""Download native Opus audio and remux it into an Ogg Opus container without re-encoding."""
+	dst_dir.mkdir(parents=True, exist_ok=True)
+	safe_base = _safe(base_name)
+	out_tpl = str(dst_dir / (safe_base + ".%(ext)s"))
+	_cleanup_outputs(dst_dir, safe_base)
+	yt_bin = yt_dlp_bin or ytdlp_path()
+	cookies_args = list(extra_yt_dlp_args or [])
+	js_runtime_args = ytdlp_js_runtime_args(yt_bin)
+	cmd_base = [
+		yt_bin,
+		"-f", "ba[acodec^=opus]",
+		"--no-playlist",
+		"--force-overwrites",
+		"--retries", "5",
+		"--fragment-retries", "5",
+		"--socket-timeout", "30",
+	]
+	success = False
+	last_detail = "no yt-dlp attempts recorded"
+	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
+		for client in YOUTUBE_CLIENTS:
+			cmd = cmd_base + _extractor_args(client) + js_runtime_args + cookies_args + ["-o", out_tpl, base_url]
+			rc, detail = _run_ytdlp_detail(cmd)
+			if rc == 0:
+				success = True
+				log(f"download_opus: yt-dlp succeeded video_id={video_id} client={client} url={base_url}")
+				break
+			last_detail = detail
+		if success:
+			break
+	if not success:
+		raise DownloadError(f"yt-dlp failed for opus: {last_detail}")
+	candidates = _list_downloads(dst_dir, safe_base)
+	if not candidates:
+		raise DownloadError("downloaded Opus file not found")
+	src = candidates[0]
+	dst = dst_dir / f"{safe_base}.opus"
+	if src == dst:
+		return dst
+	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
+	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-map", "0:a:0", "-c:a", "copy", str(dst)])
+	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
+	if proc.returncode != 0 or not dst.exists():
+		raise DownloadError(f"ffmpeg Opus remux failed: {detail}")
+	try:
+		src.unlink()
+	except OSError:
+		pass
+	return dst
 
 def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None, mp3_quality: int = 0, cbr_bitrate_kbps: int | None = None) -> pathlib.Path:
 	dst_dir.mkdir(parents=True, exist_ok=True)

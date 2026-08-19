@@ -1,5 +1,6 @@
 # tabs only
 import pathlib
+from dataclasses import dataclass
 
 from csvmusic.core.downloader import sanitize_name
 
@@ -22,3 +23,34 @@ def duplicate_output_rows(tracks: list[dict], out_root: pathlib.Path, fmt: str) 
 		else:
 			duplicates[row] = primary
 	return duplicates
+
+
+@dataclass(frozen=True)
+class TrackOutputPlan:
+	"""Account for every playlist row before a download starts."""
+	duplicate_rows: dict[int, int]
+	existing_rows: tuple[int, ...]
+	queued_rows: tuple[int, ...]
+
+	@property
+	def total_rows(self) -> int:
+		return len(self.existing_rows) + len(self.queued_rows) + len(self.duplicate_rows)
+
+	@property
+	def unique_file_rows(self) -> int:
+		return len(self.existing_rows) + len(self.queued_rows)
+
+
+def plan_track_outputs(tracks: list[dict], out_root: pathlib.Path, fmt: str) -> TrackOutputPlan:
+	"""Classify rows as unique existing files, queued files, or shared-file duplicates."""
+	duplicates = duplicate_output_rows(tracks, out_root, fmt)
+	existing: list[int] = []
+	queued: list[int] = []
+	for row, track in enumerate(tracks):
+		if row in duplicates:
+			continue
+		if expected_track_path(track, out_root, fmt).exists():
+			existing.append(row)
+		else:
+			queued.append(row)
+	return TrackOutputPlan(duplicates, tuple(existing), tuple(queued))

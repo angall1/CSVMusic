@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (
 	QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
 	QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox,
 	QRadioButton, QButtonGroup, QProgressBar, QToolButton, QSizePolicy, QFrame,
-	QComboBox, QSlider, QDialog, QInputDialog, QAbstractItemView
+	QComboBox, QSlider, QDialog, QInputDialog, QAbstractItemView,
+	QFileSystemModel, QTreeView, QDialogButtonBox
 )
 from PySide6.QtCore import Qt, QSignalBlocker, QUrl, Signal, QRect, QSize
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication, QDesktopServices, QPainter, QPen
@@ -18,14 +19,80 @@ from csvmusic.core.settings import load_settings, save_settings
 from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation
 from csvmusic.core.preflight import run_preflight_checks
 from csvmusic.core.output_folder import OutputFolderError, validate_output_folder
-from csvmusic.core.track_output import duplicate_output_rows, expected_track_path
+from csvmusic.core.track_output import expected_track_path, plan_track_outputs
 from csvmusic.core.paths import app_icon_path, resource_base
 from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker, AlternativesFetchWorker, MusicURLImportWorker
 from csvmusic.core.browsers import list_profiles
+from csvmusic.core.youtube_url import YouTubeVideoUrlError, parse_youtube_video_id
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
 RED = QColor(255, 205, 210)      # soft red
 GREEN = QColor(200, 230, 201)    # soft green
+
+class ResumeLocationDialog(QDialog):
+	"""Select either a directory or an M3U playlist in one browser."""
+
+	def __init__(self, initial: str = "", parent: QWidget | None = None):
+		super().__init__(parent)
+		self.selected_path: pathlib.Path | None = None
+		self.setWindowTitle("Choose Existing Playlist Location")
+		self.resize(760, 520)
+		layout = QVBoxLayout(self)
+		instructions = QLabel(
+			"Choose either the folder containing the existing music, or an .m3u/.m3u8 playlist file. "
+			"Select it below, then click Choose File or Folder."
+		)
+		instructions.setWordWrap(True)
+		layout.addWidget(instructions)
+		self.model = QFileSystemModel(self)
+		self.model.setNameFilters(["*.m3u", "*.m3u8"])
+		self.model.setNameFilterDisables(False)
+		self.model.setRootPath("")
+		self.tree = QTreeView(self)
+		self.tree.setModel(self.model)
+		self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
+		self.tree.setSelectionBehavior(QAbstractItemView.SelectRows)
+		for column in range(1, self.model.columnCount()):
+			self.tree.hideColumn(column)
+		layout.addWidget(self.tree, 1)
+		start = pathlib.Path(initial).expanduser() if initial else pathlib.Path.home()
+		if start.is_file():
+			start = start.parent
+		if not start.exists():
+			start = pathlib.Path.home()
+		self.tree.setRootIndex(self.model.index(str(start)))
+		buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+		self.choose_button = buttons.addButton("Choose File or Folder", QDialogButtonBox.AcceptRole)
+		self.choose_button.setEnabled(False)
+		buttons.rejected.connect(self.reject)
+		buttons.accepted.connect(self._accept_selection)
+		self.tree.selectionModel().selectionChanged.connect(self._selection_changed)
+		self.tree.doubleClicked.connect(self._double_clicked)
+		layout.addWidget(buttons)
+
+	def _selected_path(self) -> pathlib.Path | None:
+		indexes = self.tree.selectionModel().selectedRows(0)
+		return pathlib.Path(self.model.filePath(indexes[0])) if indexes else None
+
+	@staticmethod
+	def _is_allowed(path: pathlib.Path | None) -> bool:
+		return bool(path and (path.is_dir() or (path.is_file() and path.suffix.casefold() in (".m3u", ".m3u8"))))
+
+	def _selection_changed(self, *_args) -> None:
+		self.choose_button.setEnabled(self._is_allowed(self._selected_path()))
+
+	def _double_clicked(self, _index) -> None:
+		path = self._selected_path()
+		if path and path.is_file() and self._is_allowed(path):
+			self._accept_selection()
+
+	def _accept_selection(self) -> None:
+		path = self._selected_path()
+		if not self._is_allowed(path):
+			QMessageBox.information(self, "Choose a Folder or Playlist", "Select a folder or an .m3u/.m3u8 file first.")
+			return
+		self.selected_path = path
+		self.accept()
 
 class NotchedSlider(QWidget):
 	valueChanged = Signal(int)
@@ -451,7 +518,7 @@ class MainWindow(QMainWindow):
 		self._button_font = btn_font
 		top.addWidget(btn_help)
 		btn_load = QToolButton()
-		btn_load.setText("LOAD PLAYLIST ▸")
+		btn_load.setText("RESUME PLAYLIST ▸")
 		btn_load.setCheckable(True)
 		btn_load.setToolButtonStyle(Qt.ToolButtonTextOnly)
 		btn_load.setFont(btn_font)
@@ -543,8 +610,8 @@ class MainWindow(QMainWindow):
 			"• Direct links support Spotify, Apple Music, YouTube Music, YouTube, SoundCloud, Deezer, and Amazon Music.",
 			"• If any site cannot expose every track, CSVMusic displays a partial-import warning. CSV import is the reliable fallback.",
 			"• Use EQUALIZER for volume matching, gain, bass, or treble changes.",
-			"• Use LOAD PLAYLIST when a playlist folder already contains some downloaded songs.",
-			"• LOAD PLAYLIST accepts the original playlist URL or CSV plus the output folder, playlist folder, or that playlist's .m3u/.m3u8 file.",
+			"• Use RESUME PLAYLIST when a playlist folder already contains some downloaded songs.",
+			"• RESUME PLAYLIST accepts the original playlist URL or CSV plus a folder or that playlist's .m3u/.m3u8 file.",
 		):
 			tip_label = QLabel(line)
 			tip_label.setFont(QFont(retro_font_family, default_pt + 1))
@@ -606,15 +673,15 @@ class MainWindow(QMainWindow):
 		self.ed_load_source.setFont(QFont(retro_font_family, default_pt + 1))
 		source_layout.addWidget(self.ed_load_source)
 		load_row_source = QHBoxLayout()
-		btn_load_source = QPushButton("Browse…")
+		btn_load_source = QPushButton("Choose File or Folder...")
 		btn_load_source.setFont(btn_font)
 		btn_load_source.clicked.connect(self.on_browse_load_source)
 		load_row_source.addWidget(btn_load_source)
 		load_row_source.addStretch(1)
 		source_layout.addLayout(load_row_source)
 		load_hint = QLabel(
-			"Select the main output folder, the playlist's own folder, or its .m3u/.m3u8 file. "
-			"The playlist folder name must match the loaded playlist."
+			"Choose either the folder containing the existing songs or an .m3u/.m3u8 playlist file. "
+			"CSVMusic will locate the playlist folder and scan it for completed tracks."
 		)
 		load_hint.setFont(QFont(retro_font_family, default_pt + 1))
 		load_hint.setWordWrap(True)
@@ -636,7 +703,7 @@ class MainWindow(QMainWindow):
 		load_action_row.addStretch(1)
 		action_layout.addLayout(load_action_row)
 		load_warning = QLabel(
-			"CSVMusic compares the loaded playlist with files in the selected folder using the current MP3/M4A format."
+			"CSVMusic compares the loaded playlist with files in the selected folder using the current MP3, M4A, or Opus format."
 		)
 		load_warning.setFont(QFont(retro_font_family, default_pt))
 		load_warning.setWordWrap(True)
@@ -645,7 +712,7 @@ class MainWindow(QMainWindow):
 		self.load_panel.setVisible(False)
 		vl.addWidget(self.load_panel)
 		def _toggle_load_panel(checked: bool):
-			self._toggle_top_dialog(btn_load, self.load_dialog, "LOAD PLAYLIST", checked)
+			self._toggle_top_dialog(btn_load, self.load_dialog, "RESUME PLAYLIST", checked)
 		btn_load.toggled.connect(_toggle_load_panel)
 
 		self.equalizer_panel = QFrame()
@@ -787,6 +854,16 @@ class MainWindow(QMainWindow):
 		audio_heading = QLabel("Audio defaults")
 		audio_heading.setFont(QFont(retro_font_family, default_pt + 3, QFont.Bold))
 		audio_layout.addWidget(audio_heading)
+		self.cb_opus_output = QCheckBox("Enable native Opus output")
+		self.cb_opus_output.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_opus_output.setChecked(False)
+		self.cb_opus_output.toggled.connect(self.on_toggle_opus_output)
+		audio_layout.addWidget(self.cb_opus_output)
+		opus_note = QLabel("Off by default. Saves YouTube's native Opus audio without lossy transcoding. Equalizer processing does not apply.")
+		opus_note.setWordWrap(True)
+		opus_note.setFont(QFont(retro_font_family, default_pt))
+		audio_layout.addWidget(opus_note)
+		audio_layout.addSpacing(self._px(4))
 		lbl_mp3_quality = QLabel("MP3 quality")
 		lbl_mp3_quality.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
 		audio_layout.addWidget(lbl_mp3_quality)
@@ -945,12 +1022,12 @@ class MainWindow(QMainWindow):
 		btn_adv.toggled.connect(_toggle_advanced)
 
 		self.help_dialog = self._create_panel_dialog(vl, self.help_panel, "Tutorial", self._px(720), self._px(360))
-		self.load_dialog = self._create_panel_dialog(vl, self.load_panel, "Load Playlist", self._px(720), self._px(420))
+		self.load_dialog = self._create_panel_dialog(vl, self.load_panel, "Resume Playlist", self._px(720), self._px(420))
 		self.equalizer_dialog = self._create_panel_dialog(vl, self.equalizer_panel, "Equalizer", self._px(720), self._px(360))
 		self.advanced_dialog = self._create_panel_dialog(vl, self.advanced_panel, "Settings", self._px(980), self._px(620))
 		self._top_dialogs = {
 			self.btn_tutorial: (self.help_dialog, "TUTORIAL"),
-			self.btn_load_existing: (self.load_dialog, "LOAD PLAYLIST"),
+			self.btn_load_existing: (self.load_dialog, "RESUME PLAYLIST"),
 			self.btn_equalizer: (self.equalizer_dialog, "EQUALIZER"),
 			self.btn_advanced: (self.advanced_dialog, "SETTINGS"),
 		}
@@ -1263,6 +1340,16 @@ class MainWindow(QMainWindow):
 	def _mp3_quality_value(self) -> int:
 		return max(0, min(10, int(self.slider_mp3_quality.value())))
 
+	def _selected_format(self) -> str:
+		if self.cb_opus_output.isChecked():
+			return "opus"
+		return "m4a" if self.rb_m4a.isChecked() else "mp3"
+
+	def on_toggle_opus_output(self, checked: bool) -> None:
+		self.rb_m4a.setEnabled(not checked)
+		self.rb_mp3.setEnabled(not checked)
+		self._persist_settings()
+
 	def _legacy_export_options(self) -> dict:
 		enabled = bool(self.cb_legacy_ipod_mode.isChecked())
 		return {
@@ -1493,28 +1580,11 @@ class MainWindow(QMainWindow):
 			self._persist_settings(include_paths=True)
 
 	def _prompt_load_source_path(self) -> pathlib.Path | None:
-		msg = QMessageBox(self)
-		msg.setWindowTitle("Current Music")
-		msg.setText("Choose what to browse.")
-		msg.setInformativeText("Select either the playlist folder/output folder, or the playlist's .m3u/.m3u8 file.")
-		folder_btn = msg.addButton("Choose Folder", QMessageBox.AcceptRole)
-		file_btn = msg.addButton("Choose Playlist File", QMessageBox.AcceptRole)
-		msg.addButton(QMessageBox.Cancel)
-		msg.exec()
-		clicked = msg.clickedButton()
 		initial = self.ed_load_source.text().strip() or self.ed_out.text().strip() or ""
-		if clicked == folder_btn:
-			path = QFileDialog.getExistingDirectory(self, "Select Playlist Folder or Output Folder", initial)
-			return pathlib.Path(path) if path else None
-		if clicked == file_btn:
-			path, _ = QFileDialog.getOpenFileName(
-				self,
-				"Select Playlist File",
-				initial,
-				"Playlist files (*.m3u *.m3u8);;All files (*)"
-			)
-			return pathlib.Path(path) if path else None
-		return None
+		dialog = ResumeLocationDialog(initial, self)
+		if dialog.exec() != QDialog.Accepted:
+			return None
+		return dialog.selected_path
 
 	def on_browse_load_source(self):
 		path = self._prompt_load_source_path()
@@ -1620,11 +1690,12 @@ class MainWindow(QMainWindow):
 		tracks = self._collect_tracks_preview()
 		if not tracks:
 			return [], []
-		fmt = "m4a" if self.rb_m4a.isChecked() else "mp3"
+		fmt = self._selected_format()
 		out_root = pathlib.Path(out_dir)
-		duplicate_rows = duplicate_output_rows(tracks, out_root, fmt)
+		output_plan = plan_track_outputs(tracks, out_root, fmt)
+		duplicate_rows = output_plan.duplicate_rows
 		self.preview_duplicate_count = len(duplicate_rows)
-		self.preview_existing_count = 0
+		self.preview_existing_count = len(output_plan.existing_rows)
 		self.duplicate_rows_by_primary = {}
 		for duplicate_row, primary_row in duplicate_rows.items():
 			self.duplicate_rows_by_primary.setdefault(primary_row, []).append(duplicate_row)
@@ -1633,7 +1704,7 @@ class MainWindow(QMainWindow):
 		self.action_buttons = {}
 		self._clear_resolution_panel()
 		self.table.setRowCount(len(tracks))
-		queued_rows: list[int] = []
+		queued_rows = list(output_plan.queued_rows)
 		for i, track in enumerate(tracks):
 			self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
 			title_item = QTableWidgetItem(f"{track['artists']} — {track['title']}")
@@ -1668,8 +1739,7 @@ class MainWindow(QMainWindow):
 				}
 				self.on_row_status(i, f"Duplicate entry → same file as row {primary_row + 1}")
 				btn_alt.setEnabled(is_existing)
-			elif expected_path.exists():
-				self.preview_existing_count += 1
+			elif i in output_plan.existing_rows:
 				self.track_results[i] = {
 					"track": track,
 					"options": [],
@@ -1685,10 +1755,9 @@ class MainWindow(QMainWindow):
 				}
 				self.on_row_status(i, f"Already downloaded → {expected_path.name}")
 				btn_alt.setEnabled(True)
-			else:
+			elif i in output_plan.queued_rows:
 				self.table.setItem(i, 2, QTableWidgetItem("Queued"))
 				self._set_row_highlight(i, YELLOW)
-				queued_rows.append(i)
 		self.total = len(tracks)
 		self.progress.setMaximum(max(len(queued_rows), 1))
 		self.progress.setValue(0)
@@ -1852,6 +1921,7 @@ class MainWindow(QMainWindow):
 			"eq_treble_gain": self.slider_treble.value(),
 			"mp3_quality": self._mp3_quality_value(),
 			"force_download_mode": self.cb_force_download.isChecked(),
+			"opus_output_enabled": self.cb_opus_output.isChecked(),
 			"legacy_ipod_mode": self.cb_legacy_ipod_mode.isChecked(),
 			"legacy_mp3_mode": self.combo_legacy_mp3_mode.currentData(),
 			"legacy_cover_art_mode": self.combo_legacy_cover_art.currentData(),
@@ -1908,6 +1978,11 @@ class MainWindow(QMainWindow):
 		block_force = QSignalBlocker(self.cb_force_download)
 		self.cb_force_download.setChecked(bool(cfg.get("force_download_mode", False)))
 		del block_force
+		block_opus = QSignalBlocker(self.cb_opus_output)
+		self.cb_opus_output.setChecked(bool(cfg.get("opus_output_enabled", False)))
+		del block_opus
+		self.rb_m4a.setEnabled(not self.cb_opus_output.isChecked())
+		self.rb_mp3.setEnabled(not self.cb_opus_output.isChecked())
 		block_legacy = QSignalBlocker(self.cb_legacy_ipod_mode)
 		self.cb_legacy_ipod_mode.setChecked(bool(cfg.get("legacy_ipod_mode", False)))
 		del block_legacy
@@ -2065,7 +2140,7 @@ class MainWindow(QMainWindow):
 		self.progress.setValue(0)
 		self.progress.setMaximum(len(queued_rows))
 
-		fmt = "m4a" if self.rb_m4a.isChecked() else "mp3"
+		fmt = self._selected_format()
 		want_m3u8 = self.cb_m3u8.isChecked()
 		want_m3u_plain = self.cb_m3u_plain.isChecked()
 		embed_art = self.cb_album_art.isChecked()
@@ -2433,7 +2508,14 @@ class MainWindow(QMainWindow):
 		layout.addWidget(status_label)
 		combo = QComboBox()
 		combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-		layout.addWidget(combo)
+		choice_row = QHBoxLayout()
+		choice_row.setSpacing(self._px(6))
+		choice_row.addWidget(combo, 1)
+		btn_paste_url = QPushButton("Paste URL…")
+		btn_paste_url.setFont(self._button_font)
+		btn_paste_url.setToolTip("Use a specific YouTube or YouTube Music video")
+		choice_row.addWidget(btn_paste_url)
+		layout.addLayout(choice_row)
 		btn_row = QHBoxLayout()
 		btn_row.setSpacing(self._px(6))
 		btn_download = QPushButton("Download")
@@ -2458,6 +2540,7 @@ class MainWindow(QMainWindow):
 			"status_label": status_label,
 			"btn_download": btn_download,
 			"btn_listen": btn_listen,
+			"btn_paste_url": btn_paste_url,
 			"btn_skip": btn_skip,
 			"btn_close": btn_close,
 			"row_idx": row_idx,
@@ -2467,9 +2550,46 @@ class MainWindow(QMainWindow):
 		self._refresh_option_combo(record)
 		btn_download.clicked.connect(partial(self.on_resolution_download, row_idx))
 		btn_listen.clicked.connect(partial(self.on_resolution_listen, row_idx))
+		btn_paste_url.clicked.connect(partial(self.on_resolution_paste_url, row_idx))
 		btn_skip.clicked.connect(partial(self.on_resolution_skip, row_idx))
 		btn_close.clicked.connect(partial(self.on_resolution_close, row_idx))
 		return record
+
+	def on_resolution_paste_url(self, row_idx: int) -> None:
+		record = self.resolve_items.get(row_idx)
+		if not record:
+			return
+		value, ok = QInputDialog.getText(
+			self,
+			"Use a Specific YouTube Video",
+			"Paste a YouTube or YouTube Music video URL:",
+		)
+		if not ok:
+			return
+		try:
+			video_id = parse_youtube_video_id(value)
+		except YouTubeVideoUrlError as exc:
+			QMessageBox.warning(self, "Invalid YouTube URL", str(exc))
+			return
+		track = record["track"]
+		option = {
+			"videoId": video_id,
+			"title": track.get("title") or "Manual YouTube video",
+			"author": "Manual YouTube URL",
+			"channel": "Manual YouTube URL",
+			"duration_seconds": 0,
+			"source": "manual",
+			"score": 1.0,
+		}
+		record["all_options"] = self._merge_options(record.get("all_options", []), [option])
+		self.track_results.setdefault(row_idx, {"track": track})["options"] = record["all_options"]
+		self._refresh_option_combo(record)
+		for index in range(record["combo"].count()):
+			data = record["combo"].itemData(index)
+			if isinstance(data, dict) and data.get("videoId") == video_id:
+				record["combo"].setCurrentIndex(index)
+				break
+		record["status_label"].setText("Manual YouTube video selected. Click Download to use it.")
 
 	def _format_option(self, option: dict) -> str:
 		score = option.get("score") or 0.0
@@ -2548,9 +2668,10 @@ class MainWindow(QMainWindow):
 		if not isinstance(option, dict) or not option.get("videoId"):
 			QMessageBox.warning(self, "No Selection", "Select a candidate before downloading.")
 			return
-		fmt = "m4a" if self.rb_m4a.isChecked() else "mp3"
+		fmt = self._selected_format()
 		record["btn_download"].setEnabled(False)
 		record["btn_listen"].setEnabled(False)
+		record["btn_paste_url"].setEnabled(False)
 		record["btn_skip"].setEnabled(False)
 		record["btn_close"].setEnabled(False)
 		worker = SingleDownloadWorker(
@@ -2640,6 +2761,7 @@ class MainWindow(QMainWindow):
 		if record:
 			record["btn_download"].setEnabled(True)
 			record["btn_listen"].setEnabled(True)
+			record["btn_paste_url"].setEnabled(True)
 			record["btn_skip"].setEnabled(True)
 			record["btn_close"].setEnabled(True)
 		info = self.track_results.setdefault(row_idx, {})
@@ -2714,7 +2836,7 @@ class MainWindow(QMainWindow):
 		ext = "m4a"
 		for _, abs_path in entries_resolved:
 			suf = abs_path.suffix.lower().lstrip('.')
-			if suf in ("m4a", "mp3"):
+			if suf in ("m4a", "mp3", "opus"):
 				ext = suf
 				break
 		if write_m3u8:

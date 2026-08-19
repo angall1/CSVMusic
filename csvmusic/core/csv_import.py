@@ -7,10 +7,14 @@ import pandas as pd
 _CANON = {
 	"track name": "Track name",
 	"artist name": "Artist name",
+	"artist names": "Artist name",
 	"album": "Album",
+	"album name": "Album",
 	"playlist name": "Playlist name",
 	"isrc": "ISRC",
 	"spotify - id": "Spotify - id",
+	"track uri": "Spotify - id",
+	"release date": "Release date",
 	# Optional/ignored if missing:
 	"type": "Type",
 	"duration ms": "Duration (ms)",
@@ -24,7 +28,7 @@ _CANON = {
 # Minimum set required to build track entries. External IDs and ISRC are useful
 # hints when present, but downloads only need title/artist/playlist metadata.
 _REQUIRED = ["Track name", "Artist name", "Playlist name"]
-_OPTIONAL_TEXT = ["Album", "ISRC", "Spotify - id"]
+_OPTIONAL_TEXT = ["Album", "ISRC", "Spotify - id", "Release date"]
 
 def _read_csv_robust(path: pathlib.Path) -> pd.DataFrame:
 	"""
@@ -78,6 +82,12 @@ def load_csv(path: Union[str, pathlib.Path]) -> pd.DataFrame:
 		raise FileNotFoundError(str(p))
 	df = _read_csv_robust(p)
 	df = _normalize_headers(df)
+	if "Playlist name" not in df.columns:
+		df["Playlist name"] = p.stem
+	else:
+		df["Playlist name"] = df["Playlist name"].fillna("").astype(str)
+		playlist_names = df["Playlist name"].str.strip()
+		df.loc[playlist_names == "", "Playlist name"] = p.stem
 
 	# Check required columns (we intentionally do NOT require "Type")
 	missing = [c for c in _REQUIRED if c not in df.columns]
@@ -109,6 +119,26 @@ def load_csv(path: Union[str, pathlib.Path]) -> pd.DataFrame:
 		)
 
 	return df
+
+
+def _spotify_track_id(value: object) -> str | None:
+	text = str(value or "").strip()
+	if not text or text.casefold() == "nan":
+		return None
+	if text.casefold().startswith("spotify:track:"):
+		return text.rsplit(":", 1)[-1] or None
+	return text
+
+
+def _release_year(value: object) -> int | None:
+	text = str(value or "").strip()
+	if not text or text.casefold() == "nan":
+		return None
+	try:
+		year = int(text[:4])
+	except (TypeError, ValueError):
+		return None
+	return year if 1000 <= year <= 9999 else None
 
 def list_playlists(df: pd.DataFrame) -> List[str]:
 	"""
@@ -145,7 +175,7 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 	out: List[Dict] = []
 	for position, (_, r) in enumerate(work.iterrows(), start=1):
 		isrc = str(r.get("ISRC", "")).strip()
-		spid = str(r.get("Spotify - id", "")).strip()
+		spid = _spotify_track_id(r.get("Spotify - id", ""))
 		# duration if present
 		if "Duration (ms)" in work.columns:
 			try:
@@ -163,9 +193,9 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 			"album": str(r.get("Album", "")).strip(),
 			"playlist": str(r.get("Playlist name", "")).strip(),
 			"isrc": isrc if isrc and isrc.lower() != "nan" else None,
-			"sp_id": spid if spid and spid.lower() != "nan" else None,
+			"sp_id": spid,
 			"duration_ms": dur_ms,
-			"year": None,          # CSV doesn't include year
+			"year": _release_year(r.get("Release date", "")),
 			"cover_url": None,     # CSV doesn't include cover
 			"track_no": track_no or position,
 			"disc_no": disc_no or 1,

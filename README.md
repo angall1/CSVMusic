@@ -7,7 +7,7 @@
   </tr>
 </table>
 
-<p align="center"><a href="https://buymeacoffee.com/agalli">Enjoying CSVMusic? Buy me a coffee</a></p>
+<h2 align="center"><a href="https://buymeacoffee.com/agalli">☕ Enjoying CSVMusic? Buy me a coffee</a></h2>
 
 **Convert playlists and albums from music links or CSV exports into fully tagged audio files.**
 
@@ -15,7 +15,7 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 - Finds the best match on YouTube Music
 - Downloads the audio
 - Adds metadata such as artist, album, and artwork
-- Outputs ready-to-use **M4A** or **MP3** files
+- Outputs ready-to-use **M4A** or **MP3** files, with optional native **Opus** output
 - Optionally creates `.m3u` / `.m3u8` playlists
 
 ---
@@ -23,21 +23,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.5.1
+https://github.com/angall1/CSVMusic/releases/tag/v1.6.0
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.0/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.0/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.0/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.5.1/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.0/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -64,17 +64,17 @@ Python installations still require a supported graphical desktop environment for
 
 ---
 
-# What's New In 1.5.1
+# What's New In 1.6.0
 
-- Paste playlist or album links directly into the app instead of exporting a CSV first.
-- Supported direct links include Spotify, Apple Music, YouTube Music, YouTube playlists, SoundCloud sets, Deezer, and Amazon Music pages when public track data is available.
-- Large Spotify, Deezer, YouTube, and YouTube Music playlists can load across multiple pages where the service exposes them.
-- The app now shows a generic **Playlist May Be Incomplete** warning when any direct URL import appears partial or cannot prove it found every track.
-- Incomplete-import warnings explain that missing tracks will be skipped and include TuneMyMusic CSV export steps.
-- Spotify playlist links may expose only the first 100 tracks publicly; use TuneMyMusic CSV export for complete large Spotify playlists.
-- The tutorial now includes a general TuneMyMusic CSV workflow with a direct TuneMyMusic link.
-- **Load Playlist** can resume from either the original link or a CSV export.
-- Downloads now auto-scroll to keep the active item in view.
+- Fixed current YouTube player-challenge failures by packaging Deno and `yt-dlp-ejs`, passing the runtime explicitly, and validating both before downloads begin.
+- Updated YouTube client fallbacks and error reporting for current yt-dlp behavior, including clearer HTTP 403 and JavaScript-runtime diagnostics.
+- Added optional native **Opus** output under Settings. Opus streams are remuxed without lossy re-encoding and support metadata and artwork.
+- Added first-class **Exportify CSV** support for `Track URI`, `Album Name`, `Artist Name(s)`, release dates, and CSVs without a playlist column.
+- Renamed **Load Playlist** to **Resume Playlist** and replaced its folder/file fork with one chooser that accepts a folder or `.m3u`/`.m3u8` file.
+- Added a compact **Paste URL…** action to Alternatives for downloading a specific YouTube or YouTube Music video.
+- Improved playlist accounting so existing files, queued tracks, duplicate entries, skipped matches, and failures reconcile with the requested track total.
+- Prevented FFmpeg failures caused by selecting Apple Music or iTunes auto-import folders.
+- Improved force-download handling for low-confidence matches and added candidate fallbacks.
 
 ---
 
@@ -123,11 +123,13 @@ Everything is ready to drop into iTunes, a phone, an MP3 player, or a local musi
 - The packaged app includes:
   - `ffmpeg`
   - `yt-dlp`
+  - `yt-dlp-ejs`
+  - Deno
 - Some antivirus software may flag bundled download/processing tools. These are usually false positives.
 - Your CSV stays local. Direct links are fetched only to read public playlist or album metadata.
 - YouTube Music / YouTube is contacted to search and download audio.
 - Cookies are optional, but may help with age-restricted or sign-in-only videos.
-- Current YouTube extraction may require a supported JavaScript runtime. Packaged releases include the needed `yt-dlp` extras; source installs should use `pip install -e .` so `yt-dlp[default]` is installed. Node 22+ or Deno 2.3+ is recommended if YouTube reports player challenge errors.
+- Current YouTube extraction requires a supported JavaScript runtime. Packaged releases include Deno and the needed `yt-dlp` extras; source installs should use `pip install -e .` and provide Deno 2.3+ or Node 22+.
 - Private playlists or pages that hide track data may not import directly. If that happens, export a CSV from TuneMyMusic and load that instead.
 - Large Spotify playlist links can be capped at 100 tracks by Spotify's public page data. If CSVMusic warns about this, open **Choose... > TuneMyMusic**, choose Spotify as the source, paste the same playlist link, export as CSV, then load that CSV through **Choose... > CSV File**.
 

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 import re, shutil, subprocess
 
-from csvmusic.core.paths import INTERNAL_YTDLP
+from csvmusic.core.paths import INTERNAL_YTDLP, deno_path
 from csvmusic.core.subprocess_env import subprocess_kwargs
 
 _MIN_YTDLP_JS_RUNTIMES = (2026, 6, 9)
@@ -61,8 +61,12 @@ def _probe_runtime(name: str, yt_dlp_name: str, command_names: tuple[str, ...], 
 @lru_cache(maxsize=1)
 def detect_js_runtimes() -> tuple[JsRuntimeInfo, ...]:
 	runtimes: list[JsRuntimeInfo] = []
+	bundled_deno = deno_path()
+	if bundled_deno:
+		info = _probe_runtime("Deno", "deno", (bundled_deno,), (2, 3, 0))
+		if info:
+			runtimes.append(info)
 	for args in (
-		("Deno", "deno", ("deno",), (2, 3, 0)),
 		("Node", "node", ("node", "nodejs"), (22, 0, 0)),
 		("QuickJS", "quickjs", ("qjs",), (2023, 12, 9)),
 	):
@@ -95,9 +99,9 @@ def ytdlp_js_runtime_args(yt_dlp_bin: str | None = None) -> list[str]:
 	if not ytdlp_supports_js_runtimes(yt_dlp_bin):
 		return []
 	enabled = [
-		info.yt_dlp_name
+		f"{info.yt_dlp_name}:{info.path}"
 		for info in detect_js_runtimes()
-		if info.supported and info.yt_dlp_name != "deno"
+		if info.supported
 	]
 	if not enabled:
 		return []

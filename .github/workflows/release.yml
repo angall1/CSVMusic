@@ -19,6 +19,7 @@ defaults:
 env:
   RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
   RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+  DENO_VERSION: "2.9.4"
 
 jobs:
   build:
@@ -31,21 +32,33 @@ jobs:
             python_version: "3.11"
             suffix: linux
             ffmpeg_platform: linux
+            deno_target: x86_64-unknown-linux-gnu
+            deno_platform: linux
+            deno_binary: deno
             build_sdist: true
           - os: macos-15
             python_version: "3.11"
             suffix: macos-arm64
             ffmpeg_platform: darwin
+            deno_target: aarch64-apple-darwin
+            deno_platform: darwin
+            deno_binary: deno
             build_sdist: false
           - os: macos-15-intel
             python_version: "3.11"
             suffix: macos-intel
             ffmpeg_platform: darwin
+            deno_target: x86_64-apple-darwin
+            deno_platform: darwin
+            deno_binary: deno
             build_sdist: false
           - os: windows-latest
             python_version: "3.11"
             suffix: windows
             ffmpeg_platform: win
+            deno_target: x86_64-pc-windows-msvc
+            deno_platform: windows
+            deno_binary: deno.exe
             build_sdist: false
 
     steps:
@@ -68,6 +81,27 @@ jobs:
 
       - name: Ensure license directory
         run: mkdir -p licenses
+
+      - name: Fetch Deno runtime
+        env:
+          DENO_TARGET: ${{ matrix.deno_target }}
+          DENO_PLATFORM: ${{ matrix.deno_platform }}
+          DENO_BINARY: ${{ matrix.deno_binary }}
+        run: |
+          set -euo pipefail
+          archive="deno-${DENO_TARGET}.zip"
+          base_url="https://github.com/denoland/deno/releases/download/v${DENO_VERSION}"
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          curl --fail --location --retry 3 --output "$tmp_dir/$archive" "$base_url/$archive"
+          curl --fail --location --retry 3 --output "$tmp_dir/$archive.sha256sum" "$base_url/$archive.sha256sum"
+          (cd "$tmp_dir" && sha256sum --check "$archive.sha256sum")
+          mkdir -p "resources/deno/${DENO_PLATFORM}"
+          unzip -j "$tmp_dir/$archive" "$DENO_BINARY" -d "resources/deno/${DENO_PLATFORM}"
+          chmod +x "resources/deno/${DENO_PLATFORM}/${DENO_BINARY}"
+          curl --fail --location --retry 3 --output licenses/DENO-LICENSE.md \
+            "https://raw.githubusercontent.com/denoland/deno/v${DENO_VERSION}/LICENSE.md"
+          "resources/deno/${DENO_PLATFORM}/${DENO_BINARY}" --version
 
       - name: Fetch FFmpeg (Linux)
         if: ${{ matrix.ffmpeg_platform == 'linux' }}
