@@ -23,21 +23,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.6.2
+https://github.com/angall1/CSVMusic/releases/tag/v1.6.3
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.6.2/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.3/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.2/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.3/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.2/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.3/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.6.2/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.3/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -64,18 +64,28 @@ Python installations still require a supported graphical desktop environment for
 
 ---
 
-# What's New In 1.6.2
+# What's New In 1.6.3 (Since 1.6.0)
 
-- Fixed Windows release builds by accepting Deno's PowerShell-formatted SHA256 checksum metadata while retaining archive integrity verification on every platform.
+## YouTube reliability
+
 - Fixed current YouTube player-challenge failures by packaging Deno and `yt-dlp-ejs`, passing the runtime explicitly, and validating both before downloads begin.
-- Updated YouTube client fallbacks and error reporting for current yt-dlp behavior, including clearer HTTP 403 and JavaScript-runtime diagnostics.
-- Added optional native **Opus** output under Settings. Opus streams are remuxed without lossy re-encoding and support metadata and artwork.
+- Updated YouTube client fallbacks and diagnostics for current yt-dlp behavior, including clearer HTTP 403, throttling, and JavaScript-runtime messages.
+- Added adaptive pacing when YouTube starts throttling or blocking a playlist download.
+- Improved force-download handling for low-confidence matches and added candidate fallbacks.
+
+## Playlist imports and workflow
+
 - Added first-class **Exportify CSV** support for `Track URI`, `Album Name`, `Artist Name(s)`, release dates, and CSVs without a playlist column.
 - Renamed **Load Playlist** to **Resume Playlist** and replaced its folder/file fork with one chooser that accepts a folder or `.m3u`/`.m3u8` file.
 - Added a compact **Paste URL…** action to Alternatives for downloading a specific YouTube or YouTube Music video.
 - Improved playlist accounting so existing files, queued tracks, duplicate entries, skipped matches, and failures reconcile with the requested track total.
+
+## Audio and Windows packaging
+
+- Added optional native **Opus** output under Settings. Opus streams are remuxed without lossy re-encoding and support metadata and artwork.
 - Prevented FFmpeg failures caused by selecting Apple Music or iTunes auto-import folders.
-- Improved force-download handling for low-confidence matches and added candidate fallbacks.
+- Fixed Windows release builds by accepting Deno's PowerShell-formatted SHA256 metadata while retaining archive integrity verification on every platform.
+- Forced UTF-8 for packaged downloader and FFmpeg subprocesses so Unicode song titles and sanitized punctuation work reliably on Windows.
 
 ---
 

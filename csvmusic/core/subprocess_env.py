@@ -29,6 +29,11 @@ def sanitized_subprocess_env() -> dict[str, str]:
 			env[key] = orig
 		else:
 			env.pop(key, None)
+	# Frozen Python tools such as the packaged yt-dlp executable may otherwise
+	# inherit a legacy Windows console code page. UTF-8 prevents their status
+	# output from crashing on valid Unicode filenames such as a sanitized "？".
+	env["PYTHONIOENCODING"] = "utf-8"
+	env["PYTHONUTF8"] = "1"
 	return env
 
 

@@ -37,3 +37,18 @@ def test_sanitized_subprocess_env_removes_leaked_pyinstaller_vars():
 	assert "PYTHONHOME" not in env
 	assert "_MEIPASS" not in env
 	assert env["HOME"] == "/Users/test"
+
+
+def test_sanitized_subprocess_env_forces_utf8_for_frozen_tools():
+	with patch.dict(
+		"csvmusic.core.subprocess_env.os.environ",
+		{
+			"PYTHONIOENCODING": "cp1252",
+			"PYTHONUTF8": "0",
+		},
+		clear=True,
+	):
+		env = sanitized_subprocess_env()
+
+	assert env["PYTHONIOENCODING"] == "utf-8"
+	assert env["PYTHONUTF8"] == "1"
