@@ -95,7 +95,27 @@ jobs:
           trap 'rm -rf "$tmp_dir"' EXIT
           curl --fail --location --retry 3 --output "$tmp_dir/$archive" "$base_url/$archive"
           curl --fail --location --retry 3 --output "$tmp_dir/$archive.sha256sum" "$base_url/$archive.sha256sum"
-          (cd "$tmp_dir" && sha256sum --check "$archive.sha256sum")
+          python - "$tmp_dir/$archive" "$tmp_dir/$archive.sha256sum" <<'PY'
+          import hashlib
+          import pathlib
+          import re
+          import sys
+
+          archive_path = pathlib.Path(sys.argv[1])
+          checksum_path = pathlib.Path(sys.argv[2])
+          checksum_text = checksum_path.read_text(encoding="utf-8")
+          match = re.search(r"(?i)\b[0-9a-f]{64}\b", checksum_text)
+          if match is None:
+              raise SystemExit(f"No SHA256 hash found in {checksum_path.name}")
+          expected = match.group(0).lower()
+          with archive_path.open("rb") as archive_file:
+              actual = hashlib.file_digest(archive_file, "sha256").hexdigest()
+          if actual != expected:
+              raise SystemExit(
+                  f"SHA256 mismatch for {archive_path.name}: expected {expected}, got {actual}"
+              )
+          print(f"Verified SHA256 for {archive_path.name}: {actual}")
+          PY
           mkdir -p "resources/deno/${DENO_PLATFORM}"
           unzip -j "$tmp_dir/$archive" "$DENO_BINARY" -d "resources/deno/${DENO_PLATFORM}"
           chmod +x "resources/deno/${DENO_PLATFORM}/${DENO_BINARY}"

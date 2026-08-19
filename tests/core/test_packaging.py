@@ -35,7 +35,9 @@ def test_release_workflow_fetches_packaged_deno() -> None:
 
 	assert "Fetch Deno runtime" in workflow
 	assert "resources/deno/${DENO_PLATFORM}" in workflow
-	assert "sha256sum --check" in workflow
+	assert "hashlib.file_digest" in workflow
+	assert 're.search(r"(?i)\\b[0-9a-f]{64}\\b", checksum_text)' in workflow
+	assert "SHA256 mismatch" in workflow
 	assert "licenses/DENO-LICENSE.md" in workflow
 
 
