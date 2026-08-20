@@ -1,6 +1,21 @@
 from unittest.mock import patch
 
+from csvmusic.core import js_runtime
 from csvmusic.core.js_runtime import JsRuntimeInfo, ytdlp_js_runtime_args
+
+
+def test_current_date_version_supports_js_runtimes():
+	js_runtime.ytdlp_supports_js_runtimes.cache_clear()
+	with patch("csvmusic.core.js_runtime._yt_dlp_version", return_value="2026.08.19"):
+		assert js_runtime.ytdlp_supports_js_runtimes("yt-dlp.exe")
+	js_runtime.ytdlp_supports_js_runtimes.cache_clear()
+
+
+def test_version_probe_allows_slow_standalone_startup():
+	with patch("csvmusic.core.js_runtime.subprocess.run") as run:
+		run.return_value.stdout = "2026.08.19\n"
+		assert js_runtime._run_version("yt-dlp.exe") == "2026.08.19"
+		assert run.call_args.kwargs["timeout"] == 15
 
 
 def test_ytdlp_js_runtime_args_enable_supported_node():

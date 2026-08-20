@@ -7,6 +7,7 @@ from csvmusic.core.paths import INTERNAL_YTDLP, deno_path
 from csvmusic.core.subprocess_env import subprocess_kwargs
 
 _MIN_YTDLP_JS_RUNTIMES = (2026, 6, 9)
+_VERSION_PROBE_TIMEOUT_S = 15
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,7 @@ def _run_version(path: str) -> str:
 		stdout=subprocess.PIPE,
 		stderr=subprocess.STDOUT,
 		text=True,
-		timeout=3,
+		timeout=_VERSION_PROBE_TIMEOUT_S,
 		**subprocess_kwargs(),
 	)
 	return (proc.stdout or "").strip().splitlines()[0] if proc.stdout else ""

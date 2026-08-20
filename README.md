@@ -23,21 +23,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.6.5
+https://github.com/angall1/CSVMusic/releases/tag/v1.6.6
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.6.5/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.5/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.5/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.6.5/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -64,7 +64,7 @@ Python installations still require a supported graphical desktop environment for
 
 ---
 
-# What's New In 1.6.5 (Since 1.6.0)
+# What's New In 1.6.6 (Since 1.6.0)
 
 ## Updates and MP3 reliability
 
@@ -73,6 +73,8 @@ Python installations still require a supported graphical desktop environment for
 
 ## YouTube reliability
 
+- Fixed preflight incorrectly reporting the bundled yt-dlp as too old when antivirus scanning or slower storage made its version probe take more than three seconds.
+- Added yt-dlp's automatic YouTube client selection as an early fallback, allowing current upstream clients such as `visionos` to recover when a forced client temporarily exposes no playable formats.
 - Updated and pinned yt-dlp to `2026.08.19`, fixing widespread HTTP 403 failures with current YouTube `web_embedded` downloads and preventing release builds from silently changing downloader versions.
 - Fixed current YouTube player-challenge failures by packaging Deno and `yt-dlp-ejs`, passing the runtime explicitly, and validating both before downloads begin.
 - Updated YouTube client fallbacks and diagnostics for current yt-dlp behavior, including clearer HTTP 403, throttling, and JavaScript-runtime messages.
@@ -88,6 +90,7 @@ Python installations still require a supported graphical desktop environment for
 
 ## Audio and Windows packaging
 
+- Shortened exceptionally long track filenames with a stable uniqueness suffix, preventing Windows output-path failures from being misreported as YouTube throttling.
 - Added optional native **Opus** output under Settings. Opus streams are remuxed without lossy re-encoding and support metadata and artwork.
 - Prevented FFmpeg failures caused by selecting Apple Music or iTunes auto-import folders.
 - Fixed Windows release builds by accepting Deno's PowerShell-formatted SHA256 metadata while retaining archive integrity verification on every platform.

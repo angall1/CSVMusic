@@ -1,5 +1,5 @@
 # tabs only
-import os, pathlib, subprocess, requests, io, contextlib, json, base64
+import os, pathlib, subprocess, requests, io, contextlib, json, base64, hashlib
 from dataclasses import dataclass
 from typing import Dict, Optional, List
 import re, unicodedata
@@ -15,7 +15,7 @@ from csvmusic.core.subprocess_env import subprocess_kwargs
 
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
 YT_URL = "https://www.youtube.com/watch?v={vid}"
-YOUTUBE_CLIENTS: list[str] = ["web_embedded", "ios", "tv", "android_vr"]
+YOUTUBE_CLIENTS: list[str | None] = ["web_embedded", None, "ios", "tv", "android_vr"]
 MP3_SOURCE_FORMAT = "bestaudio/best"
 _YOUTUBE_RISK_PATTERNS: tuple[tuple[str, str], ...] = (
 	("http error 429", "YouTube returned HTTP 429"),
@@ -79,6 +79,7 @@ YOUTUBE_MITIGATION_AGGRESSIVE = YouTubeMitigationProfile(
 
 _TARGET_LOUDNESS_I = -16.0
 _TARGET_TRUE_PEAK_DB = -2.5
+_MAX_SAFE_NAME_LENGTH = 140
 
 def _run(cmd: list[str]) -> int:
 	proc = _run_capture(cmd)
@@ -344,7 +345,12 @@ def sanitize_name(name: str) -> str:
 	text = re.sub(r"[\x00-\x1f]+", "", text)
 	text = re.sub(r"\s+", " ", text).strip()
 	text = text.rstrip(". ")
-	return text or "_"
+	text = text or "_"
+	if len(text) <= _MAX_SAFE_NAME_LENGTH:
+		return text
+	digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
+	prefix_length = _MAX_SAFE_NAME_LENGTH - len(digest) - 1
+	return f"{text[:prefix_length].rstrip()}-{digest}"
 
 def _safe(name: str) -> str:
 	# Backward-compatible helper kept for internal use
@@ -621,7 +627,9 @@ def tag_file(path: pathlib.Path, meta: Dict, cover_bytes: Optional[bytes], *, co
 		mp4.save()
 
 
-def _extractor_args(client: str) -> list[str]:
+def _extractor_args(client: str | None) -> list[str]:
+	if client is None:
+		return []
 	return ["--extractor-args", f"youtube:player_client={client}"]
 
 

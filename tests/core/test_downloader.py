@@ -4,8 +4,10 @@ import unicodedata
 
 def test_youtube_client_fallbacks_use_current_client_names():
 	assert downloader.YOUTUBE_CLIENTS[0] == "web_embedded"
+	assert downloader.YOUTUBE_CLIENTS[1] is None
 	assert "tv_embedded" not in downloader.YOUTUBE_CLIENTS
 	assert "webremix" not in downloader.YOUTUBE_CLIENTS
+	assert downloader._extractor_args(None) == []
 
 
 def test_mp3_source_format_falls_back_to_combined_stream():
@@ -83,6 +85,16 @@ def test_cleanup_outputs_removes_decomposed_accents(tmp_path):
 	downloader._cleanup_outputs(tmp_path, base)
 
 	assert not path.exists()
+
+
+def test_sanitize_name_shortens_long_windows_filenames_deterministically():
+	first = downloader.sanitize_name("Orchestra - " + "A" * 300)
+	second = downloader.sanitize_name("Orchestra - " + "B" * 300)
+
+	assert len(first) == downloader._MAX_SAFE_NAME_LENGTH
+	assert len(second) == downloader._MAX_SAFE_NAME_LENGTH
+	assert first != second
+	assert first == downloader.sanitize_name("Orchestra - " + "A" * 300)
 
 
 def test_tag_file_writes_mp3_track_and_disc_numbers(monkeypatch, tmp_path):
