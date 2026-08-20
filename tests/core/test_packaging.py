@@ -41,6 +41,15 @@ def test_release_workflow_fetches_packaged_deno() -> None:
 	assert "licenses/DENO-LICENSE.md" in workflow
 
 
+def test_release_workflow_pins_tested_ytdlp() -> None:
+	workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+	assert 'YTDLP_VERSION: "2026.08.19"' in workflow
+	assert '"yt-dlp[default]==${YTDLP_VERSION}"' in workflow
+	assert 'releases/download/{ytdlp_version}/yt-dlp.exe' in workflow
+	assert "releases/latest/download/yt-dlp" not in workflow
+
+
 def test_pyinstaller_collects_deno_and_ejs() -> None:
 	spec = (ROOT / "CSVMusic.spec").read_text(encoding="utf-8")
 
