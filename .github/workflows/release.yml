@@ -20,6 +20,7 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
   RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
   DENO_VERSION: "2.9.4"
+  YTDLP_VERSION: "2026.08.19"
 
 jobs:
   build:
@@ -76,7 +77,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build pyinstaller yt-dlp ytmusicapi
+          python -m pip install build pyinstaller "yt-dlp[default]==${YTDLP_VERSION}" ytmusicapi
           python -m pip install -e .
 
       - name: Ensure license directory
@@ -289,11 +290,12 @@ jobs:
               bin_dir = app_dir
               if (app_dir / "CSVMusic").exists() or (app_dir / "CSVMusic.exe").exists():
                   bin_dir = app_dir
-              # Always fetch official standalone yt-dlp for portability
+              # Fetch the tested standalone yt-dlp version for reproducible releases
+              ytdlp_version = os.environ["YTDLP_VERSION"]
               dst_ytdlp = bin_dir / ytdlp_name
               url = (
-                  "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" if plat_win else
-                  "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
+                  f"https://github.com/yt-dlp/yt-dlp/releases/download/{ytdlp_version}/yt-dlp.exe" if plat_win else
+                  f"https://github.com/yt-dlp/yt-dlp/releases/download/{ytdlp_version}/yt-dlp_linux"
               )
               try:
                   import urllib.request
