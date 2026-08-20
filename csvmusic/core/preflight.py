@@ -173,8 +173,8 @@ def _check_js_runtime(errors: List[str], warnings: List[str], details: Dict[str,
 		return
 	if not ytdlp_supports_js_runtimes(yt_bin):
 		errors.append(
-			"A supported JavaScript runtime is installed, but this yt-dlp version is too old for CSVMusic to enable it automatically. "
-			"Update yt-dlp with the default extras."
+			"A supported JavaScript runtime is installed, but CSVMusic could not confirm that yt-dlp supports runtime selection. "
+			"Retry preflight or update to yt-dlp 2026.06.09+ with the default extras."
 		)
 
 
