@@ -16,6 +16,7 @@ from csvmusic.core.subprocess_env import subprocess_kwargs
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
 YT_URL = "https://www.youtube.com/watch?v={vid}"
 YOUTUBE_CLIENTS: list[str] = ["web_embedded", "ios", "tv", "android_vr"]
+MP3_SOURCE_FORMAT = "bestaudio/best"
 _YOUTUBE_RISK_PATTERNS: tuple[tuple[str, str], ...] = (
 	("http error 429", "YouTube returned HTTP 429"),
 	("too many requests", "YouTube is rate limiting requests"),
@@ -773,7 +774,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	js_runtime_args = ytdlp_js_runtime_args(yt_bin)
 	cmd_base = [
 		yt_bin,
-		"-f", "bestaudio",
+		"-f", MP3_SOURCE_FORMAT,
 		"--no-playlist",
 		"--force-overwrites",
 		"--retries", "5",

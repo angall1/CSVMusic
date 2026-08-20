@@ -23,21 +23,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.6.4
+https://github.com/angall1/CSVMusic/releases/tag/v1.6.5
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.6.4/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.5/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.4/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.5/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.4/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.5/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.6.4/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.5/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -64,7 +64,12 @@ Python installations still require a supported graphical desktop environment for
 
 ---
 
-# What's New In 1.6.4 (Since 1.6.0)
+# What's New In 1.6.5 (Since 1.6.0)
+
+## Updates and MP3 reliability
+
+- Added a lightweight startup update check that prompts when a newer stable CSVMusic release is available, with options to download, be reminded later, or skip that version.
+- Fixed intermittent MP3 failures when YouTube exposes only a combined audio/video stream. CSVMusic still prefers audio-only downloads and now safely falls back to extracting audio from the best available combined stream.
 
 ## YouTube reliability
 

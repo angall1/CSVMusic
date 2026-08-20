@@ -20,8 +20,25 @@ from csvmusic.core.downloader import (
 )
 from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp, INTERNAL_YTDLP
 from csvmusic.core.subprocess_env import subprocess_kwargs
+from csvmusic.core.update_check import UpdateInfo, fetch_available_update
 
 _FORCE_FALLBACK_MIN_SCORE = 0.45
+
+
+class UpdateCheckWorker(QThread):
+	sig_done = Signal(object)
+
+	def __init__(self, current_version: str, parent: QObject | None = None):
+		super().__init__(parent)
+		self.current_version = current_version
+
+	def run(self):
+		update: UpdateInfo | None = None
+		try:
+			update = fetch_available_update(self.current_version)
+		except Exception as exc:
+			log(f"update check unavailable: {exc}")
+		self.sig_done.emit(update)
 
 class MusicURLImportWorker(QThread):
 	sig_done = Signal(bool, dict, str)
