@@ -8,6 +8,10 @@ def test_youtube_client_fallbacks_use_current_client_names():
 	assert "webremix" not in downloader.YOUTUBE_CLIENTS
 
 
+def test_mp3_source_format_falls_back_to_combined_stream():
+	assert downloader.MP3_SOURCE_FORMAT == "bestaudio/best"
+
+
 def test_auth_required_errors_do_not_retry_without_cookies():
 	assert not downloader._should_retry_without_cookies(
 		"ERROR: Sign in to confirm your age",

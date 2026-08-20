@@ -11,17 +11,19 @@ from PySide6.QtWidgets import (
 	QComboBox, QSlider, QDialog, QInputDialog, QAbstractItemView,
 	QFileSystemModel, QTreeView, QDialogButtonBox
 )
-from PySide6.QtCore import Qt, QSignalBlocker, QUrl, Signal, QRect, QSize
+from PySide6.QtCore import Qt, QSignalBlocker, QUrl, Signal, QRect, QSize, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiApplication, QDesktopServices, QPainter, QPen
 
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
 from csvmusic.core.settings import load_settings, save_settings
+from csvmusic.core.update_check import UpdateInfo, should_check_for_updates, update_check_timestamp
 from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation
 from csvmusic.core.preflight import run_preflight_checks
 from csvmusic.core.output_folder import OutputFolderError, validate_output_folder
 from csvmusic.core.track_output import expected_track_path, plan_track_outputs
 from csvmusic.core.paths import app_icon_path, resource_base
-from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker, AlternativesFetchWorker, MusicURLImportWorker
+from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker, AlternativesFetchWorker, MusicURLImportWorker, UpdateCheckWorker
+from csvmusic.version import APP_VERSION
 from csvmusic.core.browsers import list_profiles
 from csvmusic.core.youtube_url import YouTubeVideoUrlError, parse_youtube_video_id
 
@@ -299,6 +301,7 @@ class MainWindow(QMainWindow):
 		self.load_source_description: str = ""
 		self._allow_path_persist = False
 		self.cookie_check_worker: CookiesCheckWorker | None = None
+		self.update_check_worker: UpdateCheckWorker | None = None
 		icon_p = app_icon_path()
 		if icon_p:
 			self.setWindowIcon(QIcon(str(icon_p)))
@@ -1181,6 +1184,46 @@ class MainWindow(QMainWindow):
 		vl.addWidget(self.resolve_box)
 
 		self._load_last_session()
+		QTimer.singleShot(1500, self._start_update_check)
+
+	def _start_update_check(self) -> None:
+		if self.update_check_worker is not None and self.update_check_worker.isRunning():
+			return
+		settings = load_settings()
+		if not should_check_for_updates(settings.get("last_update_check_at")):
+			return
+		save_settings({"last_update_check_at": update_check_timestamp()})
+		self.update_check_worker = UpdateCheckWorker(APP_VERSION, self)
+		self.update_check_worker.sig_done.connect(self._on_update_check_finished)
+		self.update_check_worker.start()
+
+	def _on_update_check_finished(self, update: UpdateInfo | None) -> None:
+		worker = self.update_check_worker
+		self.update_check_worker = None
+		if worker is not None:
+			worker.deleteLater()
+		if update is None:
+			return
+		settings = load_settings()
+		if settings.get("skipped_update_version") == update.version:
+			return
+		message = QMessageBox(self)
+		message.setWindowTitle("Update Available")
+		message.setIcon(QMessageBox.Information)
+		message.setText(f"CSVMusic {update.version} is available.")
+		message.setInformativeText(
+			f"You are currently running CSVMusic {APP_VERSION}. Would you like to open the download page?"
+		)
+		download_button = message.addButton("Download Update", QMessageBox.AcceptRole)
+		message.addButton("Remind Me Later", QMessageBox.RejectRole)
+		skip_button = message.addButton("Skip This Version", QMessageBox.DestructiveRole)
+		message.exec()
+		clicked = message.clickedButton()
+		if clicked is download_button:
+			if not QDesktopServices.openUrl(QUrl(update.url)):
+				QMessageBox.warning(self, "Open Failed", f"Could not open {update.url}")
+		elif clicked is skip_button:
+			save_settings({"skipped_update_version": update.version})
 
 	def _compute_scale_factor(self) -> float:
 		screen = QGuiApplication.primaryScreen()
@@ -2918,6 +2961,10 @@ class MainWindow(QMainWindow):
 		# Stop cookie check worker if running
 		self._shutdown_thread(self.cookie_check_worker, wait_ms=500)
 		self.cookie_check_worker = None
+
+		# Stop update check worker if startup is still waiting on the network
+		self._shutdown_thread(self.update_check_worker, wait_ms=500)
+		self.update_check_worker = None
 
 		# Stop resolution workers if running
 		for record in list(self.resolve_items.values()):
