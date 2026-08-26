@@ -108,12 +108,12 @@ Python installations still require a supported graphical desktop environment for
 
 ## Library Mode
 
-Library Mode keeps multiple public Spotify playlists in one persistent local catalog:
+Library Mode keeps multiple public Spotify, Apple Music, YouTube Music, and YouTube playlists in one persistent local catalog:
 
 1. Click **Choose...** next to **Source**, then choose **Library Mode**.
-2. Paste one or more public Spotify playlist URLs, one per line, and click **Add URLs**.
+2. Paste a public Spotify, Apple Music, YouTube Music, or YouTube playlist URL and click **Add Playlist**. Repeat for additional playlists; duplicate links are ignored.
 3. Choose the shared output folder and M4A or MP3 format.
-4. Select playlists and click **Scan Selected**, or use **Rescan All**. The public-page scanner opens each playlist and scrolls until it has collected the available track metadata and artwork.
+4. Use **Rescan All** or the refresh button beside one playlist. Spotify uses the public-page scanner; Apple Music and YouTube playlists load metadata directly without opening a browser.
 5. Check or uncheck individual tracks. The playlist table shows how many enabled tracks are missing from disk.
 6. Click **Use Enabled Tracks in CSVMusic**, then start the normal download.
 

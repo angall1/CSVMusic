@@ -8,6 +8,8 @@ from typing import Any
 
 from csvmusic.core.spotify_import import parse_spotify_source
 from csvmusic.core.track_output import expected_track_path
+from csvmusic.core.youtube_music_import import parse_youtube_playlist_id
+from csvmusic.core.apple_music_import import parse_apple_music_source_url
 
 
 LIBRARY_VERSION = 1
@@ -46,7 +48,7 @@ def save_library(path: str | pathlib.Path, library: dict) -> None:
 
 
 def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], list[str]]:
-	existing = {str(item.get("id")) for item in library.get("playlists", [])}
+	existing = {_playlist_key(item) for item in library.get("playlists", [])}
 	added: list[dict] = []
 	errors: list[str] = []
 	for value in values:
@@ -54,16 +56,32 @@ def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], lis
 		if not text:
 			continue
 		try:
-			source = parse_spotify_source(text, expected_type="playlist")
+			if "music.apple.com" in text.casefold():
+				source_type, source_id, url = parse_apple_music_source_url(text)
+				platform = "apple_music"
+				placeholder = f"Unscanned Apple Music {source_type.title()}"
+			elif "youtube.com" in text.casefold() or "youtu.be" in text.casefold():
+				source_id = parse_youtube_playlist_id(text)
+				platform = "youtube_music"
+				url = f"https://music.youtube.com/playlist?list={source_id}"
+				placeholder = "Unscanned YouTube Music Playlist"
+			else:
+				source = parse_spotify_source(text, expected_type="playlist")
+				source_id = source.id
+				platform = "spotify"
+				url = f"https://open.spotify.com/playlist/{source_id}"
+				placeholder = "Unscanned Spotify Playlist"
 		except Exception as exc:
 			errors.append(f"{text}: {exc}")
 			continue
-		if source.id in existing:
+		key = f"{platform}:{source_id}"
+		if key in existing:
 			continue
 		playlist = {
-			"id": source.id,
-			"url": f"https://open.spotify.com/playlist/{source.id}",
-			"name": "Unscanned Spotify Playlist",
+			"id": source_id,
+			"platform": platform,
+			"url": url,
+			"name": placeholder,
 			"last_scanned_at": None,
 			"reported_total": None,
 			"scan_warning": None,
@@ -71,7 +89,7 @@ def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], lis
 			"tracks": [],
 		}
 		library.setdefault("playlists", []).append(playlist)
-		existing.add(source.id)
+		existing.add(key)
 		added.append(playlist)
 	return added, errors
 
@@ -100,9 +118,15 @@ def merge_playlist_scan(
 		seen.add(key)
 		old = previous.get(key, {})
 		track["enabled"] = bool(old.get("enabled", True))
-		track["preferred_video_id"] = old.get("preferred_video_id") or None
-		track["preferred_video_label"] = old.get("preferred_video_label") or None
+		track["preferred_video_id"] = old.get("preferred_video_id") or track.get("preferred_video_id") or None
+		track["preferred_video_label"] = old.get("preferred_video_label") or track.get("preferred_video_label") or None
 		track["force_redownload"] = bool(old.get("force_redownload", False))
+		track["last_error"] = old.get("last_error") or None
+		track["last_error_at"] = old.get("last_error_at") or None
+		track["last_downloaded_at"] = old.get("last_downloaded_at") or None
+		track["downloaded_video_id"] = old.get("downloaded_video_id") or None
+		track["downloaded_video_title"] = old.get("downloaded_video_title") or None
+		track["downloaded_video_publisher"] = old.get("downloaded_video_publisher") or None
 		merged.append(track)
 	removed = [old for key, old in previous.items() if key not in seen]
 	playlist.update({
@@ -122,20 +146,19 @@ def merge_playlist_scan(
 
 
 def playlist_by_id(library: dict, playlist_id: str) -> dict | None:
-	return next((item for item in library.get("playlists", []) if item.get("id") == playlist_id), None)
+	return next((item for item in library.get("playlists", []) if _playlist_key(item) == playlist_id or item.get("id") == playlist_id), None)
 
 
 def enabled_tracks(library: dict, playlist_ids: set[str] | None = None) -> list[dict]:
 	result: list[dict] = []
 	for playlist in library.get("playlists", []):
-		if playlist_ids is not None and playlist.get("id") not in playlist_ids:
+		if playlist_ids is not None and _playlist_key(playlist) not in playlist_ids and playlist.get("id") not in playlist_ids:
 			continue
 		for stored in playlist.get("tracks", []):
-			if not stored.get("enabled", True):
-				continue
 			track = dict(stored)
+			track["enabled"] = True
 			track["playlist"] = playlist.get("name") or "Playlist"
-			track["library_playlist_id"] = playlist.get("id")
+			track["library_playlist_id"] = _playlist_key(playlist)
 			result.append(track)
 	return result
 
@@ -154,6 +177,41 @@ def clear_redownload_flag(path: str | pathlib.Path, playlist_id: str, track: dic
 			return
 
 
+def record_library_download_result(
+	path: str | pathlib.Path,
+	playlist_id: str,
+	track: dict,
+	*,
+	downloaded: bool,
+	error: str | None = None,
+	match: dict | None = None,
+) -> None:
+	"""Persist a library track's latest download outcome for later inspection."""
+	library = load_library(path)
+	playlist = playlist_by_id(library, playlist_id)
+	if playlist is None:
+		return
+	key = _track_key(track)
+	for stored in playlist.get("tracks", []):
+		if _track_key(stored) != key:
+			continue
+		if downloaded:
+			stored["force_redownload"] = False
+			stored["last_error"] = None
+			stored["last_error_at"] = None
+			stored["last_downloaded_at"] = _now()
+			stored["downloaded_video_id"] = (match or {}).get("videoId") or stored.get("downloaded_video_id")
+			stored["downloaded_video_title"] = (match or {}).get("title") or stored.get("downloaded_video_title")
+			stored["downloaded_video_publisher"] = (
+				(match or {}).get("author") or (match or {}).get("artists") or stored.get("downloaded_video_publisher")
+			)
+		elif error:
+			stored["last_error"] = str(error).strip()[:4000]
+			stored["last_error_at"] = _now()
+		save_library(path, library)
+		return
+
+
 def library_status(library: dict, output_dir: str | pathlib.Path, fmt: str) -> dict:
 	root = pathlib.Path(output_dir)
 	by_playlist: dict[str, dict] = {}
@@ -161,20 +219,16 @@ def library_status(library: dict, output_dir: str | pathlib.Path, fmt: str) -> d
 	for playlist in library.get("playlists", []):
 		status = {"enabled": 0, "downloaded": 0, "missing": 0, "disabled": 0, "redownload": 0}
 		for stored in playlist.get("tracks", []):
-			if not stored.get("enabled", True):
-				status["disabled"] += 1
-				continue
 			status["enabled"] += 1
 			track = dict(stored)
 			track["playlist"] = playlist.get("name") or "Playlist"
 			if stored.get("force_redownload"):
 				status["redownload"] += 1
-				status["missing"] += 1
-			elif expected_track_path(track, root, fmt).exists():
+			if expected_track_path(track, root, fmt).exists():
 				status["downloaded"] += 1
 			else:
 				status["missing"] += 1
-		by_playlist[str(playlist.get("id"))] = status
+		by_playlist[_playlist_key(playlist)] = status
 		for key in totals:
 			totals[key] += status[key]
 	return {"totals": totals, "playlists": by_playlist}
@@ -200,7 +254,7 @@ def export_csv(path: str | pathlib.Path, library: dict, playlist_ids: set[str] |
 
 
 def _normalized_track(raw: dict[str, Any], playlist_name: str, position: int) -> dict:
-	return {
+	track = {
 		"title": str(raw.get("title") or "").strip(),
 		"artists": str(raw.get("artists") or "").strip(),
 		"album": str(raw.get("album") or "").strip(),
@@ -213,9 +267,24 @@ def _normalized_track(raw: dict[str, Any], playlist_name: str, position: int) ->
 		"track_no": int(raw.get("track_no") or position),
 		"disc_no": int(raw.get("disc_no") or 1),
 	}
+	if raw.get("youtube_video_id"):
+		track["youtube_video_id"] = raw["youtube_video_id"]
+		track["preferred_video_id"] = raw["youtube_video_id"]
+		track["preferred_video_label"] = raw.get("preferred_video_label") or f"https://music.youtube.com/watch?v={raw['youtube_video_id']}"
+		track["youtube_video_title"] = raw.get("youtube_video_title") or track["title"]
+		track["youtube_video_author"] = raw.get("youtube_video_author") or track["artists"]
+	if raw.get("apple_music_id"):
+		track["apple_music_id"] = raw["apple_music_id"]
+	return track
 
 
 def _track_key(track: dict) -> str:
+	youtube_id = str(track.get("youtube_video_id") or "").strip()
+	if youtube_id:
+		return f"youtube:{youtube_id}"
+	apple_id = str(track.get("apple_music_id") or "").strip()
+	if apple_id:
+		return f"apple:{apple_id}"
 	spotify_id = str(track.get("sp_id") or track.get("id") or "").strip()
 	if spotify_id:
 		return f"spotify:{spotify_id}"
@@ -224,3 +293,7 @@ def _track_key(track: dict) -> str:
 
 def _now() -> str:
 	return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def _playlist_key(playlist: dict) -> str:
+	return f"{playlist.get('platform') or 'spotify'}:{playlist.get('id')}"

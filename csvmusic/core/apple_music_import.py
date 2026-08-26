@@ -23,6 +23,7 @@ class AppleMusicSource:
 	total_count: int | None = None
 	source_type: str = "apple_music"
 	warning: str | None = None
+	cover_url: str | None = None
 
 
 def fetch_apple_music_source(value: str, *, timeout: int = 20, session: requests.Session | None = None) -> AppleMusicSource:
@@ -49,10 +50,23 @@ def fetch_apple_music_source(value: str, *, timeout: int = 20, session: requests
 	return parse_apple_music_page(resp.content.decode("utf-8", errors="replace"), url)
 
 
+def parse_apple_music_source_url(value: str) -> tuple[str, str, str]:
+	"""Return the source type, stable ID, and validated Apple Music URL."""
+	url = _validate_apple_music_url(value)
+	parsed = urlparse(url)
+	parts = [part for part in parsed.path.split("/") if part]
+	source_type = parts[1].lower()
+	source_id = parts[-1]
+	if not source_id:
+		raise AppleMusicImportError("This Apple Music link does not contain a playlist or album ID.")
+	return source_type, source_id, url
+
+
 def parse_apple_music_page(html_text: str, url: str = "") -> AppleMusicSource:
 	server = _extract_server_data(html_text)
 	ld = _extract_ld_playlist(html_text)
 	name = _clean_text(_find_header_title(server) or (ld or {}).get("name")) or "Apple Music"
+	cover_url = _find_header_artwork(server) or _ld_cover_url(ld)
 	total_count = _safe_int((ld or {}).get("numTracks"))
 	tracks = _tracks_from_server_data(server, name)
 	if not tracks and ld:
@@ -62,7 +76,8 @@ def parse_apple_music_page(html_text: str, url: str = "") -> AppleMusicSource:
 	warning = None
 	if total_count and len(tracks) < total_count:
 		warning = incomplete_import_warning("Apple Music", len(tracks), total_count)
-	return AppleMusicSource(id=_apple_source_id(url), name=name, tracks=tracks, total_count=total_count, warning=warning)
+	source_id = parse_apple_music_source_url(url)[1] if url else _apple_source_id(url)
+	return AppleMusicSource(id=source_id, name=name, tracks=tracks, total_count=total_count, warning=warning, cover_url=cover_url)
 
 
 def _validate_apple_music_url(value: str) -> str:
@@ -120,6 +135,7 @@ def _tracks_from_server_data(server: dict[str, Any] | None, playlist_name: str) 
 		out.append(_track_dict(
 			title=title,
 			artists=artists,
+			album=_link_title(item.get("tertiaryLinks")),
 			playlist_name=playlist_name,
 			duration_ms=_safe_int(item.get("duration")) or 0,
 			cover_url=_artwork_url(item.get("artwork")),
@@ -141,6 +157,7 @@ def _tracks_from_ld(ld: dict[str, Any], playlist_name: str) -> list[dict]:
 		out.append(_track_dict(
 			title=title,
 			artists="Unknown Artist",
+			album="",
 			playlist_name=playlist_name,
 			duration_ms=_duration_to_ms(item.get("duration") or audio.get("duration")),
 			cover_url=_clean_text(audio.get("thumbnailUrl")) or None,
@@ -150,14 +167,24 @@ def _tracks_from_ld(ld: dict[str, Any], playlist_name: str) -> list[dict]:
 	return out
 
 
-def _track_dict(title: str, artists: str, playlist_name: str, duration_ms: int, cover_url: str | None, track_no: int, source_id: str | None) -> dict:
+def _link_title(value: Any) -> str:
+	if not isinstance(value, list):
+		return ""
+	for link in value:
+		if isinstance(link, dict) and link.get("title"):
+			return _clean_text(link.get("title"))
+	return ""
+
+
+def _track_dict(title: str, artists: str, album: str, playlist_name: str, duration_ms: int, cover_url: str | None, track_no: int, source_id: str | None) -> dict:
 	return {
 		"title": title,
 		"artists": artists,
-		"album": "",
+		"album": album,
 		"playlist": playlist_name,
 		"isrc": None,
-		"sp_id": source_id,
+		"sp_id": None,
+		"apple_music_id": source_id,
 		"duration_ms": duration_ms,
 		"year": None,
 		"cover_url": cover_url,
@@ -173,6 +200,31 @@ def _find_header_title(server: dict[str, Any] | None) -> str | None:
 		content = item.get("contentDescriptor")
 		if isinstance(content, dict) and content.get("kind") in ("playlist", "album") and item.get("title"):
 			return _clean_text(item.get("title"))
+	return None
+
+
+def _find_header_artwork(server: dict[str, Any] | None) -> str | None:
+	if not server:
+		return None
+	for item in _walk_dicts(server):
+		content = item.get("contentDescriptor")
+		if isinstance(content, dict) and content.get("kind") in ("playlist", "album"):
+			artwork = _artwork_url(item.get("artwork"))
+			if artwork:
+				return artwork
+	return None
+
+
+def _ld_cover_url(ld: dict[str, Any] | None) -> str | None:
+	if not ld:
+		return None
+	image = ld.get("image")
+	if isinstance(image, str):
+		return _clean_text(image) or None
+	if isinstance(image, list):
+		return next((_clean_text(value) for value in reversed(image) if isinstance(value, str) and _clean_text(value)), None)
+	if isinstance(image, dict):
+		return _clean_text(image.get("url") or image.get("contentUrl")) or None
 	return None
 
 

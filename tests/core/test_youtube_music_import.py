@@ -25,6 +25,9 @@ def test_tracks_from_youtube_music_playlist():
 	assert tracks[0]["artists"] == "ROSE, Bruno Mars"
 	assert tracks[0]["duration_ms"] == 174000
 	assert tracks[0]["cover_url"] == "large.jpg"
+	assert tracks[0]["youtube_video_id"] == "abc"
+	assert tracks[0]["preferred_video_id"] == "abc"
+	assert tracks[0]["sp_id"] is None
 
 
 def test_fetch_youtube_music_playlist_requests_all_tracks(monkeypatch):

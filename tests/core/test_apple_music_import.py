@@ -1,7 +1,16 @@
 import html
 import json
 
-from csvmusic.core.apple_music_import import parse_apple_music_page
+from csvmusic.core.apple_music_import import parse_apple_music_page, parse_apple_music_source_url
+
+
+def test_parse_apple_music_playlist_url():
+	url = "https://music.apple.com/us/playlist/disco-essentials/pl.88cf86bb7a8f4b5d9feb7e393e5bbc73"
+	assert parse_apple_music_source_url(url) == (
+		"playlist",
+		"pl.88cf86bb7a8f4b5d9feb7e393e5bbc73",
+		url,
+	)
 
 
 def test_parse_apple_music_server_data_tracks():
@@ -20,6 +29,7 @@ def test_parse_apple_music_server_data_tracks():
 									"id": "track-lockup - pl.abc - 12345",
 									"title": "Look at My Life",
 									"artistName": "Gracie Abrams",
+									"tertiaryLinks": [{"title": "The Secret of Us"}],
 									"duration": 190533,
 									"artwork": {
 										"dictionary": {
@@ -54,6 +64,7 @@ def test_parse_apple_music_server_data_tracks():
 	assert source.total_count == 1
 	assert source.tracks[0]["title"] == "Look at My Life"
 	assert source.tracks[0]["artists"] == "Gracie Abrams"
+	assert source.tracks[0]["album"] == "The Secret of Us"
 	assert source.tracks[0]["duration_ms"] == 190533
 	assert source.tracks[0]["cover_url"] == "https://example.com/1200x1200bb.jpg"
 

@@ -27,7 +27,7 @@ from csvmusic.ui.library_mode import LibraryModeDialog
 from csvmusic.version import APP_VERSION
 from csvmusic.core.browsers import list_profiles
 from csvmusic.core.youtube_url import YouTubeVideoUrlError, parse_youtube_video_id
-from csvmusic.core.library import clear_redownload_flag
+from csvmusic.core.library import record_library_download_result
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
 RED = QColor(255, 205, 210)      # soft red
@@ -2335,9 +2335,12 @@ class MainWindow(QMainWindow):
 		if btn:
 			btn.setEnabled(True)
 		track = payload.get("track")
-		if payload.get("downloaded") and track and track.get("library_path") and track.get("library_playlist_id"):
+		if track and track.get("library_path") and track.get("library_playlist_id") and (payload.get("downloaded") or payload.get("error")):
 			try:
-				clear_redownload_flag(track["library_path"], track["library_playlist_id"], track)
+				record_library_download_result(
+					track["library_path"], track["library_playlist_id"], track,
+					downloaded=bool(payload.get("downloaded")), error=payload.get("error"), match=payload.get("match"),
+				)
 			except Exception as exc:
 				from csvmusic.core.log import log
 				log(f"library completion update failed error={exc}")

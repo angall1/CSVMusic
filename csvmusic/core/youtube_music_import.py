@@ -21,6 +21,7 @@ class YouTubeMusicSource:
 	total_count: int | None = None
 	source_type: str = "youtube_music"
 	warning: str | None = None
+	cover_url: str | None = None
 
 
 def fetch_youtube_music_source(value: str, *, limit: int | None = None) -> YouTubeMusicSource:
@@ -40,7 +41,7 @@ def fetch_youtube_music_source(value: str, *, limit: int | None = None) -> YouTu
 	warning = None
 	if total_count and len(tracks) < total_count:
 		warning = incomplete_import_warning("YouTube Music", len(tracks), total_count)
-	return YouTubeMusicSource(id=playlist_id, name=name, tracks=tracks, total_count=total_count, warning=warning)
+	return YouTubeMusicSource(id=playlist_id, name=name, tracks=tracks, total_count=total_count, warning=warning, cover_url=_cover_url(playlist))
 
 
 def parse_youtube_playlist_id(value: str) -> str:
@@ -85,7 +86,11 @@ def _tracks_from_playlist(items: list[Any], playlist_name: str) -> list[dict]:
 			"album": _album_text(item),
 			"playlist": playlist_name,
 			"isrc": None,
-			"sp_id": video_id or None,
+			"sp_id": None,
+			"youtube_video_id": video_id or None,
+			"preferred_video_id": video_id or None,
+			"youtube_video_title": title,
+			"youtube_video_author": artists,
 			"duration_ms": (_safe_int(item.get("duration_seconds")) or 0) * 1000,
 			"year": None,
 			"cover_url": _cover_url(item),

@@ -7,10 +7,18 @@ __pycache__/
 
 # Build artifacts
 build/
+build-*/
 dist/
+dist-*/
+release-*/
+local-test-*/
 *.egg-info/
 tmp_ytdlp_test/
 ' + $tmpdir + '/
+
+# Test and local agent caches
+.pytest_cache/
+.agents/
 
 # PyInstaller outputs
 *.spec
