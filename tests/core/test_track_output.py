@@ -47,3 +47,16 @@ def test_output_plan_treats_sanitized_filename_collisions_as_shared_files(tmp_pa
 
 	assert plan.queued_rows == (0,)
 	assert plan.duplicate_rows == {1: 0}
+
+
+def test_output_plan_queues_forced_redownload_when_file_exists(tmp_path: pathlib.Path) -> None:
+	track = _track("Replace Me")
+	path = expected_track_path(track, tmp_path, "m4a")
+	path.parent.mkdir(parents=True)
+	path.write_bytes(b"old audio")
+	track["force_redownload"] = True
+
+	plan = plan_track_outputs([track], tmp_path, "m4a")
+
+	assert plan.existing_rows == ()
+	assert plan.queued_rows == (0,)

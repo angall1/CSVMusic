@@ -515,6 +515,21 @@ def yt_thumbnail_bytes(video_id: str) -> Optional[bytes]:
 			pass
 	return None
 
+def cover_art_url_bytes(url: str | None) -> Optional[bytes]:
+	"""Fetch and normalize trusted HTTP(S) artwork, with a conservative size cap."""
+	if not url or not str(url).lower().startswith(("https://", "http://")):
+		return None
+	try:
+		r = requests.get(str(url), timeout=12, stream=True)
+		if r.status_code != 200 or not str(r.headers.get("content-type") or "").lower().startswith("image/"):
+			return None
+		content = r.raw.read(10 * 1024 * 1024 + 1)
+		if not content or len(content) > 10 * 1024 * 1024:
+			return None
+		return _square_cover_art_bytes(content) or content
+	except Exception:
+		return None
+
 def _square_cover_art_bytes(cover_bytes: bytes, *, size: int = 600) -> Optional[bytes]:
 	"""
 	Normalize embedded artwork to a square JPEG without stretching.

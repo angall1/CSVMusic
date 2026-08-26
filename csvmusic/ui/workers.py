@@ -14,7 +14,7 @@ from csvmusic.core.url_import import fetch_music_url
 from csvmusic.core.log import log
 from csvmusic.core.ytmusic_match import find_best, more_candidates, RATE_LIMIT_S, CONFIDENCE_MIN
 from csvmusic.core.downloader import (
-	download_m4a, download_mp3, download_opus, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name,
+	download_m4a, download_mp3, download_opus, tag_file, yt_thumbnail_bytes, cover_art_url_bytes, write_m3u, sanitize_name,
 	youtube_batch_mitigation, build_ytdlp_mitigation_args, detect_youtube_risk,
 	YOUTUBE_MITIGATION_NONE, YOUTUBE_MITIGATION_AGGRESSIVE, YouTubeMitigationProfile
 )
@@ -321,6 +321,9 @@ class PipelineWorker(QThread):
 				if self._stop:
 					break
 				t = track
+				track_playlist_name = self.playlist or t.get("playlist") or playlist_name
+				dest_dir = self.out_dir / (sanitize_name(track_playlist_name) or "Playlist")
+				dest_dir.mkdir(parents=True, exist_ok=True)
 				title = t["title"]
 				artists = t["artists"]
 				search_error = None
@@ -328,7 +331,18 @@ class PipelineWorker(QThread):
 				match = None
 				confidence = 0.0
 				try:
-					match, confidence, options = find_best(yt, t)
+					preferred_video_id = str(t.get("preferred_video_id") or "").strip()
+					if preferred_video_id:
+						match = {
+							"videoId": preferred_video_id,
+							"title": t.get("preferred_video_label") or title,
+							"author": artists,
+							"score": 1.0,
+						}
+						options = [match]
+						confidence = 1.0
+					else:
+						match, confidence, options = find_best(yt, t)
 				except Exception as exc:
 					search_error = str(exc)
 				if search_error:
@@ -347,7 +361,7 @@ class PipelineWorker(QThread):
 					"confidence": confidence,
 					"skipped": False,
 					"error": None,
-					"playlist_name": playlist_name,
+					"playlist_name": track_playlist_name,
 					"file_path": None,
 					"downloaded": False,
 					"cover_bytes": None,
@@ -424,7 +438,7 @@ class PipelineWorker(QThread):
 						try:
 							fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
 							self.sig_row_status.emit(row_idx, "Tagging…")
-							cover = yt_thumbnail_bytes(vid)
+							cover = cover_art_url_bytes(t.get("cover_url")) or yt_thumbnail_bytes(vid)
 							tag_file(fp, t, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
 							payload["match"] = candidate
 							break
@@ -458,7 +472,7 @@ class PipelineWorker(QThread):
 								try:
 									fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
 									self.sig_row_status.emit(row_idx, "Tagging…")
-									cover = yt_thumbnail_bytes(vid)
+									cover = cover_art_url_bytes(t.get("cover_url")) or yt_thumbnail_bytes(vid)
 									tag_file(fp, t, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
 									payload["match"] = candidate
 									break
@@ -494,12 +508,17 @@ class PipelineWorker(QThread):
 				time.sleep(0.02)
 			if done_tracks:
 				ext = self.fmt if self.fmt in ("m4a", "mp3", "opus") else "mp3"
-				if self.write_m3u8:
-					m3u = write_m3u(self.out_dir, playlist_name, done_tracks, ext, suffix=".m3u8", encoding="utf-8")
-					self.sig_log.emit(f"[m3u] wrote: {m3u}")
-				if self.write_m3u_plain:
-					m3u_plain = write_m3u(self.out_dir, playlist_name, done_tracks, ext, suffix=".m3u", encoding="utf-8-sig")
-					self.sig_log.emit(f"[m3u] wrote: {m3u_plain}")
+				by_playlist: dict[str, list[dict]] = {}
+				for completed_track in done_tracks:
+					completed_playlist = self.playlist or completed_track.get("playlist") or playlist_name
+					by_playlist.setdefault(completed_playlist, []).append(completed_track)
+				for completed_playlist, playlist_tracks in by_playlist.items():
+					if self.write_m3u8:
+						m3u = write_m3u(self.out_dir, completed_playlist, playlist_tracks, ext, suffix=".m3u8", encoding="utf-8")
+						self.sig_log.emit(f"[m3u] wrote: {m3u}")
+					if self.write_m3u_plain:
+						m3u_plain = write_m3u(self.out_dir, completed_playlist, playlist_tracks, ext, suffix=".m3u", encoding="utf-8-sig")
+						self.sig_log.emit(f"[m3u] wrote: {m3u_plain}")
 			msg = "All tasks finished."
 			if self._stop:
 				msg = "Stopped (partial results saved)."

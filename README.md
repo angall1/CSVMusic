@@ -106,6 +106,27 @@ Python installations still require a supported graphical desktop environment for
 4. Choose an output folder.
 5. Click **Start**.
 
+## Library Mode
+
+Library Mode keeps multiple public Spotify playlists in one persistent local catalog:
+
+1. Click **Choose...** next to **Source**, then choose **Library Mode**.
+2. Paste one or more public Spotify playlist URLs, one per line, and click **Add URLs**.
+3. Choose the shared output folder and M4A or MP3 format.
+4. Select playlists and click **Scan Selected**, or use **Rescan All**. The public-page scanner opens each playlist and scrolls until it has collected the available track metadata and artwork.
+5. Check or uncheck individual tracks. The playlist table shows how many enabled tracks are missing from disk.
+6. Click **Use Enabled Tracks in CSVMusic**, then start the normal download.
+
+The library is saved locally as `library.json` in CSVMusic's settings folder by default. **Save As...** can create a portable library file. Rescanning preserves track selections and manual YouTube corrections while reporting added and removed tracks.
+
+For standalone development testing, launch only the Library Mode window with:
+
+```powershell
+.\.venv\Scripts\python.exe -m csvmusic.library_mode_ui
+```
+
+To fix a wrong download, select the track, click **Set YouTube Match...**, and paste the correct YouTube or YouTube Music video URL. That track is queued for replacement, and the replacement flag clears after a successful download. **Toggle Redownload** can also replace a track while retaining automatic matching.
+
 CSV import is still available when a service link is unsupported, private, incomplete, or when CSVMusic warns that a URL import may not contain every track:
 
 1. Click **Choose...** next to **Source**.
@@ -151,7 +172,7 @@ Everything is ready to drop into iTunes, a phone, an MP3 player, or a local musi
 - Cookies are optional, but may help with age-restricted or sign-in-only videos.
 - Current YouTube extraction requires a supported JavaScript runtime. Packaged releases include Deno and the needed `yt-dlp` extras; source installs should use `pip install -e .` and provide Deno 2.3+ or Node 22+.
 - Private playlists or pages that hide track data may not import directly. If that happens, export a CSV from TuneMyMusic and load that instead.
-- Large Spotify playlist links can be capped at 100 tracks by Spotify's public page data. If CSVMusic warns about this, open **Choose... > TuneMyMusic**, choose Spotify as the source, paste the same playlist link, export as CSV, then load that CSV through **Choose... > CSV File**.
+- Spotify's public website can change without notice. Library Mode uses an experimental browser-based scanner for public playlists; review any incomplete-scan warning before downloading. TuneMyMusic CSV import remains available as a fallback.
 
 ---
 
@@ -167,3 +188,62 @@ Direct link import supports public playlist or album pages from:
 - Amazon Music, when the page exposes public track data
 
 CSV import supports any service TuneMyMusic can export, including most other music platforms.
+
+### Spotify Web API metadata test
+
+An experimental metadata-only importer is available for testing Spotify Web API access. It retrieves playlist and track metadata and prints the normalized result as JSON. It does not save the access token.
+
+For the guided graphical test, run:
+
+```powershell
+.\.venv\Scripts\python.exe -m csvmusic.spotify_api_test_ui
+```
+
+The graphical test is a four-page wizard:
+
+1. Configure the Spotify Developer Dashboard, copy the callback URL, and check the callback port.
+2. Enter the public Client ID, sign in with Spotify, and verify API access.
+3. Search and sort your playlists, then select any number with checkboxes or **Check All**. Nothing is selected by default.
+4. Load the selected playlists and click each playlist to expand its returned tracks.
+
+Authentication uses Authorization Code with PKCE and never requires the Client Secret. The command-line procedure below remains available for troubleshooting.
+
+Spotify currently exposes playlist items through Web API only when the signed-in user owns or collaborates on that playlist. Followed public playlists still appear in the user's playlist list, so the wizard automatically falls back to Spotify's public page metadata when Web API returns this access restriction. Fallback playlists are labeled in the results and may be partial when Spotify's public page does not expose every track.
+
+An additional unsigned-browser experiment can render and scroll a public playlist without Spotify credentials:
+
+```powershell
+.\.venv\Scripts\python.exe -m csvmusic.spotify_public_scrape_ui
+```
+
+It uses a temporary, non-persistent browser profile and captures only track rows Spotify renders publicly. Spotify may display a sign-in wall or stop exposing additional rows, so this does not guarantee a complete playlist.
+
+#### One-time Spotify setup
+
+1. Sign in to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Spotify currently requires a Premium account for Development Mode apps.
+2. Select **Create app**. A suggested name is `CSVMusic Local Test`.
+3. Enter `CSVMusic playlist metadata test` as the description.
+4. Add `http://127.0.0.1:3000/callback` as the redirect URI. The current command-line test does not receive this callback, but registering it prepares the app for the planned desktop PKCE login.
+5. In **Which API/SDKs are you planning to use?**, check **Web API** only. Leave **Web Playback SDK**, **Ads API**, **Android**, and **iOS** unchecked. CSVMusic only needs Web API access to request playlist and track metadata; it does not use Spotify playback, advertising, or mobile SDKs.
+6. Accept Spotify's terms and create the app. Spotify's official [app setup documentation](https://developer.spotify.com/documentation/web-api/concepts/apps) explains each field.
+7. Keep the app's **Client Secret** private. Do not add it to this repository, settings, or a packaged EXE. The eventual desktop integration will use [Authorization Code with PKCE](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow), which requires only the public Client ID in the application.
+
+#### Get a temporary token for this test
+
+1. Open Spotify's [Get Playlist Items reference](https://developer.spotify.com/documentation/web-api/reference/get-playlists-items).
+2. Sign in and use its **Try it** authorization control to create a user access token. If testing a private playlist, authorize `playlist-read-private`.
+3. Copy only the generated access-token value. Do not paste the 32-character **Client ID** from the app settings: it identifies your app but cannot authorize an API request. Never paste the **Client Secret**. Spotify access tokens normally expire after one hour; see Spotify's [access-token documentation](https://developer.spotify.com/documentation/web-api/concepts/access-token).
+4. In PowerShell, from the CSVMusic repository, set the token for the current terminal and run the importer:
+
+```powershell
+$env:SPOTIFY_ACCESS_TOKEN = "your-access-token"
+.\.venv\Scripts\python.exe -m csvmusic.fetch_spotify_api "https://open.spotify.com/playlist/PLAYLIST_ID"
+```
+
+Replace `PLAYLIST_ID` with the playlist link or paste the complete Spotify playlist URL between the quotes. Under Spotify's current Development Mode rules, the signed-in user must own or collaborate on the playlist. A `401` means the token is missing or expired; a `403` generally means the user or app cannot access that playlist.
+
+Remove the token from the terminal when finished:
+
+```powershell
+Remove-Item Env:SPOTIFY_ACCESS_TOKEN
+```

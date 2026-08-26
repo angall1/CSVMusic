@@ -49,7 +49,7 @@ def plan_track_outputs(tracks: list[dict], out_root: pathlib.Path, fmt: str) -> 
 	for row, track in enumerate(tracks):
 		if row in duplicates:
 			continue
-		if expected_track_path(track, out_root, fmt).exists():
+		if expected_track_path(track, out_root, fmt).exists() and not track.get("force_redownload", False):
 			existing.append(row)
 		else:
 			queued.append(row)

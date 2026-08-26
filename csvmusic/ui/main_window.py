@@ -23,9 +23,11 @@ from csvmusic.core.output_folder import OutputFolderError, validate_output_folde
 from csvmusic.core.track_output import expected_track_path, plan_track_outputs
 from csvmusic.core.paths import app_icon_path, resource_base
 from csvmusic.ui.workers import PipelineWorker, SingleDownloadWorker, CookiesCheckWorker, AlternativesFetchWorker, MusicURLImportWorker, UpdateCheckWorker
+from csvmusic.ui.library_mode import LibraryModeDialog
 from csvmusic.version import APP_VERSION
 from csvmusic.core.browsers import list_profiles
 from csvmusic.core.youtube_url import YouTubeVideoUrlError, parse_youtube_video_id
+from csvmusic.core.library import clear_redownload_flag
 
 YELLOW = QColor(255, 244, 179)   # soft yellow
 RED = QColor(255, 205, 210)      # soft red
@@ -1445,6 +1447,7 @@ class MainWindow(QMainWindow):
 		msg.setText("Choose how to load the playlist.")
 		link_btn = msg.addButton("Music URL", QMessageBox.AcceptRole)
 		csv_btn = msg.addButton("CSV File", QMessageBox.AcceptRole)
+		library_btn = msg.addButton("Library Mode", QMessageBox.ActionRole)
 		tune_btn = msg.addButton("TuneMyMusic", QMessageBox.ActionRole)
 		msg.addButton(QMessageBox.Cancel)
 		msg.exec()
@@ -1463,8 +1466,36 @@ class MainWindow(QMainWindow):
 		if clicked == csv_btn:
 			self.on_browse_csv()
 			return
+		if clicked == library_btn:
+			self.on_open_library_mode()
+			return
 		if clicked == tune_btn:
 			self.on_open_external_link("https://www.tunemymusic.com/home")
+
+	def on_open_library_mode(self) -> None:
+		dialog = LibraryModeDialog(self)
+		dialog.tracks_ready.connect(self._on_library_tracks_ready)
+		dialog.exec()
+
+	def _on_library_tracks_ready(self, tracks: object, description: str, output: str, fmt: str) -> None:
+		loaded = list(tracks or [])
+		if not loaded:
+			return
+		self.source_tracks = loaded
+		self.source_description = description
+		self.ed_csv.clear()
+		self.ed_spotify_url.clear()
+		self.ed_out.setText(output)
+		self.rb_m4a.setChecked(fmt == "m4a")
+		self.rb_mp3.setChecked(fmt == "mp3")
+		self._set_source_summary(f"{description} ({len(loaded)} enabled tracks)")
+		self.btn_clear.setEnabled(True)
+		self._allow_path_persist = True
+		self._persist_settings(include_paths=True)
+		try:
+			self._build_track_preview()
+		except Exception as exc:
+			QMessageBox.warning(self, "Library Preview", str(exc))
 
 	def on_browse_csv(self):
 		p, _ = QFileDialog.getOpenFileName(self, "Select CSV", "", "CSV files (*.csv);;All files (*)")
@@ -2304,6 +2335,12 @@ class MainWindow(QMainWindow):
 		if btn:
 			btn.setEnabled(True)
 		track = payload.get("track")
+		if payload.get("downloaded") and track and track.get("library_path") and track.get("library_playlist_id"):
+			try:
+				clear_redownload_flag(track["library_path"], track["library_playlist_id"], track)
+			except Exception as exc:
+				from csvmusic.core.log import log
+				log(f"library completion update failed error={exc}")
 		if track and 0 <= row_idx < len(self.tracks):
 			self.tracks[row_idx] = track
 		self._update_track_icon(row_idx, payload.get("cover_bytes"))

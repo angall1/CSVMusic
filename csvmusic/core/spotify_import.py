@@ -29,6 +29,7 @@ class SpotifyPlaylist:
 	total_count: int | None = None
 	source_type: str = "playlist"
 	warning: str | None = None
+	cover_url: str | None = None
 
 
 @dataclass
@@ -167,7 +168,7 @@ def parse_spotify_embed_page(html_text: str, source: SpotifySource) -> SpotifyPl
 		warning = incomplete_import_warning("Spotify", len(tracks), total_count, label)
 	elif source.type == "playlist" and len(tracks) == 100:
 		warning = incomplete_import_warning("Spotify", len(tracks), total_count, "playlist")
-	return SpotifyPlaylist(id=source.id, name=name, tracks=tracks, total_count=total_count, source_type=source.type, warning=warning)
+	return SpotifyPlaylist(id=source.id, name=name, tracks=tracks, total_count=total_count, source_type=source.type, warning=warning, cover_url=_embed_cover_url(entity))
 
 
 def _parse_playlist_state(state: dict[str, Any], playlist_id: str) -> SpotifyPlaylist:
@@ -186,7 +187,7 @@ def _parse_playlist_state(state: dict[str, Any], playlist_id: str) -> SpotifyPla
 		warning = incomplete_import_warning("Spotify", len(tracks), total_count, "playlist")
 	elif len(tracks) == 100:
 		warning = incomplete_import_warning("Spotify", len(tracks), total_count, "playlist")
-	return SpotifyPlaylist(id=playlist_id, name=name, tracks=tracks, total_count=total_count, source_type="playlist", warning=warning)
+	return SpotifyPlaylist(id=playlist_id, name=name, tracks=tracks, total_count=total_count, source_type="playlist", warning=warning, cover_url=_entity_cover_url(playlist))
 
 
 def _parse_album_state(state: dict[str, Any], album_id: str) -> SpotifyPlaylist:
@@ -203,7 +204,7 @@ def _parse_album_state(state: dict[str, Any], album_id: str) -> SpotifyPlaylist:
 	warning = None
 	if total_count and len(tracks) < total_count:
 		warning = incomplete_import_warning("Spotify", len(tracks), total_count, "album")
-	return SpotifyPlaylist(id=album_id, name=name, tracks=tracks, total_count=total_count, source_type="album", warning=warning)
+	return SpotifyPlaylist(id=album_id, name=name, tracks=tracks, total_count=total_count, source_type="album", warning=warning, cover_url=_album_cover_url(album))
 
 
 def _extract_initial_state(html_text: str) -> dict[str, Any]:
@@ -389,6 +390,18 @@ def _album_cover_url(album: dict[str, Any]) -> str | None:
 	if not isinstance(sources, list):
 		return None
 	return _best_source_url(sources)
+
+
+def _entity_cover_url(entity: dict[str, Any]) -> str | None:
+	cover = entity.get("images") or entity.get("coverArt") or entity.get("visuals")
+	if isinstance(cover, list):
+		return _best_source_url(cover)
+	if not isinstance(cover, dict):
+		return None
+	sources = cover.get("items") or cover.get("sources")
+	if isinstance(sources, list):
+		return _best_source_url(sources)
+	return _clean_text(cover.get("url")) or None
 
 
 def _embed_cover_url(entity: dict[str, Any]) -> str | None:
