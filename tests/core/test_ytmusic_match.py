@@ -44,3 +44,26 @@ def test_search_filter_falls_back_to_video_artist_names_for_uploader():
 
 	assert results[0]["author"] == "Uploader One, Uploader Two"
 	assert results[0]["channel"] == "Uploader One, Uploader Two"
+
+
+def test_short_tracks_allow_small_absolute_duration_variance():
+	track = {"duration_ms": 15000}
+
+	assert ytmusic_match._duration_within_tolerance(track, {"duration_seconds": 22}) is True
+	assert ytmusic_match._duration_within_tolerance(track, {"duration_seconds": 24}) is False
+
+
+def test_alternative_ranking_can_include_duration_mismatch():
+	yt = FakeYTMusic({
+		"songs": [{
+			"videoId": "song-candidate",
+			"title": "Tiny Song",
+			"artists": [{"name": "Artist"}],
+			"duration": "0:30",
+		}],
+		"videos": [],
+	})
+	track = {"title": "Tiny Song", "artists": "Artist", "duration_ms": 15000}
+
+	assert ytmusic_match._rank_candidates(yt, track, enforce_duration=True) == []
+	assert len(ytmusic_match._rank_candidates(yt, track, enforce_duration=False)) == 1

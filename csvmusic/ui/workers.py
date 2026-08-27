@@ -152,6 +152,7 @@ class PipelineWorker(QThread):
 	             legacy_options: Dict | None = None,
 	             force_download: bool = False,
 	             tracks_override: List[Dict] | None = None,
+	             m3u_tracks_override: List[Dict] | None = None,
 	             row_indices: List[int] | None = None,
 	             parent: QObject | None = None):
 		super().__init__(parent)
@@ -172,6 +173,7 @@ class PipelineWorker(QThread):
 		self.legacy_options = legacy_options or {}
 		self.force_download = bool(force_download)
 		self.tracks_override = tracks_override
+		self.m3u_tracks_override = m3u_tracks_override
 		self.row_indices = row_indices or []
 		self._stop = False
 		self._mitigation = YOUTUBE_MITIGATION_NONE
@@ -343,10 +345,13 @@ class PipelineWorker(QThread):
 				try:
 					preferred_video_id = str(t.get("preferred_video_id") or "").strip()
 					if preferred_video_id:
+						preferred_title = str(t.get("youtube_video_title") or t.get("preferred_video_label") or "").strip()
+						if preferred_title.startswith(("http://", "https://")):
+							preferred_title = title
 						match = {
 							"videoId": preferred_video_id,
-							"title": t.get("preferred_video_label") or title,
-							"author": artists,
+							"title": preferred_title or title,
+							"author": t.get("youtube_video_author") or artists,
 							"score": 1.0,
 						}
 						options = [match]
@@ -524,9 +529,16 @@ class PipelineWorker(QThread):
 			if done_tracks:
 				ext = self.fmt if self.fmt in ("m4a", "mp3", "opus") else "mp3"
 				by_playlist: dict[str, list[dict]] = {}
-				for completed_track in done_tracks:
+				manifest_tracks = self.m3u_tracks_override if self.m3u_tracks_override is not None else done_tracks
+				for completed_track in manifest_tracks:
 					completed_playlist = self.playlist or completed_track.get("playlist") or playlist_name
-					by_playlist.setdefault(completed_playlist, []).append(completed_track)
+					completed_base = f"{completed_track.get('artists', '')} - {completed_track.get('title', '')}"
+					expected_file = (
+						self.out_dir / (sanitize_name(completed_playlist) or "Playlist") /
+						f"{sanitize_name(completed_base)}.{ext}"
+					)
+					if expected_file.exists():
+						by_playlist.setdefault(completed_playlist, []).append(completed_track)
 				for completed_playlist, playlist_tracks in by_playlist.items():
 					if self.write_m3u8:
 						m3u = write_m3u(self.out_dir, completed_playlist, playlist_tracks, ext, suffix=".m3u8", encoding="utf-8")

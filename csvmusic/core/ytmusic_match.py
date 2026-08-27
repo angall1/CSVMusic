@@ -8,6 +8,8 @@ SEARCH_LIMIT = 12
 ALT_SEARCH_LIMIT = 24
 RATE_LIMIT_S = 0.35
 DURATION_TOLERANCE_RATIO = 0.10
+SHORT_TRACK_MAX_SECONDS = 45
+SHORT_TRACK_TOLERANCE_SECONDS = 8
 SEARCH_RETRY_COUNT = 2
 SEARCH_RETRY_SLEEP_S = 0.9
 
@@ -84,6 +86,8 @@ def _duration_within_tolerance(track: Dict, cand: Dict) -> bool:
 	cand_s = _duration_s(cand.get("duration_seconds"))
 	if track_s <= 0 or cand_s <= 0:
 		return True
+	if track_s <= SHORT_TRACK_MAX_SECONDS:
+		return abs(track_s - cand_s) <= SHORT_TRACK_TOLERANCE_SECONDS
 	return abs(track_s - cand_s) <= max(1.0, track_s * DURATION_TOLERANCE_RATIO)
 
 def _score(track: Dict, cand: Dict) -> float:
@@ -234,7 +238,14 @@ def _search(yt: YTMusic, q: str, limit: int = SEARCH_LIMIT, source_mode: SearchS
 	return cands
 
 
-def _rank_candidates(yt: YTMusic, track: Dict, limit: int = SEARCH_LIMIT, source_mode: SearchSource = "all") -> List[Dict]:
+def _rank_candidates(
+	yt: YTMusic,
+	track: Dict,
+	limit: int = SEARCH_LIMIT,
+	source_mode: SearchSource = "all",
+	*,
+	enforce_duration: bool = True,
+) -> List[Dict]:
 	seen_vids: Set[str] = set()
 	all_cands: List[Dict] = []
 	for q in _query_variants(track):
@@ -248,7 +259,7 @@ def _rank_candidates(yt: YTMusic, track: Dict, limit: int = SEARCH_LIMIT, source
 
 	scored: List[Dict] = []
 	for cand in all_cands:
-		if not _duration_within_tolerance(track, cand):
+		if enforce_duration and not _duration_within_tolerance(track, cand):
 			continue
 		s = _score(track, cand)
 		item = dict(cand)
@@ -281,7 +292,9 @@ def find_best(yt: YTMusic, track: Dict) -> Tuple[Optional[Dict], float, List[Dic
 def more_candidates(track: Dict, exclude_ids: Set[str] | None = None, limit: int = ALT_SEARCH_LIMIT, source_mode: SearchSource = "all") -> List[Dict]:
 	exclude = set(exclude_ids or [])
 	yt = YTMusic()
-	options = _rank_candidates(yt, track, limit, source_mode)
+	# Alternatives are explicitly user-selected. Keep duration-mismatched results
+	# visible while duration scoring still ranks likely versions first.
+	options = _rank_candidates(yt, track, limit, source_mode, enforce_duration=False)
 	return [opt for opt in options if opt.get("videoId") not in exclude]
 
 def batch_match(tracks: List[Dict]) -> List[Dict]:

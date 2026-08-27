@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from csvmusic.core.spotify_import import parse_spotify_source
+from csvmusic.core.downloader import sanitize_name
 from csvmusic.core.track_output import expected_track_path
 from csvmusic.core.youtube_music_import import parse_youtube_playlist_id
 from csvmusic.core.apple_music_import import parse_apple_music_source_url
@@ -134,6 +135,68 @@ def import_csv_playlist(library: dict, path: str | pathlib.Path) -> tuple[dict, 
 	return playlist, created
 
 
+def rename_library_playlist(
+	library: dict,
+	playlist_id: str,
+	new_name: str,
+	output_dir: str | pathlib.Path | None = None,
+) -> tuple[dict, pathlib.Path | None]:
+	"""Rename a playlist, its output folder, and its matching M3U files."""
+	playlist = playlist_by_id(library, playlist_id)
+	if playlist is None:
+		raise KeyError(f"Playlist {playlist_id} is not in this library.")
+	clean_name = str(new_name or "").strip()
+	if not clean_name:
+		raise ValueError("Playlist name cannot be blank.")
+	old_name = str(playlist.get("name") or "Playlist").strip() or "Playlist"
+	old_safe = sanitize_name(old_name) or "Playlist"
+	new_safe = sanitize_name(clean_name) or "Playlist"
+	for other in library.get("playlists", []):
+		if other is playlist:
+			continue
+		other_safe = sanitize_name(str(other.get("name") or "Playlist")) or "Playlist"
+		if other_safe.casefold() == new_safe.casefold():
+			raise ValueError("Another library playlist already uses that output-folder name.")
+
+	renamed_folder: pathlib.Path | None = None
+	if output_dir:
+		root = pathlib.Path(output_dir).expanduser().resolve()
+		old_folder = root / old_safe
+		new_folder = root / new_safe
+		if old_folder.exists() and old_folder.is_dir():
+			if old_folder != new_folder and new_folder.exists():
+				raise FileExistsError(f"The destination folder already exists: {new_folder}")
+			m3u_moves: list[tuple[pathlib.Path, pathlib.Path]] = []
+			m3u_unchanged: list[pathlib.Path] = []
+			for suffix in (".m3u", ".m3u8"):
+				source = old_folder / f"{old_safe}{suffix}"
+				destination = old_folder / f"{new_safe}{suffix}"
+				if source.exists() and source != destination:
+					if destination.exists():
+						raise FileExistsError(f"The destination playlist file already exists: {destination}")
+					m3u_moves.append((source, destination))
+				elif source.exists():
+					m3u_unchanged.append(source)
+			if old_folder != new_folder:
+				old_folder.rename(new_folder)
+				renamed_folder = new_folder
+			else:
+				renamed_folder = old_folder
+			for old_file, old_destination in m3u_moves:
+				source = renamed_folder / old_file.name
+				destination = renamed_folder / old_destination.name
+				source.rename(destination)
+				_update_m3u_playlist_name(destination, clean_name)
+			for old_file in m3u_unchanged:
+				_update_m3u_playlist_name(renamed_folder / old_file.name, clean_name)
+
+	playlist["name"] = clean_name
+	playlist["custom_name"] = True
+	for track in playlist.get("tracks", []):
+		track["playlist"] = clean_name
+	return playlist, renamed_folder
+
+
 def merge_playlist_scan(
 	library: dict,
 	playlist_id: str,
@@ -148,10 +211,11 @@ def merge_playlist_scan(
 	if playlist is None:
 		raise KeyError(f"Playlist {playlist_id} is not in this library.")
 	previous = {_track_key(track): track for track in playlist.get("tracks", [])}
+	effective_name = str(playlist.get("name") or name or "Spotify Playlist").strip() if playlist.get("custom_name") else str(name or playlist.get("name") or "Spotify Playlist").strip()
 	merged: list[dict] = []
 	seen: set[str] = set()
 	for position, raw in enumerate(tracks, start=1):
-		track = _normalized_track(raw, name, position)
+		track = _normalized_track(raw, effective_name, position)
 		key = _track_key(track)
 		if key in seen:
 			continue
@@ -171,7 +235,7 @@ def merge_playlist_scan(
 		merged.append(track)
 	removed = [old for key, old in previous.items() if key not in seen]
 	playlist.update({
-		"name": (name or playlist.get("name") or "Spotify Playlist").strip(),
+		"name": effective_name,
 		"last_scanned_at": _now(),
 		"reported_total": reported_total,
 		"scan_warning": warning,
@@ -184,6 +248,22 @@ def merge_playlist_scan(
 		},
 	})
 	return playlist
+
+
+def _update_m3u_playlist_name(path: pathlib.Path, playlist_name: str) -> None:
+	raw = path.read_bytes()
+	has_bom = raw.startswith(b"\xef\xbb\xbf")
+	text = raw.decode("utf-8-sig")
+	lines = text.splitlines()
+	replacement = f"#EXTPLAYLIST:{playlist_name}"
+	for index, line in enumerate(lines):
+		if line.startswith("#EXTPLAYLIST:"):
+			lines[index] = replacement
+			break
+	else:
+		lines.insert(1 if lines and lines[0] == "#EXTM3U" else 0, replacement)
+	ending = "\n" if text.endswith(("\n", "\r")) else ""
+	path.write_text("\n".join(lines) + ending, encoding="utf-8-sig" if has_bom else "utf-8")
 
 
 def playlist_by_id(library: dict, playlist_id: str) -> dict | None:

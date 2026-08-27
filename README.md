@@ -23,21 +23,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.7.0
+https://github.com/angall1/CSVMusic/releases/tag/v1.6.6
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -73,7 +73,7 @@ Python installations still require a supported graphical desktop environment for
 
 ---
 
-# What's New In 1.7.0 (Since 1.6.0)
+# What's New In 1.6.6 (Since 1.6.0)
 
 ## Updates and MP3 reliability
 

@@ -107,3 +107,61 @@ def test_track_volume_gain_enables_processing_without_global_equalizer(tmp_path)
 
 	assert worker._active_audio_processing["enabled"] is True
 	assert worker._active_audio_processing["volume_gain"] == 4
+
+
+def test_preferred_music_link_records_song_title_instead_of_url(monkeypatch, tmp_path):
+	worker = _pipeline(tmp_path, force_download=False)
+	worker.tracks_override[0]["preferred_video_id"] = "selected-video"
+	worker.tracks_override[0]["preferred_video_label"] = "https://music.youtube.com/watch?v=selected-video"
+	results = []
+	worker.sig_track_result.connect(lambda _row, payload: results.append(payload))
+	monkeypatch.setattr(workers, "YTMusic", lambda: object())
+	monkeypatch.setattr(workers, "cover_art_url_bytes", lambda _url: None)
+	monkeypatch.setattr(workers, "yt_thumbnail_bytes", lambda _video_id: None)
+	monkeypatch.setattr(workers, "tag_file", lambda *_args, **_kwargs: None)
+	monkeypatch.setattr(workers.time, "sleep", lambda _seconds: None)
+
+	def fake_download(_video_id, destination, base_name, _profile):
+		path = destination / f"{base_name}.mp3"
+		path.write_bytes(b"audio")
+		return path
+
+	monkeypatch.setattr(worker, "_download_with_profile", fake_download)
+	worker.run()
+
+	assert results[0]["downloaded"] is True
+	assert results[0]["match"]["title"] == "Complicated"
+
+
+def test_redownload_rewrites_m3u_from_complete_existing_manifest(monkeypatch, tmp_path):
+	worker = _pipeline(tmp_path, force_download=True)
+	current = worker.tracks_override[0]
+	current["preferred_video_id"] = "replacement-video"
+	current["preferred_video_label"] = "Replacement Video"
+	existing = {
+		"title": "Existing Song",
+		"artists": "Artist",
+		"playlist": "Test Playlist",
+	}
+	playlist_dir = tmp_path / "Test Playlist"
+	playlist_dir.mkdir()
+	(playlist_dir / "Artist - Existing Song.mp3").write_bytes(b"existing")
+	worker.m3u_tracks_override = [existing, current]
+	worker.write_m3u8 = True
+	written = []
+	monkeypatch.setattr(workers, "YTMusic", lambda: object())
+	monkeypatch.setattr(workers, "cover_art_url_bytes", lambda _url: None)
+	monkeypatch.setattr(workers, "yt_thumbnail_bytes", lambda _video_id: None)
+	monkeypatch.setattr(workers, "tag_file", lambda *_args, **_kwargs: None)
+	monkeypatch.setattr(workers.time, "sleep", lambda _seconds: None)
+	monkeypatch.setattr(workers, "write_m3u", lambda _root, _name, tracks, _ext, **_kwargs: written.append(list(tracks)) or (playlist_dir / "Test Playlist.m3u8"))
+
+	def fake_download(_video_id, destination, base_name, _profile):
+		path = destination / f"{base_name}.mp3"
+		path.write_bytes(b"replacement")
+		return path
+
+	monkeypatch.setattr(worker, "_download_with_profile", fake_download)
+	worker.run()
+
+	assert [[track["title"] for track in tracks] for tracks in written] == [["Existing Song", "Complicated"]]

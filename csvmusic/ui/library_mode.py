@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
 
 from csvmusic.core.library import (
 	add_playlist_urls, enabled_tracks, export_csv, library_status, load_library,
-	import_csv_playlist, merge_playlist_scan, new_library, playlist_by_id, record_library_download_result, save_library,
+	import_csv_playlist, merge_playlist_scan, new_library, playlist_by_id, record_library_download_result,
+	rename_library_playlist, save_library,
 )
 from csvmusic.core.log import log
 from csvmusic.core.settings import load_settings, save_settings, settings_path
@@ -25,7 +26,7 @@ from csvmusic.core.track_output import expected_track_path
 from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation, youtube_risk_acknowledgement
 from csvmusic.core.youtube_url import YouTubeVideoUrlError, parse_youtube_video_id
 from csvmusic.ui.spotify_public_scrape import SpotifyPublicScrapeDialog
-from csvmusic.ui.workers import AlternativesFetchWorker, PipelineWorker
+from csvmusic.ui.workers import AlternativesFetchWorker, PipelineWorker, SingleDownloadWorker
 from csvmusic.core.youtube_music_import import fetch_youtube_music_source
 from csvmusic.core.apple_music_import import fetch_apple_music_source
 from csvmusic.version import APP_VERSION
@@ -67,15 +68,20 @@ class DirectLibraryScanWorker(QThread):
 
 class ClickableFrame(QFrame):
 	clicked = Signal()
-	double_clicked = Signal()
 
 	def mousePressEvent(self, event) -> None:
 		self.clicked.emit()
 		super().mousePressEvent(event)
 
+class EditablePlaylistTitle(QLabel):
+	double_clicked = Signal()
+
 	def mouseDoubleClickEvent(self, event) -> None:
-		self.double_clicked.emit()
-		event.accept()
+		if event.button() == Qt.LeftButton:
+			self.double_clicked.emit()
+			event.accept()
+			return
+		super().mouseDoubleClickEvent(event)
 
 
 def _playlist_action_icon(kind: str) -> QIcon:
@@ -128,6 +134,27 @@ def _settings_icon() -> QIcon:
 		((5, 5), (8.5, 8.5)), ((15.5, 15.5), (19, 19)), ((19, 5), (15.5, 8.5)), ((8.5, 15.5), (5, 19)),
 	):
 		painter.drawLine(QPointF(*start), QPointF(*end))
+	painter.end()
+	return QIcon(pixmap)
+
+
+def _folder_icon() -> QIcon:
+	pixmap = QPixmap(28, 24)
+	pixmap.fill(Qt.transparent)
+	painter = QPainter(pixmap)
+	painter.setRenderHint(QPainter.Antialiasing, False)
+	painter.setBrush(QColor("#e5bd45"))
+	painter.setPen(QPen(QColor("#5f4800"), 1.5, Qt.SolidLine, Qt.SquareCap, Qt.MiterJoin))
+	painter.drawPolygon(QPolygonF([
+		QPointF(2, 6), QPointF(11, 6), QPointF(14, 9), QPointF(26, 9),
+		QPointF(24, 21), QPointF(2, 21),
+	]))
+	painter.setBrush(QColor("#f4d56a"))
+	painter.drawPolygon(QPolygonF([
+		QPointF(2, 8), QPointF(25, 8), QPointF(23, 19), QPointF(3, 19),
+	]))
+	painter.setPen(QPen(QColor("#fff3ae"), 1))
+	painter.drawLine(QPointF(4, 10), QPointF(23, 10))
 	painter.end()
 	return QIcon(pixmap)
 
@@ -596,6 +623,8 @@ class TrackAlternativesDialog(QDialog):
 		audio_layout.addStretch(1)
 		tabs.addTab(audio_tab, "Sound Level")
 		buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+		self.save_button = buttons.button(QDialogButtonBox.Save)
+		self.save_button.setText("Save Settings")
 		buttons.accepted.connect(self._accept_choice)
 		buttons.rejected.connect(self.reject)
 		layout.addWidget(buttons)
@@ -627,6 +656,7 @@ class TrackAlternativesDialog(QDialog):
 		title = str(option.get("title") or "Unknown video")
 		author = str(option.get("author") or "").strip()
 		self.pending_match.setText(f"New selection: {title}" + (f" — {author}" if author else ""))
+		self.save_button.setText("Download Selected")
 		if self.manual.text():
 			self.manual.blockSignals(True)
 			self.manual.clear()
@@ -637,8 +667,10 @@ class TrackAlternativesDialog(QDialog):
 		if value:
 			self.list.clearSelection()
 			self.pending_match.setText(f"New selection: {value}")
+			self.save_button.setText("Download Selected")
 		elif not self.list.selectedItems():
 			self.pending_match.setText("New selection: No change")
+			self.save_button.setText("Save Settings")
 
 	def _accept_choice(self) -> None:
 		value = self.manual.text().strip()
@@ -750,6 +782,7 @@ class LibraryModeDialog(QDialog):
 		self.scraper: SpotifyPublicScrapeDialog | None = None
 		self.direct_worker: DirectLibraryScanWorker | None = None
 		self.download_worker: PipelineWorker | None = None
+		self.single_download_worker: SingleDownloadWorker | None = None
 		self.scan_dialog: LibraryScanProgressDialog | None = None
 		self.scan_cancelled = False
 		self.scan_warnings: list[str] = []
@@ -766,6 +799,8 @@ class LibraryModeDialog(QDialog):
 		self.track_display_limit = self.track_display_batch
 		self.shown_playlist_ids: frozenset[str] = frozenset()
 		self.track_state_labels: dict[tuple[str, int], QWidget] = {}
+		self.track_cards: dict[tuple[str, int], QFrame] = {}
+		self.download_track_states: dict[tuple[str, int], str] = {}
 		self.download_row_targets: dict[int, tuple[str, int]] = {}
 		self.download_log_dialog = DownloadLogDialog(self)
 		self.header_font_family = self._load_header_font()
@@ -1011,6 +1046,14 @@ class LibraryModeDialog(QDialog):
 		rescan_all = QPushButton("Rescan All")
 		rescan_all.clicked.connect(self._rescan_all)
 		playlist_heading.addWidget(rescan_all)
+		open_output = QToolButton()
+		open_output.setIcon(_folder_icon())
+		open_output.setIconSize(QSize(28, 24))
+		open_output.setFixedSize(42, 34)
+		open_output.setToolTip("Open the library output folder")
+		open_output.setAccessibleName("Open output folder")
+		open_output.clicked.connect(self._open_output_folder)
+		playlist_heading.addWidget(open_output)
 		left_layout.addLayout(playlist_heading)
 		self.playlist_tree = QTreeWidget()
 		self.playlist_tree.setHeaderLabels(["Playlists"])
@@ -1020,9 +1063,6 @@ class LibraryModeDialog(QDialog):
 		self.playlist_tree.setIconSize(QSize(48, 48))
 		self.playlist_tree.itemSelectionChanged.connect(self._show_tracks)
 		self.playlist_tree.itemSelectionChanged.connect(self._update_download_target)
-		self.playlist_tree.itemDoubleClicked.connect(
-			lambda item, _column: self._open_playlist_folder(str(item.data(0, Qt.UserRole)))
-		)
 		self.playlist_tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
 		left_layout.addWidget(self.playlist_tree)
 		right = QWidget()
@@ -1517,27 +1557,50 @@ class LibraryModeDialog(QDialog):
 		self._refresh()
 		self.status.setText(f"Deleted '{name}', its library metadata, and its downloaded media.")
 
-	def _open_playlist_folder(self, playlist_id: str) -> None:
+	def _open_output_folder(self) -> None:
+		output = str(self.library.get("output_dir") or "").strip()
+		if not output:
+			QMessageBox.information(self, "No Output Folder", "Choose an output folder in Download Settings first.")
+			return
+		folder = pathlib.Path(output).expanduser()
+		try:
+			folder.mkdir(parents=True, exist_ok=True)
+			resolved = folder.resolve()
+		except Exception as exc:
+			QMessageBox.warning(self, "Open Output Failed", f"The output folder is unavailable:\n{folder}\n\n{exc}")
+			return
+		if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(resolved))):
+			QMessageBox.warning(self, "Open Output Failed", f"Could not open:\n{resolved}")
+			return
+		log(f"library output folder opened path={resolved}")
+
+	def _rename_playlist(self, playlist_id: str) -> None:
 		playlist = playlist_by_id(self.library, playlist_id)
 		if not playlist:
 			return
-		output = str(self.library.get("output_dir") or "").strip()
-		if not output:
-			QMessageBox.information(self, "No Output Folder", "Choose an output folder in Settings before opening this playlist's folder.")
+		if self.download_worker and self.download_worker.isRunning():
+			QMessageBox.information(self, "Download in Progress", "Wait for the current download to finish before renaming its playlist folder.")
 			return
-		name = str(playlist.get("name") or "Playlist")
-		folder = pathlib.Path(output) / (sanitize_name(name) or "Playlist")
-		if not folder.is_dir():
-			QMessageBox.information(
-				self,
-				"Playlist Folder Not Created",
-				f"No downloaded folder exists for '{name}' yet. Start a download first.\n\nExpected location:\n{folder}",
+		old_name = str(playlist.get("name") or "Playlist")
+		new_name, accepted = QInputDialog.getText(self, "Rename Playlist", "Playlist name:", text=old_name)
+		if not accepted or new_name.strip() == old_name:
+			return
+		try:
+			updated, folder = rename_library_playlist(
+				self.library,
+				playlist_id,
+				new_name,
+				self.library.get("output_dir") or None,
 			)
+			self._save()
+		except Exception as exc:
+			log(f"library playlist rename failed id={playlist_id} old={old_name!r} new={new_name!r} error={exc}")
+			QMessageBox.critical(self, "Rename Failed", str(exc))
 			return
-		if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve()))):
-			QMessageBox.warning(self, "Open Folder Failed", f"Could not open:\n{folder}")
-			return
-		log(f"library playlist folder opened playlist={name!r} path={folder}")
+		self._refresh()
+		folder_note = f" Output folder: {folder}" if folder else ""
+		self.status.setText(f"Renamed '{old_name}' to '{updated['name']}'.{folder_note}")
+		log(f"library playlist renamed id={playlist_id} old={old_name!r} new={updated['name']!r} folder={folder}")
 
 	@staticmethod
 	def _playlist_error_count(playlist: dict) -> int:
@@ -1596,10 +1659,10 @@ class LibraryModeDialog(QDialog):
 			item = QTreeWidgetItem([""])
 			item.setData(0, Qt.UserRole, key)
 			item.setToolTip(0, f"Last scanned: {last_scan}")
-			item.setSizeHint(0, QSize(0, 68))
 			error_count = self._playlist_error_count(playlist)
 			missing_count = int(counts.get("missing", 0) or 0)
 			unscanned = not bool(playlist.get("last_scanned_at"))
+			item.setSizeHint(0, QSize(0, 78 if unscanned else 68))
 			if unscanned:
 				row_color = QColor("#e08080")
 			elif error_count:
@@ -1617,7 +1680,6 @@ class LibraryModeDialog(QDialog):
 				"border-right: 2px solid #404040; border-bottom: 2px solid #404040; }"
 			)
 			card.clicked.connect(lambda target=item: self.playlist_tree.setCurrentItem(target))
-			card.double_clicked.connect(lambda playlist_id=key: self._open_playlist_folder(str(playlist_id)))
 			card_layout = QHBoxLayout(card)
 			card_layout.setContentsMargins(6, 4, 6, 4)
 			card_layout.setSpacing(7)
@@ -1627,16 +1689,18 @@ class LibraryModeDialog(QDialog):
 			art.setPixmap(_source_placeholder_icon(str(playlist.get("platform") or "spotify")).pixmap(52, 52))
 			art.setStyleSheet("background: #606060; border: 1px inset #404040;")
 			card_layout.addWidget(art)
-			name_label = QLabel(str(name))
+			name_label = EditablePlaylistTitle(str(name))
 			name_label.setWordWrap(True)
 			name_label.setFont(QFont("Comic Sans MS", 10, QFont.Bold))
+			name_label.setToolTip("Double-click to rename this playlist and its output folder")
+			name_label.double_clicked.connect(lambda playlist_id=key: self._rename_playlist(str(playlist_id)))
 			card_layout.addWidget(name_label, 1)
 			status_layout = QVBoxLayout()
 			status_layout.setSpacing(0)
 			status_layout.setAlignment(Qt.AlignVCenter)
-			tracks_label = QLabel("Press green button to scan" if unscanned else f"{track_count}/{total} tracks")
+			tracks_label = QLabel("NOT SCANNED\nClick green ↻" if unscanned else f"{track_count}/{total} tracks")
 			if unscanned:
-				tracks_label.setStyleSheet("color: #700000; font-weight: bold;")
+				tracks_label.setStyleSheet("color: #700000; font-weight: bold; background: #ffd0a0; border: 1px solid #904000; padding: 3px;")
 			status_labels = [tracks_label]
 			missing_label = QLabel(f"{missing_count} missing") if missing_count else None
 			error_label = QPushButton(f"{error_count} errors") if error_count else None
@@ -1647,7 +1711,7 @@ class LibraryModeDialog(QDialog):
 			for status_label in status_labels:
 				status_label.setFont(QFont("Comic Sans MS", 9))
 				status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-				status_label.setMinimumWidth(112)
+				status_label.setMinimumWidth(100 if unscanned else 112)
 				status_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 			for status_label in status_labels:
 				status_layout.addWidget(status_label)
@@ -1666,7 +1730,8 @@ class LibraryModeDialog(QDialog):
 				else f"{missing_count} song(s) have no downloaded file" if missing_count
 				else "Every song has a downloaded file"
 			)
-			card_layout.addWidget(playlist_status)
+			if not unscanned:
+				card_layout.addWidget(playlist_status)
 			refresh_button = QToolButton()
 			refresh_button.setIcon(_playlist_action_icon("refresh"))
 			refresh_button.setIconSize(QSize(28, 28))
@@ -1713,6 +1778,7 @@ class LibraryModeDialog(QDialog):
 		self.track_tree.clear()
 		self.track_art_targets.clear()
 		self.track_state_labels.clear()
+		self.track_cards.clear()
 		output = pathlib.Path(self.library.get("output_dir") or "")
 		fmt = self.format_combo.currentText()
 		total_tracks = 0
@@ -1733,6 +1799,7 @@ class LibraryModeDialog(QDialog):
 			indexed_tracks.sort(key=issue_order)
 			remaining = max(0, self.track_display_limit - displayed_tracks)
 			for display_index, (index, track) in enumerate(indexed_tracks[:remaining], start=displayed_tracks):
+				target_key = (str(playlist_id), index)
 				candidate = dict(track)
 				candidate["playlist"] = playlist.get("name") or "Playlist"
 				has_error = bool(track.get("download_error") or track.get("last_error") or track.get("error"))
@@ -1746,6 +1813,8 @@ class LibraryModeDialog(QDialog):
 				else:
 					state = "Missing"
 				downloaded_title = str(track.get("downloaded_video_title") or "").strip() if file_exists else ""
+				if downloaded_title.startswith(("http://", "https://")):
+					downloaded_title = str(track.get("title") or "Downloaded song").strip()
 				downloaded_publisher = str(track.get("downloaded_video_publisher") or "").strip() if file_exists else ""
 				youtube_info = (
 					f'Downloaded: "{downloaded_title}" - "{downloaded_publisher}"' if downloaded_title and downloaded_publisher
@@ -1764,12 +1833,17 @@ class LibraryModeDialog(QDialog):
 				card = QFrame()
 				card.setFont(QFont("Comic Sans MS", 9))
 				card.setObjectName("songCard")
-				if state == "Error":
+				runtime_state = self.download_track_states.get(target_key)
+				if runtime_state in ("Matching", "Downloading", "Tagging"):
+					state = runtime_state
+				if runtime_state in ("Matching", "Downloading", "Tagging"):
+					shade = "#fff0a8"
+				elif state == "Error":
 					shade = "#dda0a0"
 				elif not file_exists:
 					shade = "#e7bcbc"
 				else:
-					shade = "#d4d0c8" if display_index % 2 == 0 else "#c0c0c0"
+					shade = "#c8ddc8" if display_index % 2 == 0 else "#b8ceb8"
 				card.setStyleSheet(
 					f"#songCard {{ background: {shade}; border-top: 2px solid #ffffff; border-left: 2px solid #ffffff; "
 					"border-right: 2px solid #404040; border-bottom: 2px solid #404040; }"
@@ -1828,7 +1902,8 @@ class LibraryModeDialog(QDialog):
 					state_label.setStyleSheet("font-weight: 600; color: #303030;")
 				state_label.setMinimumWidth(72)
 				card_layout.addWidget(state_label)
-				self.track_state_labels[(str(playlist_id), index)] = state_label
+				self.track_state_labels[target_key] = state_label
+				self.track_cards[target_key] = card
 				settings_button = QToolButton()
 				settings_button.setIcon(_settings_icon())
 				settings_button.setIconSize(QSize(24, 24))
@@ -1867,9 +1942,107 @@ class LibraryModeDialog(QDialog):
 				track["force_redownload"] = True
 			self._save()
 			self._refresh()
+			if video_id and old_video_id != video_id:
+				self._start_alternative_download(str(playlist_id), index, video_id, label)
 
 		dialog.selected.connect(_selected)
 		dialog.exec()
+
+	def _start_alternative_download(self, playlist_id: str, index: int, video_id: str, label: str) -> None:
+		if self.download_worker and self.download_worker.isRunning():
+			QMessageBox.information(self, "Download in Progress", "The alternative was saved and will be used next time. Wait for the current playlist download to finish before replacing this song.")
+			return
+		if self.single_download_worker and self.single_download_worker.isRunning():
+			QMessageBox.information(self, "Song Download in Progress", "Wait for the current replacement song to finish downloading.")
+			return
+		playlist = playlist_by_id(self.library, playlist_id)
+		if not playlist or not (0 <= index < len(playlist.get("tracks", []))):
+			return
+		output = str(self.library.get("output_dir") or "").strip()
+		if not output:
+			QMessageBox.information(self, "No Output Folder", "The alternative was saved. Choose an output folder in Download Settings before downloading it.")
+			return
+		track = dict(playlist["tracks"][index])
+		track["playlist"] = playlist.get("name") or "Playlist"
+		track["library_playlist_id"] = playlist_id
+		track["library_track_index"] = index
+		clean_title = str(label or "").strip()
+		if clean_title.startswith(("http://", "https://")):
+			clean_title = str(track.get("title") or "Selected alternative")
+		match = {"videoId": video_id, "title": clean_title, "author": track.get("artists") or ""}
+		cfg = load_settings()
+		audio = {}
+		if cfg.get("eq_enabled"):
+			audio = {
+				"enabled": True,
+				"normalize": bool(cfg.get("eq_normalize", False)),
+				"volume_gain": int(cfg.get("eq_volume_gain", 0) or 0),
+				"bass_gain": int(cfg.get("eq_bass_gain", 0) or 0),
+				"treble_gain": int(cfg.get("eq_treble_gain", 0) or 0),
+			}
+		track_gain = int(track.get("audio_volume_gain", 0) or 0)
+		if track_gain:
+			audio["enabled"] = True
+			audio["volume_gain"] = int(audio.get("volume_gain", 0) or 0) + track_gain
+		legacy = {
+			"enabled": bool(cfg.get("legacy_ipod_mode", False)),
+			"mp3_mode": cfg.get("legacy_mp3_mode") or "vbr",
+			"cover_art_mode": cfg.get("legacy_cover_art_mode") or "standard",
+		}
+		fmt = str(self.library.get("format") or "m4a")
+		target = (playlist_id, index)
+		self.download_track_states[target] = "Downloading"
+		self._show_tracks()
+		self.playlist_tree.setEnabled(False)
+		self.track_tree.setEnabled(False)
+		self.download_button.setEnabled(False)
+		use_cookies = bool(cfg.get("use_cookies", False))
+		worker = SingleDownloadWorker(
+			index, track, match, output, fmt, bool(cfg.get("embed_art", True)),
+			cfg.get("yt_dlp_path"), cfg.get("ffmpeg_path"),
+			cfg.get("cookies_browser") if use_cookies else None,
+			cfg.get("cookies_file") if use_cookies else None,
+			audio_processing=audio, mp3_quality=int(cfg.get("mp3_quality", 0) or 0),
+			legacy_options=legacy, force_download=True, parent=self,
+		)
+		self.single_download_worker = worker
+		worker.sig_status.connect(lambda _row, status, selected=target: self._single_download_status(selected, status))
+		worker.sig_finished.connect(lambda _row, payload, selected=target: self._single_download_finished(selected, payload))
+		worker.finished.connect(self._single_download_thread_finished)
+		self.download_activity.setText(f"Replacing with selected alternative: {clean_title}")
+		worker.start()
+
+	def _single_download_status(self, target: tuple[str, int], status: str) -> None:
+		self.download_track_states[target] = self._compact_download_status(status)
+		label = self.track_state_labels.get(target)
+		if label:
+			label.setText(self.download_track_states[target])
+		card = self.track_cards.get(target)
+		if card:
+			card.setStyleSheet("#songCard { background: #fff0a8; border: 2px outset #ffffff; }")
+		self.download_activity.setText(status)
+
+	def _single_download_finished(self, target: tuple[str, int], payload: dict) -> None:
+		track = payload.get("track") or {}
+		record_library_download_result(
+			self.library_path, target[0], track,
+			downloaded=bool(payload.get("downloaded")), error=payload.get("error"), match=payload.get("match"),
+		)
+		self.download_track_states.pop(target, None)
+		self.library = load_library(self.library_path)
+		self._show_tracks()
+		if payload.get("downloaded"):
+			self.download_activity.setText(f"Downloaded selected alternative: {(payload.get('match') or {}).get('title') or track.get('title')}")
+		else:
+			self.download_activity.setText(f"Alternative download failed: {payload.get('error') or 'Unknown error'}")
+
+	def _single_download_thread_finished(self) -> None:
+		if self.single_download_worker:
+			self.single_download_worker.deleteLater()
+		self.single_download_worker = None
+		self.playlist_tree.setEnabled(True)
+		self.track_tree.setEnabled(True)
+		self.download_button.setEnabled(True)
 
 	def _load_visible_track_images(self) -> None:
 		count = self.track_tree.topLevelItemCount()
@@ -2004,7 +2177,7 @@ class LibraryModeDialog(QDialog):
 			self.status.setText(f"Exported enabled tracks to {path}")
 
 	def _start_download(self) -> None:
-		if self.download_worker and self.download_worker.isRunning():
+		if (self.download_worker and self.download_worker.isRunning()) or (self.single_download_worker and self.single_download_worker.isRunning()):
 			return
 		if not self._selected_ids():
 			QMessageBox.information(self, "Select Playlist", "Select the playlist you want to download first.")
@@ -2020,7 +2193,8 @@ class LibraryModeDialog(QDialog):
 		if not output:
 			return
 		fmt = str(self.library.get("format") or "m4a")
-		tracks = enabled_tracks(self.library, selected_ids)
+		all_playlist_tracks = enabled_tracks(self.library, selected_ids)
+		tracks = list(all_playlist_tracks)
 		output_path = pathlib.Path(output)
 		tracks = [track for track in tracks if track.get("force_redownload") or not expected_track_path(track, output_path, fmt).exists()]
 		if not tracks:
@@ -2071,6 +2245,7 @@ class LibraryModeDialog(QDialog):
 			row: (str(track.get("library_playlist_id") or ""), int(track.get("library_track_index", -1)))
 			for row, track in enumerate(tracks)
 		}
+		self.download_track_states = {target: "Queued" for target in self.download_row_targets.values()}
 		self.download_log_dialog.begin_run(target_text, len(tracks))
 		self.download_log_dialog.append("note", f"Format: {fmt.upper()} | Output: {output}")
 		if batch_policy.active:
@@ -2088,7 +2263,8 @@ class LibraryModeDialog(QDialog):
 			cfg.get("cookies_file") if use_cookies else None,
 			audio_processing=audio, mp3_quality=int(cfg.get("mp3_quality", 0) or 0),
 			legacy_options=legacy, force_download=bool(cfg.get("force_download_mode", False)),
-			tracks_override=tracks, row_indices=list(range(len(tracks))), parent=self,
+			tracks_override=tracks, m3u_tracks_override=all_playlist_tracks,
+			row_indices=list(range(len(tracks))), parent=self,
 		)
 		self.download_worker.sig_total.connect(self._download_total)
 		self.download_worker.sig_log.connect(self._download_log_message)
@@ -2121,10 +2297,19 @@ class LibraryModeDialog(QDialog):
 		self.download_activity.setText(f"Track {row + 1}: {status}")
 		self.download_log_dialog.append("note", f"Track {row + 1}: {status}")
 		target = self.download_row_targets.get(row)
+		compact = self._compact_download_status(status)
+		if target:
+			self.download_track_states[target] = compact
 		label = self.track_state_labels.get(target) if target else None
 		if label:
-			label.setText(self._compact_download_status(status))
+			label.setText(compact)
 			label.setToolTip(status)
+		card = self.track_cards.get(target) if target else None
+		if card and compact in ("Matching", "Downloading", "Tagging"):
+			card.setStyleSheet(
+				"#songCard { background: #fff0a8; border-top: 2px solid #ffffff; border-left: 2px solid #ffffff; "
+				"border-right: 2px solid #806000; border-bottom: 2px solid #806000; }"
+			)
 
 	@staticmethod
 	def _compact_download_status(status: str) -> str:
@@ -2152,7 +2337,7 @@ class LibraryModeDialog(QDialog):
 		self.download_log_dialog.append("warning", message)
 		QMessageBox.warning(self, "YouTube Throttling Detected", message)
 
-	def _download_track_result(self, _row: int, payload: dict) -> None:
+	def _download_track_result(self, row: int, payload: dict) -> None:
 		track = payload.get("track") or {}
 		if payload.get("error"):
 			self.download_log_dialog.append(
@@ -2164,6 +2349,14 @@ class LibraryModeDialog(QDialog):
 				self.library_path, track["library_playlist_id"], track,
 				downloaded=bool(payload.get("downloaded")), error=payload.get("error"), match=payload.get("match"),
 			)
+			target = self.download_row_targets.get(row)
+			if target:
+				self.download_track_states.pop(target, None)
+			try:
+				self.library = load_library(self.library_path)
+			except Exception as exc:
+				log(f"library live reload after track download failed error={exc}")
+			self._show_tracks()
 
 	def _download_done(self, message: str, done: list, skipped: list, failed: list) -> None:
 		log(f"library download finished downloaded={len(done)} skipped={len(skipped)} failed={len(failed)}")
@@ -2177,6 +2370,7 @@ class LibraryModeDialog(QDialog):
 		self.load_more_tracks_button.setEnabled(True)
 		self.download_worker = None
 		self.download_row_targets.clear()
+		self.download_track_states.clear()
 		try:
 			self.library = load_library(self.library_path)
 		except Exception as exc:

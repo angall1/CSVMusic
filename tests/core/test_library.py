@@ -2,7 +2,7 @@ import pathlib
 
 from csvmusic.core.library import (
 	add_playlist_urls, clear_redownload_flag, enabled_tracks, library_status, load_library, merge_playlist_scan,
-	import_csv_playlist, new_library, record_library_download_result, save_library,
+	import_csv_playlist, new_library, record_library_download_result, rename_library_playlist, save_library,
 )
 from csvmusic.core.track_output import expected_track_path
 
@@ -108,6 +108,42 @@ def test_rescan_preserves_selection_and_override():
 	assert playlist["last_diff"] == {"added": 1, "removed": 1, "unchanged": 1}
 	assert playlist["tracks"][0]["preferred_video_id"] == "youtube-id"
 	assert [track["sp_id"] for track in enabled_tracks(library)] == ["two", "three"]
+
+
+def test_rename_playlist_updates_folder_m3u_tracks_and_survives_rescan(tmp_path):
+	library = new_library(output_dir=str(tmp_path))
+	add_playlist_urls(library, [URL])
+	playlist = merge_playlist_scan(library, "611N3KSs459UD5IVPH1ES4", "Old Mix", [_track("one")])
+	old_folder = tmp_path / "Old Mix"
+	old_folder.mkdir()
+	(old_folder / "Old Mix.m3u8").write_text(
+		"#EXTM3U\n#EXTPLAYLIST:Old Mix\nArtist - Song.mp3\n",
+		encoding="utf-8",
+	)
+
+	renamed, folder = rename_library_playlist(library, "spotify:611N3KSs459UD5IVPH1ES4", "New Mix", tmp_path)
+
+	assert folder == tmp_path / "New Mix"
+	assert not old_folder.exists()
+	assert (folder / "New Mix.m3u8").read_text(encoding="utf-8").splitlines()[1] == "#EXTPLAYLIST:New Mix"
+	assert renamed["tracks"][0]["playlist"] == "New Mix"
+	renamed = merge_playlist_scan(library, "611N3KSs459UD5IVPH1ES4", "Remote Name", [_track("one")])
+	assert renamed["name"] == "New Mix"
+	assert renamed["tracks"][0]["playlist"] == "New Mix"
+
+
+def test_rename_playlist_refuses_another_playlist_folder_name(tmp_path):
+	library = new_library(output_dir=str(tmp_path))
+	add_playlist_urls(library, [URL, "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"])
+	library["playlists"][0]["name"] = "First"
+	library["playlists"][1]["name"] = "Existing Name"
+
+	try:
+		rename_library_playlist(library, "spotify:611N3KSs459UD5IVPH1ES4", "Existing Name", tmp_path)
+	except ValueError as exc:
+		assert "already uses" in str(exc)
+	else:
+		raise AssertionError("Expected playlist-name collision to be rejected")
 
 
 def test_rescan_saves_and_preserves_playlist_cover():
