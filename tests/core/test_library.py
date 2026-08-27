@@ -2,7 +2,7 @@ import pathlib
 
 from csvmusic.core.library import (
 	add_playlist_urls, clear_redownload_flag, enabled_tracks, library_status, load_library, merge_playlist_scan,
-	new_library, record_library_download_result, save_library,
+	import_csv_playlist, new_library, record_library_download_result, save_library,
 )
 from csvmusic.core.track_output import expected_track_path
 
@@ -26,7 +26,40 @@ def test_library_round_trip_and_add_urls(tmp_path):
 	assert load_library(path)["playlists"][0]["id"] == "611N3KSs459UD5IVPH1ES4"
 
 
-def test_add_youtube_music_and_regular_youtube_playlist_urls():
+def test_csv_is_imported_directly_and_refreshes_same_library_playlist(tmp_path):
+	path = tmp_path / "Road Trip.csv"
+	path.write_text(
+		"Track name,Artist name,Playlist name,Cover URL\n"
+		"First Song,First Artist,Road Trip,https://example.com/first.jpg\n",
+		encoding="utf-8",
+	)
+	library = new_library()
+
+	playlist, created = import_csv_playlist(library, path)
+
+	assert created is True
+	assert playlist["platform"] == "csv"
+	assert playlist["name"] == "Road Trip"
+	assert playlist["last_scanned_at"]
+	assert playlist["tracks"][0]["cover_url"] == "https://example.com/first.jpg"
+	playlist["tracks"][0]["enabled"] = False
+	path.write_text(
+		"Track name,Artist name,Playlist name,Cover URL\n"
+		"First Song,First Artist,Road Trip,https://example.com/first.jpg\n"
+		"Second Song,Second Artist,Road Trip,https://example.com/second.jpg\n",
+		encoding="utf-8",
+	)
+
+	refreshed, created = import_csv_playlist(library, path)
+
+	assert created is False
+	assert len(library["playlists"]) == 1
+	assert len(refreshed["tracks"]) == 2
+	assert refreshed["tracks"][0]["enabled"] is False
+	assert refreshed["last_diff"] == {"added": 1, "removed": 0, "unchanged": 1}
+
+
+def test_add_youtube_music_and_reject_regular_youtube_playlist_urls():
 	library = new_library()
 	added, errors = add_playlist_urls(library, [
 		YOUTUBE_URL,
@@ -34,10 +67,10 @@ def test_add_youtube_music_and_regular_youtube_playlist_urls():
 		YOUTUBE_URL,
 	])
 
-	assert errors == []
-	assert [item["platform"] for item in added] == ["youtube_music", "youtube_music"]
+	assert len(errors) == 1
+	assert "Standard YouTube playlists are not supported" in errors[0]
+	assert [item["platform"] for item in added] == ["youtube_music"]
 	assert added[0]["url"] == YOUTUBE_URL
-	assert added[1]["url"] == "https://music.youtube.com/playlist?list=PLanother123"
 
 
 def test_add_apple_music_playlist_url():

@@ -107,6 +107,22 @@ def _check_yt_dlp(errors: List[str], warnings: List[str], details: Dict[str, str
 
 
 def _check_ffmpeg(errors: List[str], warnings: List[str], details: Dict[str, str], override: str | None = None) -> None:
+	def try_system_fallback(reason: Exception) -> bool:
+		for sys_ff in _system_ffmpeg_candidates():
+			if sys_ff == details.get("ffmpeg"):
+				continue
+			try:
+				proc = _run_ffmpeg_version(sys_ff)
+				if proc.returncode != 0:
+					warnings.append(f"System ffmpeg returned a non-zero exit code at {sys_ff}.")
+					continue
+				details["ffmpeg"] = sys_ff
+				warnings.append(f"Bundled ffmpeg failed ({reason}); using system ffmpeg at {sys_ff}.")
+				return True
+			except Exception as fallback_exc:
+				warnings.append(f"System ffmpeg fallback failed at {sys_ff}: {fallback_exc}")
+		return False
+
 	try:
 		if override:
 			ov = pathlib.Path(override)
@@ -120,23 +136,9 @@ def _check_ffmpeg(errors: List[str], warnings: List[str], details: Dict[str, str
 		proc = _run_ffmpeg_version(path)
 		if proc.returncode != 0:
 			errors.append("ffmpeg responded with a non-zero exit code. Verify the bundled binary works.")
-	except subprocess.TimeoutExpired as exc:
-		for sys_ff in _system_ffmpeg_candidates():
-			if sys_ff == details.get("ffmpeg"):
-				continue
-			try:
-				proc = _run_ffmpeg_version(sys_ff)
-				details["ffmpeg"] = sys_ff
-				warnings.append(
-					f"Bundled ffmpeg timed out during preflight; using system ffmpeg at {sys_ff}."
-				)
-				if proc.returncode != 0:
-					errors.append("System ffmpeg responded with a non-zero exit code during fallback.")
-				return
-			except Exception as fallback_exc:
-				warnings.append(f"System ffmpeg fallback failed at {sys_ff}: {fallback_exc}")
-		errors.append(f"ffmpeg unavailable: {exc}")
 	except Exception as exc:
+		if not override and try_system_fallback(exc):
+			return
 		errors.append(f"ffmpeg unavailable: {exc}")
 
 

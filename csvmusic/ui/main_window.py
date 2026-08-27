@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QFontDatabase, QGuiAppl
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
 from csvmusic.core.settings import load_settings, save_settings
 from csvmusic.core.update_check import UpdateInfo, should_check_for_updates, update_check_timestamp
-from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation
+from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation, youtube_risk_acknowledgement
 from csvmusic.core.preflight import run_preflight_checks
 from csvmusic.core.output_folder import OutputFolderError, validate_output_folder
 from csvmusic.core.track_output import expected_track_path, plan_track_outputs
@@ -108,7 +108,11 @@ class NotchedSlider(QWidget):
 		self._maximum = 100
 		self._value = 0
 		self._tick_interval = 1
+		self._single_step = 1
+		self._page_step = 1
+		self._pressed = False
 		self.setMouseTracking(True)
+		self.setFocusPolicy(Qt.StrongFocus)
 
 	def setRange(self, minimum: int, maximum: int) -> None:
 		self._minimum = int(minimum)
@@ -141,11 +145,11 @@ class NotchedSlider(QWidget):
 	def setTickPosition(self, _position) -> None:
 		self.update()
 
-	def setSingleStep(self, _step: int) -> None:
-		pass
+	def setSingleStep(self, step: int) -> None:
+		self._single_step = max(1, int(step))
 
-	def setPageStep(self, _step: int) -> None:
-		pass
+	def setPageStep(self, step: int) -> None:
+		self._page_step = max(1, int(step))
 
 	def _groove_rect(self) -> QRect:
 		margin_x = 12
@@ -175,7 +179,10 @@ class NotchedSlider(QWidget):
 
 	def mousePressEvent(self, event) -> None:
 		if event.button() == Qt.LeftButton and self._orientation == Qt.Horizontal:
+			self._pressed = True
+			self.setFocus()
 			self.setValue(self._x_to_value(int(event.position().x())))
+			self.update()
 			event.accept()
 			return
 		super().mousePressEvent(event)
@@ -186,6 +193,36 @@ class NotchedSlider(QWidget):
 			event.accept()
 			return
 		super().mouseMoveEvent(event)
+
+	def mouseReleaseEvent(self, event) -> None:
+		if event.button() == Qt.LeftButton:
+			self._pressed = False
+			self.update()
+		super().mouseReleaseEvent(event)
+
+	def keyPressEvent(self, event) -> None:
+		if event.key() in (Qt.Key_Left, Qt.Key_Down):
+			self.setValue(self._value - self._single_step)
+			event.accept()
+			return
+		if event.key() in (Qt.Key_Right, Qt.Key_Up):
+			self.setValue(self._value + self._single_step)
+			event.accept()
+			return
+		if event.key() == Qt.Key_PageDown:
+			self.setValue(self._value - self._page_step)
+			event.accept()
+			return
+		if event.key() == Qt.Key_PageUp:
+			self.setValue(self._value + self._page_step)
+			event.accept()
+			return
+		super().keyPressEvent(event)
+
+	def wheelEvent(self, event) -> None:
+		direction = 1 if event.angleDelta().y() > 0 else -1
+		self.setValue(self._value + (direction * self._single_step))
+		event.accept()
 
 	def paintEvent(self, _event) -> None:
 		painter = QPainter(self)
@@ -205,6 +242,8 @@ class NotchedSlider(QWidget):
 		painter.setPen(QPen(light, 1))
 		painter.drawLine(groove.left(), groove.bottom(), groove.right(), groove.bottom())
 		painter.drawLine(groove.right(), groove.top(), groove.right(), groove.bottom())
+		filled = QRect(groove.left() + 1, groove.top() + 1, max(0, handle.center().x() - groove.left() - 1), max(1, groove.height() - 1))
+		painter.fillRect(filled, QColor("#000080") if self.isEnabled() else shadow)
 
 		painter.setPen(QPen(tick, 1))
 		step = max(1, self._tick_interval)
@@ -213,11 +252,11 @@ class NotchedSlider(QWidget):
 			painter.drawLine(x, groove.top() - 6, x, groove.top() - 2)
 			painter.drawLine(x, groove.bottom() + 2, x, groove.bottom() + 6)
 
-		painter.fillRect(handle, panel)
-		painter.setPen(QPen(light, 1))
+		painter.fillRect(handle, QColor("#b8b4ac") if self._pressed else panel)
+		painter.setPen(QPen(dark if self._pressed else light, 1))
 		painter.drawLine(handle.left(), handle.top(), handle.right(), handle.top())
 		painter.drawLine(handle.left(), handle.top(), handle.left(), handle.bottom())
-		painter.setPen(QPen(shadow, 1))
+		painter.setPen(QPen(light if self._pressed else shadow, 1))
 		painter.drawLine(handle.right(), handle.top(), handle.right(), handle.bottom())
 		painter.drawLine(handle.left(), handle.bottom(), handle.right(), handle.bottom())
 		painter.setPen(QPen(dark, 1))
@@ -512,7 +551,7 @@ class MainWindow(QMainWindow):
 
 		# ── Top help row: link + utility toggles ──────────────────────────────────
 		top = QHBoxLayout()
-		top.setSpacing(self._px(6))
+		top.setSpacing(self._px(12))
 		btn_help = QToolButton()
 		btn_help.setText("TUTORIAL ▸")
 		btn_help.setCheckable(True)
@@ -543,6 +582,17 @@ class MainWindow(QMainWindow):
 		btn_adv.setFont(btn_font)
 		self.btn_advanced = btn_adv
 		top.addWidget(btn_adv)
+		btn_library = QToolButton()
+		btn_library.setText("LIBRARY MODE")
+		btn_library.setToolButtonStyle(Qt.ToolButtonTextOnly)
+		btn_library.setFont(btn_font)
+		btn_library.setToolTip("Switch to the playlist library interface")
+		btn_library.clicked.connect(self.on_open_library_mode)
+		self.btn_library_mode = btn_library
+		# Navigation order: mode switch, workflow, audio, settings, help.
+		top.insertWidget(0, btn_library)
+		top.removeWidget(btn_help)
+		top.addWidget(btn_help)
 		top.addStretch(1)
 		vl.addLayout(top)
 
@@ -876,12 +926,12 @@ class MainWindow(QMainWindow):
 		row_mp3_quality.setSpacing(self._px(10))
 		self.slider_mp3_quality = NotchedSlider(Qt.Horizontal)
 		self.slider_mp3_quality.setRange(0, 10)
-		self.slider_mp3_quality.setValue(0)
+		self.slider_mp3_quality.setValue(10)
 		self.slider_mp3_quality.setTickInterval(1)
 		self.slider_mp3_quality.setMaximumWidth(self._px(360))
 		self.slider_mp3_quality.setMinimumHeight(self._px(34))
 		self.slider_mp3_quality.valueChanged.connect(self._on_mp3_quality_changed)
-		self.lbl_mp3_quality_value = QLabel("0 = Best")
+		self.lbl_mp3_quality_value = QLabel("10 = Best")
 		self.lbl_mp3_quality_value.setMinimumWidth(self._px(116))
 		self.lbl_mp3_quality_value.setFont(QFont(retro_font_family, default_pt + 1))
 		row_mp3_quality.addWidget(self.slider_mp3_quality, 1)
@@ -889,7 +939,7 @@ class MainWindow(QMainWindow):
 		row_mp3_quality.addStretch(1)
 		audio_layout.addLayout(row_mp3_quality)
 		lbl_mp3_quality_note = QLabel(
-			"Only applies to MP3 output. 0 = best quality / largest files. 10 = worst quality / smallest files."
+			"Only applies to MP3 output. Move right for better quality and larger files."
 		)
 		lbl_mp3_quality_note.setWordWrap(True)
 		lbl_mp3_quality_note.setFont(QFont(retro_font_family, default_pt))
@@ -1383,7 +1433,8 @@ class MainWindow(QMainWindow):
 		}
 
 	def _mp3_quality_value(self) -> int:
-		return max(0, min(10, int(self.slider_mp3_quality.value())))
+		# FFmpeg/libmp3lame uses the inverse scale: 0 is its best quality.
+		return 10 - max(0, min(10, int(self.slider_mp3_quality.value())))
 
 	def _selected_format(self) -> str:
 		if self.cb_opus_output.isChecked():
@@ -1412,15 +1463,18 @@ class MainWindow(QMainWindow):
 		self._persist_settings()
 
 	def _on_mp3_quality_changed(self, value: int) -> None:
-		value = max(0, min(10, int(value)))
-		if value == 0:
-			label = "0 = Best"
-		elif value == 10:
-			label = "10 = Worst"
-		else:
-			label = f"{value} = Lower"
-		self.lbl_mp3_quality_value.setText(label)
+		self._set_mp3_quality_label(value)
 		self._persist_settings()
+
+	def _set_mp3_quality_label(self, value: int) -> None:
+		value = max(0, min(10, int(value)))
+		if value == 10:
+			label = "10 = Best"
+		elif value == 0:
+			label = "0 = Lowest"
+		else:
+			label = f"{value} / 10"
+		self.lbl_mp3_quality_value.setText(label)
 
 	def _clamp_to_screen(self, width: int, height: int) -> Tuple[int, int]:
 		screen = QGuiApplication.primaryScreen()
@@ -1475,7 +1529,14 @@ class MainWindow(QMainWindow):
 	def on_open_library_mode(self) -> None:
 		dialog = LibraryModeDialog(self)
 		dialog.tracks_ready.connect(self._on_library_tracks_ready)
+		dialog.legacy_mode_requested.connect(self._return_to_legacy_mode)
 		dialog.exec()
+
+	def _return_to_legacy_mode(self) -> None:
+		"""Bring the existing interface forward when Library Mode requests a switch."""
+		self.show()
+		self.raise_()
+		self.activateWindow()
 
 	def _on_library_tracks_ready(self, tracks: object, description: str, output: str, fmt: str) -> None:
 		loaded = list(tracks or [])
@@ -2132,14 +2193,9 @@ class MainWindow(QMainWindow):
 		self.lbl_treble_value.setText(f"{self.slider_treble.value():+d} dB" if self.slider_treble.value() else "0 dB")
 		mp3_quality = int(cfg.get("mp3_quality", 0) or 0)
 		block_mp3_quality = QSignalBlocker(self.slider_mp3_quality)
-		self.slider_mp3_quality.setValue(max(0, min(10, mp3_quality)))
+		self.slider_mp3_quality.setValue(10 - max(0, min(10, mp3_quality)))
 		del block_mp3_quality
-		if self.slider_mp3_quality.value() == 0:
-			self.lbl_mp3_quality_value.setText("0 = Best")
-		elif self.slider_mp3_quality.value() == 10:
-			self.lbl_mp3_quality_value.setText("10 = Worst")
-		else:
-			self.lbl_mp3_quality_value.setText(f"{self.slider_mp3_quality.value()} = Lower")
+		self._set_mp3_quality_label(self.slider_mp3_quality.value())
 		stored_format = str(cfg.get("format") or "").lower()
 		if stored_format in ("m4a", "mp3"):
 			block_m4a = QSignalBlocker(self.rb_m4a)
@@ -2201,12 +2257,9 @@ class MainWindow(QMainWindow):
 			QMessageBox.information(self, "Nothing to Download", "Every track in this playlist is already present in the output folder.")
 			return
 		batch_policy = youtube_batch_mitigation(len(self.tracks), using_cookies=bool(self._cookies_browser() or self._cookies_file()))
-		if batch_policy.warning:
-			msg = batch_policy.warning
-			if batch_policy.reason:
-				msg += f"\n\nReason: {batch_policy.reason.capitalize()}."
-			msg += "\n\nContinue with automatic throttling enabled?"
-			choice = QMessageBox.question(self, "YouTube risk warning", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+		risk_message = youtube_risk_acknowledgement(batch_policy)
+		if risk_message:
+			choice = QMessageBox.question(self, "YouTube risk warning", risk_message, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 			if choice != QMessageBox.Yes:
 				self.lbl_log.setText("Start cancelled after YouTube risk warning.")
 				return

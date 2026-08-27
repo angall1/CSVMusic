@@ -1,5 +1,6 @@
 # tabs only
 import json
+import math
 import random
 import secrets
 from typing import Any
@@ -186,6 +187,7 @@ class SpotifyPublicScrapeDialog(QDialog):
 		self.playlist_name = "Spotify Playlist"
 		self.playlist_cover_url: str | None = None
 		self.finish_emitted = False
+		self.dispose_pending = False
 		self.scroll_multiplier = max(0.25, float(scroll_multiplier))
 		self.minimum_scroll_px = max(100, int(minimum_scroll_px))
 		self._build_ui()
@@ -224,6 +226,9 @@ class SpotifyPublicScrapeDialog(QDialog):
 		layout.addWidget(self.status)
 		self.profile = QWebEngineProfile(self)
 		self.profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+		# Keep Spotify's rendered labels deterministic across OS locale settings;
+		# capture filtering currently recognizes the English Recommended heading.
+		self.profile.setHttpAcceptLanguage("en-US,en;q=0.9")
 		self.page = ScraperWebPage(self.profile, self)
 		self.browser = QWebEngineView()
 		self.browser.setPage(self.page)
@@ -278,10 +283,10 @@ class SpotifyPublicScrapeDialog(QDialog):
 		self.status.setText("Phase 1: loading the public embed baseline...")
 		self.baseline_worker = SpotifyBaselineWorker(url, self)
 		self.baseline_worker.finished_baseline.connect(lambda ok, playlist, error: self._baseline_finished(ok, playlist, error, url))
+		self.baseline_worker.finished.connect(lambda worker=self.baseline_worker: self._baseline_worker_ended(worker))
 		self.baseline_worker.start()
 
 	def _baseline_finished(self, ok: bool, playlist: object, error: str, url: str) -> None:
-		self.baseline_worker = None
 		if not self.running:
 			return
 		if not ok:
@@ -401,7 +406,7 @@ class SpotifyPublicScrapeDialog(QDialog):
 			f"next_delay_ms={next_delay_ms} "
 			f"sign_in_wall={bool(result.get('signInWall'))} page_title={str(result.get('title') or '')[:120]!r}"
 		)
-		self._render_tracks()
+		self._append_rendered_tracks(new_ids)
 		self.scrape_progress.emit(len(self.tracks), self.reported_total or 0, self.playlist_name)
 		beyond = max(0, len(self.tracks) - self.baseline_count)
 		mode = "triple-scrolling next" if self.next_should_scroll else "waiting for the next rendered block"
@@ -414,12 +419,36 @@ class SpotifyPublicScrapeDialog(QDialog):
 		metadata_gaps = self._metadata_gap_positions()
 		if self.reported_total and len(self.tracks) >= self.reported_total and not metadata_gaps:
 			self._finish(f"Success: captured all {self.reported_total} reported tracks.")
-		elif self.stalled >= 40:
+		elif self.stalled >= self._stalled_safety_limit():
 			wall = " Spotify displayed a sign-in wall during the scroll." if result.get("signInWall") else ""
 			metadata_note = f" {len(metadata_gaps)} tracks still have incomplete album metadata." if metadata_gaps else ""
 			self._finish(f"No new public rows appeared. Captured {len(self.tracks)} tracks.{metadata_note}{wall}")
-		elif self.iteration >= 200:
+		elif self.iteration >= self._iteration_safety_limit():
 			self._finish(f"Reached the safety limit. Captured {len(self.tracks)} tracks.")
+
+	def _iteration_safety_limit(self) -> int:
+		"""Scale the pass ceiling for virtualized playlists instead of truncating large lists at 200 passes."""
+		if not self.reported_total:
+			return 300
+		return max(300, math.ceil(self.reported_total / 4))
+
+	def _stalled_safety_limit(self) -> int:
+		"""Give Spotify extra render attempts when a large scan is close to its reported end."""
+		if self.reported_total and len(self.tracks) >= int(self.reported_total * 0.9):
+			return 80
+		return 40
+
+	def _append_rendered_tracks(self, track_ids: list[str]) -> None:
+		"""Append only newly discovered rows; rebuilding thousands of table cells every pass freezes Qt."""
+		if not track_ids:
+			return
+		start = self.table.rowCount()
+		self.table.setRowCount(start + len(track_ids))
+		for offset, track_id in enumerate(track_ids):
+			track = self.tracks[track_id]
+			row = start + offset
+			for column, value in enumerate((row + 1, track["title"], track["artists"], track["album"], track.get("cover_url") or "")):
+				self.table.setItem(row, column, QTableWidgetItem(str(value)))
 
 	def _render_tracks(self) -> None:
 		rows = list(self.tracks.values())
@@ -467,12 +496,38 @@ class SpotifyPublicScrapeDialog(QDialog):
 					"metadata_gap_positions": metadata_gaps,
 				})
 
+	def _baseline_worker_ended(self, worker: SpotifyBaselineWorker) -> None:
+		if self.baseline_worker is worker:
+			self.baseline_worker = None
+		if self.dispose_pending:
+			QTimer.singleShot(0, self._complete_dispose)
+
+	def dispose(self) -> None:
+		"""Stop rendering and safely delete the dialog after any blocking request exits."""
+		self.running = False
+		self.timer.stop()
+		self.browser.stop()
+		worker = self.baseline_worker
+		if worker and worker.isRunning():
+			self.dispose_pending = True
+			self.hide()
+			return
+		self._complete_dispose()
+
+	def _complete_dispose(self) -> None:
+		self.dispose_pending = False
+		self.close()
+		self.deleteLater()
+
 	def closeEvent(self, event) -> None:
 		if self.running:
 			log(f"spotify_public_scrape session={self.session_id} event=window_closed_while_running playlist_id={self.playlist_id}")
 		self.timer.stop()
 		self.browser.stop()
 		if self.baseline_worker and self.baseline_worker.isRunning():
-			self.baseline_worker.requestInterruption()
-			self.baseline_worker.wait(1500)
+			self.running = False
+			self.dispose_pending = True
+			self.hide()
+			event.ignore()
+			return
 		super().closeEvent(event)

@@ -16,14 +16,29 @@ def _settings_dir() -> pathlib.Path:
 				except Exception:
 					return old
 			return new
-	linux_old = pathlib.Path.home() / ".local" / "share" / "spotify2media"
-	linux_new = pathlib.Path.home() / ".local" / "share" / "csvmusic"
-	if linux_old.exists() and not linux_new.exists():
+	home = pathlib.Path.home()
+	if sys.platform.startswith("darwin"):
+		new = home / "Library" / "Application Support" / "CSVMusic"
+		old_candidates = [
+			home / "Library" / "Application Support" / "Spotify2Media",
+			home / ".local" / "share" / "csvmusic",
+			home / ".local" / "share" / "spotify2media",
+		]
+	else:
+		xdg_data_home = os.environ.get("XDG_DATA_HOME")
+		base = pathlib.Path(xdg_data_home).expanduser() if xdg_data_home else home / ".local" / "share"
+		new = base / "csvmusic"
+		old_candidates = [base / "spotify2media"]
+	for old in old_candidates:
+		if not old.exists() or new.exists():
+			continue
 		try:
-			linux_old.rename(linux_new)
+			new.parent.mkdir(parents=True, exist_ok=True)
+			old.rename(new)
 		except Exception:
-			return linux_old
-	return linux_new
+			return old
+		break
+	return new
 
 def settings_path() -> pathlib.Path:
 	d = _settings_dir()

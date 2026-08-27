@@ -167,6 +167,7 @@ class PipelineWorker(QThread):
 		self.cookies_browser = cookies_browser
 		self.cookies_file = cookies_file
 		self.audio_processing = audio_processing or {}
+		self._active_audio_processing = dict(self.audio_processing)
 		self.mp3_quality = max(0, min(10, int(mp3_quality)))
 		self.legacy_options = legacy_options or {}
 		self.force_download = bool(force_download)
@@ -186,10 +187,18 @@ class PipelineWorker(QThread):
 			extra_args += ["--cookies-from-browser", self.cookies_browser]
 		extra_args += build_ytdlp_mitigation_args(profile)
 		if self.fmt == "m4a":
-			return download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing)
+			return download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self._active_audio_processing)
 		if self.fmt == "opus":
 			return download_opus(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None)
-		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options))
+		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self._active_audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options))
+
+	def _set_track_audio_processing(self, track: Dict) -> None:
+		processing = dict(self.audio_processing)
+		track_gain = max(-12, min(12, int(track.get("audio_volume_gain", 0) or 0)))
+		if track_gain:
+			processing["enabled"] = True
+			processing["volume_gain"] = int(processing.get("volume_gain", 0) or 0) + track_gain
+		self._active_audio_processing = processing
 
 	def _apply_mitigation(self, profile: YouTubeMitigationProfile, reason: str | None = None) -> None:
 		if profile.label == self._mitigation.label:
@@ -326,6 +335,7 @@ class PipelineWorker(QThread):
 				dest_dir.mkdir(parents=True, exist_ok=True)
 				title = t["title"]
 				artists = t["artists"]
+				self._set_track_audio_processing(t)
 				search_error = None
 				options: List[Dict] = []
 				match = None
@@ -402,7 +412,8 @@ class PipelineWorker(QThread):
 					if consecutive_empty_searches >= 5:
 						search_abort_reason = (
 							"YouTube Music returned no results for five tracks in a row. "
-							"Check the network connection or try again later."
+							"This usually means YouTube Music search is temporarily rate-limiting or blocking requests from this network, "
+							"rather than five unrelated songs all being unavailable. Stop the batch, wait before retrying, and review the download log."
 						)
 						self.sig_warning.emit(search_abort_reason)
 						break
@@ -438,7 +449,9 @@ class PipelineWorker(QThread):
 						try:
 							fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
 							self.sig_row_status.emit(row_idx, "Tagging…")
-							cover = cover_art_url_bytes(t.get("cover_url")) or yt_thumbnail_bytes(vid)
+							cover = cover_art_url_bytes(t.get("cover_url"))
+							if not cover and not t.get("library_path"):
+								cover = yt_thumbnail_bytes(vid)
 							tag_file(fp, t, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
 							payload["match"] = candidate
 							break
@@ -472,7 +485,9 @@ class PipelineWorker(QThread):
 								try:
 									fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
 									self.sig_row_status.emit(row_idx, "Tagging…")
-									cover = cover_art_url_bytes(t.get("cover_url")) or yt_thumbnail_bytes(vid)
+									cover = cover_art_url_bytes(t.get("cover_url"))
+									if not cover and not t.get("library_path"):
+										cover = yt_thumbnail_bytes(vid)
 									tag_file(fp, t, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
 									payload["match"] = candidate
 									break

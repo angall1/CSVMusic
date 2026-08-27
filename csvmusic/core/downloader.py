@@ -168,6 +168,24 @@ def youtube_batch_mitigation(track_count: int, *, using_cookies: bool) -> YouTub
 	return YOUTUBE_MITIGATION_NONE
 
 
+def youtube_risk_acknowledgement(profile: YouTubeMitigationProfile) -> str | None:
+	"""Build the shared user acknowledgement shown by every download interface."""
+	if not profile.warning:
+		return None
+	message = profile.warning
+	if profile.reason:
+		message += f"\n\nReason: {profile.reason.capitalize()}."
+	message += (
+		"\n\nDownloading this batch requires repeated YouTube API, search, and media requests. "
+		"YouTube may rate-limit the connection, require bot verification, temporarily block requests, "
+		"or restrict the account/IP being used. CSVMusic cannot guarantee that throttling will prevent a block."
+		"\n\nAutomatic randomized delays and reduced request/download rates will be enabled. "
+		"Large playlists can take a long time and should not be restarted repeatedly."
+		"\n\nDo you understand these risks and want to continue?"
+	)
+	return message
+
+
 def detect_youtube_risk(detail: str) -> str | None:
 	text = (detail or "").lower()
 	for pattern, reason in _YOUTUBE_RISK_PATTERNS:

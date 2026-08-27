@@ -29,7 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Build against an older supported glibc baseline for broader Linux compatibility.
+          - os: ubuntu-22.04
             python_version: "3.11"
             suffix: linux
             ffmpeg_platform: linux
@@ -41,6 +42,7 @@ jobs:
             python_version: "3.11"
             suffix: macos-arm64
             ffmpeg_platform: darwin
+            ffmpeg_arch: arm64
             deno_target: aarch64-apple-darwin
             deno_platform: darwin
             deno_binary: deno
@@ -49,6 +51,7 @@ jobs:
             python_version: "3.11"
             suffix: macos-intel
             ffmpeg_platform: darwin
+            ffmpeg_arch: amd64
             deno_target: x86_64-apple-darwin
             deno_platform: darwin
             deno_binary: deno
@@ -77,8 +80,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build pyinstaller "yt-dlp[default]==${YTDLP_VERSION}" ytmusicapi
+          python -m pip install build pyinstaller pytest "yt-dlp[default]==${YTDLP_VERSION}" ytmusicapi
           python -m pip install -e .
+
+      - name: Test cross-platform library modules
+        run: |
+          python -m pytest -q
+          python -c "from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile; from PySide6.QtWebEngineWidgets import QWebEngineView; from csvmusic.ui.library_mode import LibraryModeDialog; print('Library Mode and QtWebEngine imports OK')"
 
       - name: Ensure license directory
         run: mkdir -p licenses
@@ -162,11 +170,23 @@ jobs:
 
       - name: Fetch FFmpeg (macOS)
         if: ${{ matrix.ffmpeg_platform == 'darwin' }}
+        env:
+          FFMPEG_ARCH: ${{ matrix.ffmpeg_arch }}
         run: |
+          set -euo pipefail
           mkdir -p resources/ffmpeg/darwin
-          curl -L -o ffmpeg.zip https://evermeet.cx/ffmpeg/ffmpeg-6.1.1.zip
-          unzip -o ffmpeg.zip ffmpeg -d resources/ffmpeg/darwin
+          curl --fail --location --retry 3 \
+            --output resources/ffmpeg/darwin/ffmpeg \
+            "https://github.com/binmgr/ffmpeg/releases/latest/download/ffmpeg-darwin-${FFMPEG_ARCH}"
           chmod +x resources/ffmpeg/darwin/ffmpeg
+          actual_arch="$(file resources/ffmpeg/darwin/ffmpeg)"
+          echo "$actual_arch"
+          if [ "$FFMPEG_ARCH" = "arm64" ]; then
+            echo "$actual_arch" | grep -Eq 'arm64|aarch64'
+          else
+            echo "$actual_arch" | grep -Eq 'x86_64|x86-64'
+          fi
+          resources/ffmpeg/darwin/ffmpeg -version | head -n 1
 
       - name: Fetch FFmpeg (Windows)
         if: ${{ matrix.ffmpeg_platform == 'win' }}
@@ -304,6 +324,10 @@ jobs:
               except Exception as e:
                   raise SystemExit(f"Failed to download yt-dlp from {url}: {e}")
               _ensure_exec(dst_ytdlp)
+          if sys.platform.startswith("linux"):
+              linux_guide = pathlib.Path("README-LINUX.md")
+              if linux_guide.exists():
+                  shutil.copy2(linux_guide, app_dir / linux_guide.name)
           if plat_mac:
               subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app_dir)], check=True)
               subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app_dir)], check=True)

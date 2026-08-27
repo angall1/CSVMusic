@@ -23,21 +23,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.6.6
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.0
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -45,6 +45,15 @@ Extract the ZIP before running the app. If your desktop does not launch the file
 chmod +x CSVMusic yt-dlp
 ./CSVMusic
 ```
+
+If Linux reports that the Qt `xcb` platform plugin could not be initialized, install the commonly required cursor runtime and retry:
+
+```bash
+sudo apt update
+sudo apt install libxcb-cursor0
+```
+
+Additional Linux diagnostics are included in `README-LINUX.md` inside the release archive.
 
 If launch fails, copy the terminal output along with `uname -m` and the contents of `/etc/os-release` when reporting the problem.
 
@@ -64,7 +73,7 @@ Python installations still require a supported graphical desktop environment for
 
 ---
 
-# What's New In 1.6.6 (Since 1.6.0)
+# What's New In 1.7.0 (Since 1.6.0)
 
 ## Updates and MP3 reliability
 
@@ -121,8 +130,16 @@ The library is saved locally as `library.json` in CSVMusic's settings folder by 
 
 For standalone development testing, launch only the Library Mode window with:
 
+Windows PowerShell:
+
 ```powershell
 .\.venv\Scripts\python.exe -m csvmusic.library_mode_ui
+```
+
+macOS or Linux:
+
+```bash
+./.venv/bin/python -m csvmusic.library_mode_ui
 ```
 
 To fix a wrong download, select the track, click **Set YouTube Match...**, and paste the correct YouTube or YouTube Music video URL. That track is queued for replacement, and the replacement flag clears after a successful download. **Toggle Redownload** can also replace a track while retaining automatic matching.

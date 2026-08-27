@@ -1,15 +1,18 @@
 # tabs only
 import csv
 import datetime
+import hashlib
 import json
 import pathlib
 import tempfile
 from typing import Any
+from urllib.parse import urlparse
 
 from csvmusic.core.spotify_import import parse_spotify_source
 from csvmusic.core.track_output import expected_track_path
 from csvmusic.core.youtube_music_import import parse_youtube_playlist_id
 from csvmusic.core.apple_music_import import parse_apple_music_source_url
+from csvmusic.core.csv_import import load_csv, tracks_from_csv
 
 
 LIBRARY_VERSION = 1
@@ -61,6 +64,11 @@ def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], lis
 				platform = "apple_music"
 				placeholder = f"Unscanned Apple Music {source_type.title()}"
 			elif "youtube.com" in text.casefold() or "youtu.be" in text.casefold():
+				host = urlparse(text).netloc.lower().split(":", 1)[0]
+				if host != "music.youtube.com":
+					raise ValueError(
+						"Standard YouTube playlists are not supported. Videos outside YouTube Music often lack reliable song, artist, album, and artwork metadata, so importing them accurately can be difficult or impossible. Use the playlist's music.youtube.com link if it exists there."
+					)
 				source_id = parse_youtube_playlist_id(text)
 				platform = "youtube_music"
 				url = f"https://music.youtube.com/playlist?list={source_id}"
@@ -94,6 +102,38 @@ def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], lis
 	return added, errors
 
 
+def import_csv_playlist(library: dict, path: str | pathlib.Path) -> tuple[dict, bool]:
+	"""Import or refresh one CSV file as a first-class library playlist."""
+	source_path = pathlib.Path(path).expanduser().resolve()
+	df = load_csv(source_path)
+	tracks = tracks_from_csv(df)
+	if not tracks:
+		raise ValueError("The CSV did not contain any usable tracks.")
+	name = str(tracks[0].get("playlist") or source_path.stem).strip() or source_path.stem
+	source_id = hashlib.sha256(str(source_path).casefold().encode("utf-8")).hexdigest()[:20]
+	key = f"csv:{source_id}"
+	playlist = playlist_by_id(library, key)
+	created = playlist is None
+	if playlist is None:
+		playlist = {
+			"id": source_id,
+			"platform": "csv",
+			"url": str(source_path),
+			"csv_path": str(source_path),
+			"name": name,
+			"last_scanned_at": None,
+			"reported_total": None,
+			"scan_warning": None,
+			"cover_url": None,
+			"tracks": [],
+		}
+		library.setdefault("playlists", []).append(playlist)
+	merge_playlist_scan(library, key, name, tracks, reported_total=len(tracks))
+	playlist["csv_path"] = str(source_path)
+	playlist["url"] = str(source_path)
+	return playlist, created
+
+
 def merge_playlist_scan(
 	library: dict,
 	playlist_id: str,
@@ -120,6 +160,7 @@ def merge_playlist_scan(
 		track["enabled"] = bool(old.get("enabled", True))
 		track["preferred_video_id"] = old.get("preferred_video_id") or track.get("preferred_video_id") or None
 		track["preferred_video_label"] = old.get("preferred_video_label") or track.get("preferred_video_label") or None
+		track["audio_volume_gain"] = int(old.get("audio_volume_gain", track.get("audio_volume_gain", 0)) or 0)
 		track["force_redownload"] = bool(old.get("force_redownload", False))
 		track["last_error"] = old.get("last_error") or None
 		track["last_error_at"] = old.get("last_error_at") or None
@@ -154,11 +195,13 @@ def enabled_tracks(library: dict, playlist_ids: set[str] | None = None) -> list[
 	for playlist in library.get("playlists", []):
 		if playlist_ids is not None and _playlist_key(playlist) not in playlist_ids and playlist.get("id") not in playlist_ids:
 			continue
-		for stored in playlist.get("tracks", []):
+		for track_index, stored in enumerate(playlist.get("tracks", [])):
+			if not stored.get("enabled", True):
+				continue
 			track = dict(stored)
-			track["enabled"] = True
 			track["playlist"] = playlist.get("name") or "Playlist"
 			track["library_playlist_id"] = _playlist_key(playlist)
+			track["library_track_index"] = track_index
 			result.append(track)
 	return result
 

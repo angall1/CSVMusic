@@ -86,3 +86,24 @@ def test_low_confidence_candidate_is_skipped_without_force(monkeypatch, tmp_path
 	assert finished[0][1] == []
 	assert len(finished[0][2]) == 1
 	assert finished[0][3] == []
+
+
+def test_track_volume_gain_is_added_to_global_processing(tmp_path):
+	worker = _pipeline(tmp_path, force_download=False)
+	worker.audio_processing = {"enabled": True, "normalize": True, "volume_gain": 2, "bass_gain": 1}
+	worker._set_track_audio_processing({"audio_volume_gain": -5})
+
+	assert worker._active_audio_processing == {
+		"enabled": True,
+		"normalize": True,
+		"volume_gain": -3,
+		"bass_gain": 1,
+	}
+
+
+def test_track_volume_gain_enables_processing_without_global_equalizer(tmp_path):
+	worker = _pipeline(tmp_path, force_download=False)
+	worker._set_track_audio_processing({"audio_volume_gain": 4})
+
+	assert worker._active_audio_processing["enabled"] is True
+	assert worker._active_audio_processing["volume_gain"] == 4

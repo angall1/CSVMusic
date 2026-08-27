@@ -15,6 +15,8 @@ _CANON = {
 	"spotify - id": "Spotify - id",
 	"track uri": "Spotify - id",
 	"release date": "Release date",
+	"cover url": "Cover URL",
+	"artwork url": "Cover URL",
 	# Optional/ignored if missing:
 	"type": "Type",
 	"duration ms": "Duration (ms)",
@@ -28,7 +30,7 @@ _CANON = {
 # Minimum set required to build track entries. External IDs and ISRC are useful
 # hints when present, but downloads only need title/artist/playlist metadata.
 _REQUIRED = ["Track name", "Artist name", "Playlist name"]
-_OPTIONAL_TEXT = ["Album", "ISRC", "Spotify - id", "Release date"]
+_OPTIONAL_TEXT = ["Album", "ISRC", "Spotify - id", "Release date", "Cover URL"]
 
 def _read_csv_robust(path: pathlib.Path) -> pd.DataFrame:
 	"""
@@ -196,7 +198,7 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 			"sp_id": spid,
 			"duration_ms": dur_ms,
 			"year": _release_year(r.get("Release date", "")),
-			"cover_url": None,     # CSV doesn't include cover
+			"cover_url": str(r.get("Cover URL", "")).strip() or None,
 			"track_no": track_no or position,
 			"disc_no": disc_no or 1,
 		})

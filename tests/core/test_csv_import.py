@@ -75,3 +75,16 @@ def test_blank_playlist_names_fall_back_to_csv_filename(tmp_path):
 	track = tracks_from_csv(load_csv(path))[0]
 
 	assert track["playlist"] == "My Playlist"
+
+
+def test_csv_import_preserves_cover_url(tmp_path):
+	path = tmp_path / "Artwork.csv"
+	pd.DataFrame([{
+		"Track name": "Song",
+		"Artist name": "Artist",
+		"Cover URL": "https://example.com/cover.jpg",
+	}]).to_csv(path, index=False)
+
+	track = tracks_from_csv(load_csv(path))[0]
+
+	assert track["cover_url"] == "https://example.com/cover.jpg"

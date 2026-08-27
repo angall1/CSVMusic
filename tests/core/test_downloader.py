@@ -67,6 +67,22 @@ def test_error_summary_prefers_error_over_trailing_progress():
 	assert "Sleeping" not in detail
 
 
+def test_large_batch_warning_requires_explicit_risk_acknowledgement():
+	profile = downloader.youtube_batch_mitigation(300, using_cookies=False)
+	message = downloader.youtube_risk_acknowledgement(profile)
+
+	assert profile.active is True
+	assert "repeated YouTube API, search, and media requests" in message
+	assert "temporarily block requests" in message
+	assert "randomized delays" in message
+
+
+def test_small_batch_does_not_require_risk_acknowledgement():
+	profile = downloader.youtube_batch_mitigation(20, using_cookies=False)
+
+	assert downloader.youtube_risk_acknowledgement(profile) is None
+
+
 def test_list_downloads_matches_decomposed_accents(tmp_path):
 	base = downloader.sanitize_name("Björk - Jóga")
 	decomposed = unicodedata.normalize("NFD", base)
