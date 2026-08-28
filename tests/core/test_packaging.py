@@ -1,5 +1,6 @@
 # tabs only
 import pathlib
+import re
 import tomllib
 
 from csvmusic.version import APP_VERSION
@@ -25,9 +26,13 @@ def test_release_versions_are_consistent() -> None:
 	readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
 	assert project["version"] == APP_VERSION
-	assert f"# What's New In {APP_VERSION}" in readme
-	assert f"/releases/tag/v{APP_VERSION}" in readme
-	assert f"/releases/download/v{APP_VERSION}/" in readme
+	# The README points at the latest published release, which may trail the
+	# package's in-development version between releases.
+	assert "# What's New In " in readme
+	tag = re.search(r"/releases/tag/v(\d+\.\d+\.\d+)", readme)
+	download_versions = set(re.findall(r"/releases/download/v(\d+\.\d+\.\d+)/", readme))
+	assert tag is not None
+	assert download_versions == {tag.group(1)}
 
 
 def test_release_workflow_fetches_packaged_deno() -> None:

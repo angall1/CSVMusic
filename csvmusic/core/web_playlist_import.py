@@ -43,7 +43,7 @@ def fetch_web_playlist(value: str, platform: str) -> WebPlaylistSource:
 	if not isinstance(entries, list):
 		raise WebPlaylistImportError(f"This {platform} link is not a playlist.")
 	name = _text(info.get("title")) or f"{platform} Playlist"
-	tracks = _tracks_from_entries(entries, name)
+	tracks = _tracks_from_entries(entries, name, infer_youtube_order=platform == "YouTube")
 	if not tracks:
 		raise WebPlaylistImportError(f"{platform} loaded the playlist, but no playable tracks were found.")
 	total_count = _integer(info.get("playlist_count") or info.get("n_entries"))
@@ -74,9 +74,10 @@ def _validate_url(value: str, platform: str) -> str:
 	return text
 
 
-def _tracks_from_entries(entries: list[Any], playlist_name: str) -> list[dict]:
+def _tracks_from_entries(entries: list[Any], playlist_name: str, *, infer_youtube_order: bool = False) -> list[dict]:
 	tracks: list[dict] = []
 	seen: set[str] = set()
+	channel_rules = _infer_channel_title_rules(entries) if infer_youtube_order else {}
 	for entry in entries:
 		if not isinstance(entry, dict):
 			continue
@@ -85,7 +86,10 @@ def _tracks_from_entries(entries: list[Any], playlist_name: str) -> list[dict]:
 			continue
 		title = _text(entry.get("track") or entry.get("title"))
 		artist = _text(entry.get("artist") or entry.get("creator") or entry.get("uploader") or entry.get("channel"))
-		artist, title = _split_title(title, artist)
+		if infer_youtube_order:
+			artist, title = _split_youtube_title(title, artist, channel_rules.get(_channel_key(artist)))
+		else:
+			artist, title = _split_title(title, artist)
 		if not title:
 			continue
 		if entry_id:
@@ -113,6 +117,76 @@ def _split_title(title: str, fallback_artist: str) -> tuple[str, str]:
 		artist, track = cleaned.split(" - ", 1)
 		return artist.strip(), track.strip()
 	return fallback_artist, cleaned
+
+
+def _split_youtube_title(title: str, uploader: str, rule: str | None) -> tuple[str, str]:
+	parts = _title_parts(title)
+	if not parts:
+		return uploader, _clean_title(title)
+	left, right = parts
+	left_matches = _channel_matches_artist(uploader, left)
+	right_matches = _channel_matches_artist(uploader, right)
+	if left_matches and not right_matches:
+		return left, right
+	if right_matches and not left_matches:
+		return right, left
+	if rule == "artist-title":
+		return left, right
+	if rule == "title-artist":
+		return right, left
+	return uploader, _clean_title(title)
+
+
+def _infer_channel_title_rules(entries: list[Any]) -> dict[str, str]:
+	votes: dict[str, dict[str, int]] = {}
+	for entry in entries:
+		if not isinstance(entry, dict):
+			continue
+		uploader = _text(entry.get("artist") or entry.get("creator") or entry.get("uploader") or entry.get("channel"))
+		parts = _title_parts(_text(entry.get("track") or entry.get("title")))
+		if not uploader or not parts:
+			continue
+		left, right = parts
+		left_matches = _channel_matches_artist(uploader, left)
+		right_matches = _channel_matches_artist(uploader, right)
+		if left_matches == right_matches:
+			continue
+		counts = votes.setdefault(_channel_key(uploader), {"artist-title": 0, "title-artist": 0})
+		counts["artist-title" if left_matches else "title-artist"] += 1
+	rules: dict[str, str] = {}
+	for channel, counts in votes.items():
+		total = counts["artist-title"] + counts["title-artist"]
+		winner = "artist-title" if counts["artist-title"] > counts["title-artist"] else "title-artist"
+		if total >= 2 and counts[winner] / total >= 0.8:
+			rules[channel] = winner
+	return rules
+
+
+def _clean_title(title: str) -> str:
+	cleaned = re.sub(r"\s*[\[(](official|lyrics?|audio|video|visualizer|music video)[^)\]]*[\])]\s*", " ", title, flags=re.I)
+	return re.sub(r"\s+", " ", cleaned).strip(" -")
+
+
+def _title_parts(title: str) -> tuple[str, str] | None:
+	cleaned = _clean_title(title)
+	for separator in (" - ", " \u2013 ", " \u2014 "):
+		if separator in cleaned:
+			left, right = cleaned.split(separator, 1)
+			if left.strip() and right.strip():
+				return left.strip(), right.strip()
+	return None
+
+
+def _channel_matches_artist(channel: str, artist: str) -> bool:
+	channel_key = _channel_key(channel)
+	artist_key = _channel_key(artist)
+	if not channel_key or not artist_key:
+		return False
+	return channel_key in {artist_key, f"{artist_key}music", f"{artist_key}official", f"official{artist_key}"}
+
+
+def _channel_key(value: str) -> str:
+	return re.sub(r"[^a-z0-9]", "", value.casefold())
 
 
 def _thumbnail(entry: dict[str, Any]) -> str | None:

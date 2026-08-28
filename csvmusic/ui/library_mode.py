@@ -3,6 +3,7 @@ import pathlib
 import random
 import shutil
 import datetime
+import html
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap, QPolygonF
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from csvmusic.core.library import (
-	add_playlist_urls, enabled_tracks, export_csv, library_status, load_library,
+	add_playlist_urls, edit_library_track, enabled_tracks, export_csv, library_status, load_library,
 	import_csv_playlist, merge_playlist_scan, new_library, playlist_by_id, record_library_download_result,
 	rename_library_playlist, save_library,
 )
@@ -84,6 +85,17 @@ class EditablePlaylistTitle(QLabel):
 		super().mouseDoubleClickEvent(event)
 
 
+class EditableTrackText(QLabel):
+	double_clicked = Signal()
+
+	def mouseDoubleClickEvent(self, event) -> None:
+		if event.button() == Qt.LeftButton:
+			self.double_clicked.emit()
+			event.accept()
+			return
+		super().mouseDoubleClickEvent(event)
+
+
 def _playlist_action_icon(kind: str) -> QIcon:
 	pixmap = QPixmap(28, 28)
 	pixmap.fill(Qt.transparent)
@@ -102,6 +114,73 @@ def _playlist_action_icon(kind: str) -> QIcon:
 		painter.drawLine(QPointF(7.5, 3.2), QPointF(12.5, 3.2))
 		painter.drawLine(QPointF(8.0, 8.5), QPointF(8.0, 14.5))
 		painter.drawLine(QPointF(12.0, 8.5), QPointF(12.0, 14.5))
+	painter.end()
+	return QIcon(pixmap)
+
+
+def _rescan_all_icon() -> QIcon:
+	pixmap = QPixmap(34, 26)
+	pixmap.fill(Qt.transparent)
+	painter = QPainter(pixmap)
+	painter.setRenderHint(QPainter.Antialiasing)
+	pen = QPen(Qt.white, 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+	painter.setPen(pen)
+	painter.drawArc(QRectF(2.5, 3.5, 18, 18), 35 * 16, 285 * 16)
+	painter.setBrush(Qt.white)
+	painter.drawPolygon(QPolygonF([QPointF(18.5, 2.5), QPointF(19.5, 9), QPointF(13.5, 6.5)]))
+	painter.setBrush(Qt.NoBrush)
+	for y in (7, 13, 19):
+		painter.drawEllipse(QRectF(24, y - 1, 2, 2))
+		painter.drawLine(QPointF(28, y), QPointF(33, y))
+	painter.end()
+	return QIcon(pixmap)
+
+
+def _stop_icon() -> QIcon:
+	pixmap = QPixmap(24, 24)
+	pixmap.fill(Qt.transparent)
+	painter = QPainter(pixmap)
+	painter.setRenderHint(QPainter.Antialiasing)
+	painter.setPen(QPen(QColor("#ffffff"), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+	painter.setBrush(QColor("#d00000"))
+	painter.drawPolygon(QPolygonF([
+		QPointF(8, 2), QPointF(16, 2), QPointF(22, 8), QPointF(22, 16),
+		QPointF(16, 22), QPointF(8, 22), QPointF(2, 16), QPointF(2, 8),
+	]))
+	painter.setPen(QPen(Qt.white, 3, Qt.SolidLine, Qt.RoundCap))
+	painter.drawLine(QPointF(7, 12), QPointF(17, 12))
+	painter.end()
+	return QIcon(pixmap)
+
+
+def _paper_icon() -> QIcon:
+	pixmap = QPixmap(24, 24)
+	pixmap.fill(Qt.transparent)
+	painter = QPainter(pixmap)
+	painter.setRenderHint(QPainter.Antialiasing)
+	painter.setPen(QPen(QColor("#303030"), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+	painter.setBrush(QColor("#fffdf0"))
+	painter.drawPolygon(QPolygonF([
+		QPointF(4, 2), QPointF(15, 2), QPointF(21, 8), QPointF(21, 22), QPointF(4, 22),
+	]))
+	painter.setBrush(QColor("#d8d8c8"))
+	painter.drawPolygon(QPolygonF([QPointF(15, 2), QPointF(15, 8), QPointF(21, 8)]))
+	for y in (11, 15, 19):
+		painter.drawLine(QPointF(8, y), QPointF(17, y))
+	painter.end()
+	return QIcon(pixmap)
+
+
+def _download_icon() -> QIcon:
+	pixmap = QPixmap(24, 24)
+	pixmap.fill(Qt.transparent)
+	painter = QPainter(pixmap)
+	painter.setRenderHint(QPainter.Antialiasing)
+	painter.setPen(QPen(Qt.white, 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+	painter.drawLine(QPointF(12, 3), QPointF(12, 15))
+	painter.drawLine(QPointF(6, 10), QPointF(12, 16))
+	painter.drawLine(QPointF(18, 10), QPointF(12, 16))
+	painter.drawLine(QPointF(5, 21), QPointF(19, 21))
 	painter.end()
 	return QIcon(pixmap)
 
@@ -139,22 +218,34 @@ def _settings_icon() -> QIcon:
 
 
 def _folder_icon() -> QIcon:
-	pixmap = QPixmap(28, 24)
+	pixmap = QPixmap(32, 28)
 	pixmap.fill(Qt.transparent)
 	painter = QPainter(pixmap)
-	painter.setRenderHint(QPainter.Antialiasing, False)
-	painter.setBrush(QColor("#e5bd45"))
-	painter.setPen(QPen(QColor("#5f4800"), 1.5, Qt.SolidLine, Qt.SquareCap, Qt.MiterJoin))
+	painter.setRenderHint(QPainter.Antialiasing, True)
+	outline = QPen(QColor("#362800"), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+	painter.setPen(outline)
+	# Dark rear pocket and a large tab make the silhouette readable at toolbar size.
+	painter.setBrush(QColor("#b88716"))
 	painter.drawPolygon(QPolygonF([
-		QPointF(2, 6), QPointF(11, 6), QPointF(14, 9), QPointF(26, 9),
-		QPointF(24, 21), QPointF(2, 21),
+		QPointF(2.5, 6.5), QPointF(2.5, 3.5), QPointF(13, 3.5), QPointF(17, 7.5),
+		QPointF(29.5, 7.5), QPointF(29.5, 23.5), QPointF(2.5, 23.5),
 	]))
-	painter.setBrush(QColor("#f4d56a"))
+	# A pale sheet peeking out reinforces that the folder is open.
+	painter.setBrush(QColor("#fff8d0"))
+	painter.setPen(QPen(QColor("#756a42"), 1.2))
 	painter.drawPolygon(QPolygonF([
-		QPointF(2, 8), QPointF(25, 8), QPointF(23, 19), QPointF(3, 19),
+		QPointF(6, 8), QPointF(26, 8), QPointF(25, 20), QPointF(5, 20),
 	]))
-	painter.setPen(QPen(QColor("#fff3ae"), 1))
-	painter.drawLine(QPointF(4, 10), QPointF(23, 10))
+	# Bright angled front flap gives the icon its open, skeuomorphic shape.
+	painter.setBrush(QColor("#f2c94c"))
+	painter.setPen(outline)
+	painter.drawPolygon(QPolygonF([
+		QPointF(2.5, 11), QPointF(30, 11), QPointF(26.5, 25), QPointF(5, 25),
+	]))
+	painter.setPen(QPen(QColor("#fff0a0"), 1.5, Qt.SolidLine, Qt.RoundCap))
+	painter.drawLine(QPointF(5, 13), QPointF(27.5, 13))
+	painter.setPen(QPen(QColor("#8f670d"), 1.2, Qt.SolidLine, Qt.RoundCap))
+	painter.drawLine(QPointF(6, 22.5), QPointF(25, 22.5))
 	painter.end()
 	return QIcon(pixmap)
 
@@ -1017,12 +1108,20 @@ class LibraryModeDialog(QDialog):
 		self.download_detail.setStyleSheet("color: #404040; font-size: 11px;")
 		download_layout.addWidget(self.download_detail)
 		download_buttons = QHBoxLayout()
-		self.download_button = QPushButton("Download Missing")
+		self.download_button = QPushButton("Download")
+		self.download_button.setIcon(_download_icon())
+		self.download_button.setIconSize(QSize(24, 24))
+		self.download_button.setStyleSheet("QPushButton { background: #008000; color: white; font-weight: bold; padding: 5px 12px; }")
 		self.download_button.clicked.connect(self._start_download)
 		self.stop_download_button = QPushButton("Stop")
+		self.stop_download_button.setIcon(_stop_icon())
+		self.stop_download_button.setIconSize(QSize(24, 24))
+		self.stop_download_button.setStyleSheet("QPushButton { background: #b00000; color: white; font-weight: bold; padding: 5px 10px; }")
 		self.stop_download_button.setEnabled(False)
 		self.stop_download_button.clicked.connect(self._stop_download)
-		self.download_log_button = QPushButton("Download Log")
+		self.download_log_button = QPushButton("Log")
+		self.download_log_button.setIcon(_paper_icon())
+		self.download_log_button.setIconSize(QSize(24, 24))
 		self.download_log_button.clicked.connect(self._show_download_log)
 		download_buttons.addWidget(self.download_button)
 		download_buttons.addWidget(self.stop_download_button)
@@ -1044,6 +1143,9 @@ class LibraryModeDialog(QDialog):
 		playlist_heading.addWidget(playlist_heading_label)
 		playlist_heading.addStretch(1)
 		rescan_all = QPushButton("Rescan All")
+		rescan_all.setIcon(_rescan_all_icon())
+		rescan_all.setIconSize(QSize(34, 26))
+		rescan_all.setStyleSheet("QPushButton { background: #008000; color: white; font-weight: bold; padding: 4px 10px; }")
 		rescan_all.clicked.connect(self._rescan_all)
 		playlist_heading.addWidget(rescan_all)
 		open_output = QToolButton()
@@ -1338,17 +1440,7 @@ class LibraryModeDialog(QDialog):
 		names = [str(playlist.get("name") or "Unscanned Playlist") for playlist in playlists]
 		label = names[0] if len(names) == 1 else f"{len(names)} playlists: " + ", ".join(names)
 		self.download_target.setText(f"Target playlist: {label}")
-		fmt = self.format_combo.currentText()
-		output = self.library.get("output_dir") or ""
-		status = library_status(self.library, output, fmt)
-		downloaded = 0
-		missing = 0
-		for playlist in playlists:
-			key = f"{playlist.get('platform') or 'spotify'}:{playlist.get('id')}"
-			counts = status.get("playlists", {}).get(key, {})
-			downloaded += int(counts.get("downloaded", 0) or 0)
-			missing += int(counts.get("missing", 0) or 0)
-		self.download_button.setText("Download Missing" if downloaded > 0 and missing > 0 else "Download")
+		self.download_button.setText("Download")
 		if not (self.download_worker and self.download_worker.isRunning()):
 			self.download_button.setEnabled(True)
 
@@ -1867,15 +1959,22 @@ class LibraryModeDialog(QDialog):
 				text_column.setSpacing(1)
 				text_column.setAlignment(Qt.AlignVCenter)
 				album = str(track.get("album") or "").strip()
-				primary = QLabel(f"{track.get('title') or ''} - {track.get('artists') or ''}")
-				primary.setFont(QFont("Comic Sans MS", 10, QFont.Bold))
+				title_text = html.escape(str(track.get("title") or ""))
+				artist_text = html.escape(str(track.get("artists") or ""))
+				primary = EditableTrackText(f"<b>{title_text}</b> - {artist_text}")
+				primary.setTextFormat(Qt.RichText)
+				primary.setFont(QFont("Comic Sans MS", 10))
 				primary.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 				primary.setTextInteractionFlags(Qt.TextSelectableByMouse)
-				album_label = QLabel(album)
+				primary.setToolTip("Double-click to edit the song title and album")
+				primary.double_clicked.connect(lambda playlist_key=str(playlist_id), track_index=index: self._edit_track_metadata(playlist_key, track_index))
+				album_label = EditableTrackText(album or "No album listed")
 				album_label.setFont(QFont("Comic Sans MS", 9))
 				album_label.setStyleSheet("color: #303030;")
 				album_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 				album_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+				album_label.setToolTip("Double-click to edit the song title and album")
+				album_label.double_clicked.connect(lambda playlist_key=str(playlist_id), track_index=index: self._edit_track_metadata(playlist_key, track_index))
 				download = QLabel(youtube_info)
 				download.setFont(QFont("Comic Sans MS", 8))
 				download.setStyleSheet("color: #555555;")
@@ -1920,6 +2019,45 @@ class LibraryModeDialog(QDialog):
 		self.load_more_tracks_button.setVisible(remaining_tracks > 0)
 		self.load_more_tracks_button.setText(f"Load More Songs ({remaining_tracks} remaining)")
 		self.track_art_timer.start(0)
+
+	def _edit_track_metadata(self, playlist_id: str, track_index: int) -> None:
+		if (self.download_worker and self.download_worker.isRunning()) or (self.single_download_worker and self.single_download_worker.isRunning()):
+			QMessageBox.information(self, "Download in Progress", "Wait for the current download to finish before editing song metadata.")
+			return
+		playlist = playlist_by_id(self.library, playlist_id)
+		if not playlist or track_index < 0 or track_index >= len(playlist.get("tracks", [])):
+			return
+		track = playlist["tracks"][track_index]
+		dialog = QDialog(self)
+		dialog.setWindowTitle("Edit Song Metadata")
+		layout = QVBoxLayout(dialog)
+		form = QFormLayout()
+		title_edit = QLineEdit(str(track.get("title") or ""))
+		album_edit = QLineEdit(str(track.get("album") or ""))
+		form.addRow("Song title:", title_edit)
+		form.addRow("Album:", album_edit)
+		layout.addLayout(form)
+		note = QLabel("These edits are saved with the library and kept when the playlist is rescanned.")
+		note.setWordWrap(True)
+		layout.addWidget(note)
+		buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+		buttons.accepted.connect(dialog.accept)
+		buttons.rejected.connect(dialog.reject)
+		layout.addWidget(buttons)
+		if dialog.exec() != QDialog.Accepted:
+			return
+		try:
+			updated = edit_library_track(self.library, playlist_id, track_index, title_edit.text(), album_edit.text())
+			self._save()
+		except Exception as exc:
+			QMessageBox.warning(self, "Edit Failed", str(exc))
+			return
+		self._show_tracks()
+		self._refresh()
+		message = f"Updated metadata for '{updated['title']}'."
+		if updated.get("force_redownload"):
+			message += " It is marked for redownload so the file and embedded tags can be updated."
+		self.status.setText(message)
 
 	def _load_more_tracks(self) -> None:
 		self.track_display_limit += self.track_display_batch

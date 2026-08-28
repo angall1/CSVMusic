@@ -197,6 +197,29 @@ def rename_library_playlist(
 	return playlist, renamed_folder
 
 
+def edit_library_track(library: dict, playlist_id: str, track_index: int, title: str, album: str) -> dict:
+	"""Apply user-owned track metadata overrides that survive future rescans."""
+	playlist = playlist_by_id(library, playlist_id)
+	if playlist is None:
+		raise KeyError(f"Playlist {playlist_id} is not in this library.")
+	tracks = playlist.get("tracks", [])
+	if track_index < 0 or track_index >= len(tracks):
+		raise IndexError("The selected song is no longer in this playlist.")
+	clean_title = str(title or "").strip()
+	clean_album = str(album or "").strip()
+	if not clean_title:
+		raise ValueError("Song title cannot be blank.")
+	track = tracks[track_index]
+	changed = clean_title != str(track.get("title") or "").strip() or clean_album != str(track.get("album") or "").strip()
+	track["title"] = clean_title
+	track["album"] = clean_album
+	track["custom_title"] = True
+	track["custom_album"] = True
+	if changed and track.get("last_downloaded_at"):
+		track["force_redownload"] = True
+	return track
+
+
 def merge_playlist_scan(
 	library: dict,
 	playlist_id: str,
@@ -221,6 +244,12 @@ def merge_playlist_scan(
 			continue
 		seen.add(key)
 		old = previous.get(key, {})
+		if old.get("custom_title"):
+			track["title"] = old.get("title") or track["title"]
+			track["custom_title"] = True
+		if old.get("custom_album"):
+			track["album"] = old.get("album") or ""
+			track["custom_album"] = True
 		track["enabled"] = bool(old.get("enabled", True))
 		track["preferred_video_id"] = old.get("preferred_video_id") or track.get("preferred_video_id") or None
 		track["preferred_video_label"] = old.get("preferred_video_label") or track.get("preferred_video_label") or None

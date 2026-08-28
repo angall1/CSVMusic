@@ -25,6 +25,30 @@ def test_web_entries_are_normalized():
 	assert tracks[0]["duration_ms"] == 123000
 
 
+def test_regular_youtube_infers_title_artist_order_by_channel():
+	entries = [
+		{"id": "1", "title": "First Song - Example Artist", "uploader": "ExampleArtistMusic"},
+		{"id": "2", "title": "Second Song - Example Artist", "uploader": "ExampleArtistMusic"},
+		{"id": "3", "title": "Third Song - Guest Name", "uploader": "ExampleArtistMusic"},
+	]
+	tracks = _tracks_from_entries(entries, "Videos", infer_youtube_order=True)
+	assert [(track["title"], track["artists"]) for track in tracks] == [
+		("First Song", "Example Artist"),
+		("Second Song", "Example Artist"),
+		("Third Song", "Guest Name"),
+	]
+
+
+def test_non_youtube_import_does_not_use_channel_inference():
+	entries = [
+		{"id": "1", "title": "First Song - Example Artist", "uploader": "ExampleArtistMusic"},
+		{"id": "2", "title": "Second Song - Example Artist", "uploader": "ExampleArtistMusic"},
+	]
+	tracks = _tracks_from_entries(entries, "Videos")
+	assert tracks[0]["title"] == "First Song - Example Artist"
+	assert tracks[0]["artists"] == "ExampleArtistMusic"
+
+
 def test_web_playlist_warns_when_partial(monkeypatch):
 	class _YoutubeDL:
 		def __init__(self, options):

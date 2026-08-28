@@ -1,7 +1,7 @@
 import pathlib
 
 from csvmusic.core.library import (
-	add_playlist_urls, clear_redownload_flag, enabled_tracks, library_status, load_library, merge_playlist_scan,
+	add_playlist_urls, clear_redownload_flag, edit_library_track, enabled_tracks, library_status, load_library, merge_playlist_scan,
 	import_csv_playlist, new_library, record_library_download_result, rename_library_playlist, save_library,
 )
 from csvmusic.core.track_output import expected_track_path
@@ -14,6 +14,21 @@ APPLE_URL = "https://music.apple.com/us/playlist/disco-essentials/pl.88cf86bb7a8
 
 def _track(track_id="one", title="Song"):
 	return {"id": track_id, "title": title, "artists": "Artist", "album": "Album", "cover_url": "cover.jpg"}
+
+
+def test_track_metadata_edits_survive_rescan():
+	library = new_library()
+	added, errors = add_playlist_urls(library, [URL])
+	assert added and not errors
+	playlist_id = "spotify:611N3KSs459UD5IVPH1ES4"
+	merge_playlist_scan(library, playlist_id, "Playlist", [_track()])
+	library["playlists"][0]["tracks"][0]["last_downloaded_at"] = "2026-01-01T00:00:00+00:00"
+	updated = edit_library_track(library, playlist_id, 0, "Correct Title", "Correct Album")
+	assert updated["force_redownload"] is True
+	merge_playlist_scan(library, playlist_id, "Playlist", [_track(title="Scraped Title")])
+	rescanned = library["playlists"][0]["tracks"][0]
+	assert rescanned["title"] == "Correct Title"
+	assert rescanned["album"] == "Correct Album"
 
 
 def test_library_round_trip_and_add_urls(tmp_path):
