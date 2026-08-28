@@ -25,23 +25,36 @@ class YouTubeMusicSource:
 
 
 def fetch_youtube_music_source(value: str, *, limit: int | None = None) -> YouTubeMusicSource:
-	playlist_id = parse_youtube_playlist_id(value)
+	source_type, source_id = parse_youtube_music_source(value)
 	try:
-		playlist = YTMusic().get_playlist(playlist_id, limit=limit)
+		client = YTMusic()
+		playlist = client.get_album(source_id) if source_type == "album" else client.get_playlist(source_id, limit=limit)
 	except Exception as exc:
-		raise YouTubeMusicImportError("Could not load YouTube Music playlist. Is it public?") from exc
+		raise YouTubeMusicImportError(f"Could not load YouTube Music {source_type}. Is it public?") from exc
 	if not isinstance(playlist, dict):
-		raise YouTubeMusicImportError("YouTube Music returned playlist data in an unexpected format.")
-	name = _clean_text(playlist.get("title")) or "YouTube Music Playlist"
+		raise YouTubeMusicImportError(f"YouTube Music returned {source_type} data in an unexpected format.")
+	name = _clean_text(playlist.get("title")) or f"YouTube Music {source_type.title()}"
 	raw_tracks = playlist.get("tracks") if isinstance(playlist.get("tracks"), list) else []
-	total_count = _safe_int(playlist.get("trackCount"))
+	total_count = _safe_int(playlist.get("trackCount")) or len(raw_tracks)
 	tracks = _tracks_from_playlist(raw_tracks, name)
 	if not tracks:
-		raise YouTubeMusicImportError("YouTube Music loaded the playlist, but no playable tracks were found.")
+		raise YouTubeMusicImportError(f"YouTube Music loaded the {source_type}, but no playable tracks were found.")
 	warning = None
 	if total_count and len(tracks) < total_count:
 		warning = incomplete_import_warning("YouTube Music", len(tracks), total_count)
-	return YouTubeMusicSource(id=playlist_id, name=name, tracks=tracks, total_count=total_count, warning=warning, cover_url=_cover_url(playlist))
+	return YouTubeMusicSource(id=source_id, name=name, tracks=tracks, total_count=total_count, source_type=source_type, warning=warning, cover_url=_cover_url(playlist))
+
+
+def parse_youtube_music_source(value: str) -> tuple[str, str]:
+	text = (value or "").strip()
+	if not text:
+		raise YouTubeMusicImportError("Paste a YouTube Music playlist or album link first.")
+	parsed = urlparse(text)
+	if parsed.netloc.lower() == "music.youtube.com":
+		parts = [part for part in parsed.path.split("/") if part]
+		if len(parts) >= 2 and parts[0].lower() == "browse" and parts[1].startswith("MPRE"):
+			return "album", parts[1]
+	return "playlist", parse_youtube_playlist_id(text)
 
 
 def parse_youtube_playlist_id(value: str) -> str:

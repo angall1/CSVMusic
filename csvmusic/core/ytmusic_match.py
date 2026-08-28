@@ -13,7 +13,17 @@ SHORT_TRACK_TOLERANCE_SECONDS = 8
 SEARCH_RETRY_COUNT = 2
 SEARCH_RETRY_SLEEP_S = 0.9
 
-_PENALTY_TERMS = {"live","remix","cover","sped","slowed","nightcore","8d","reverb","extended","mashup","edit","karaoke","instrumental","demo","tribute","soundalike"}
+_PENALTY_TERMS = {"cover","sped","slowed","nightcore","8d","reverb","mashup","karaoke","instrumental","demo","tribute","soundalike"}
+_VERSION_PATTERNS = {
+	"live": r"\blive\b",
+	"acoustic": r"\bacoustic\b",
+	"extended": r"\bextended\b|\blong version\b",
+	"remix": r"\bremix(?:ed)?\b|\bmix\b",
+	"edit": r"\bedit\b|\bradio version\b",
+	"single": r"\bsingle version\b|\boriginal single\b|\bu\.?s\.? single\b",
+	"remaster": r"\bremaster(?:ed)?\b",
+	"album": r"\balbum version\b",
+}
 _CAST_PENALTY_TERMS = {"cast","original cast","tribute band","musical","orchestra"}
 
 def _norm_text(s: str) -> str:
@@ -56,6 +66,11 @@ def _result_author(result: Dict, artists) -> str:
 
 def _overlap_ratio(needle: set, haystack: set) -> float:
 	return len(needle & haystack) / max(1, len(needle))
+
+
+def _version_markers(value: str) -> Set[str]:
+	text = _norm_text(value)
+	return {marker for marker, pattern in _VERSION_PATTERNS.items() if re.search(pattern, text, flags=re.I)}
 
 def _duration_s(d: Optional[int | str]) -> int:
 	try:
@@ -126,10 +141,20 @@ def _score(track: Dict, cand: Dict) -> float:
 
 	# penalties
 	titleblob = _norm_text(cand_title + " " + cand_art)
+	requested_title = _norm_text(track.get("title") or "")
+	requested_versions = _version_markers(requested_title)
+	candidate_versions = _version_markers(cand_title)
 	p_pen = 0.0
 	for t in _PENALTY_TERMS:
 		if t in titleblob:
 			p_pen += 0.10
+	if requested_versions:
+		p_pen += 0.34 * len(requested_versions - candidate_versions)
+		p_pen += 0.26 * len(candidate_versions - requested_versions)
+	else:
+		# Prefer the ordinary studio/catalog version when Spotify did not ask
+		# for a particular variant. Remasters are usually equivalent releases.
+		p_pen += 0.30 * len(candidate_versions - {"remaster"})
 	if artist_overlap == 0.0:
 		for t in _CAST_PENALTY_TERMS:
 			if t in titleblob:
@@ -139,7 +164,8 @@ def _score(track: Dict, cand: Dict) -> float:
 	if "remaster" in titleblob:
 		p_pen *= 0.6
 
-	total = max(0.0, d_score * 0.35 + title_overlap * 0.35 + artist_overlap * 0.25 + ch_boost - p_pen)
+	version_boost = 0.14 if requested_versions and requested_versions == candidate_versions else 0.0
+	total = max(0.0, d_score * 0.35 + title_overlap * 0.35 + artist_overlap * 0.25 + ch_boost + version_boost - p_pen)
 	return min(total, 0.99)
 
 def _clean_title_artist(title: str, artists: str) -> str:
@@ -266,7 +292,15 @@ def _rank_candidates(
 		item["score"] = s
 		scored.append(item)
 
-	return sorted(scored, key=lambda c: (c["score"], 1 if c.get("source") == "music" else 0), reverse=True)
+	def priority(candidate: Dict) -> tuple[int, int, float, int]:
+		score = float(candidate.get("score", 0.0) or 0.0)
+		is_music = 1 if candidate.get("source") == "music" else 0
+		# Prefer a confidently matching YouTube Music song over a regular
+		# YouTube video. Below the confidence threshold, relevance still wins
+		# so a poor music result cannot displace a usable video fallback.
+		return (1 if score >= CONFIDENCE_MIN else 0, is_music if score >= CONFIDENCE_MIN else 0, score, is_music)
+
+	return sorted(scored, key=priority, reverse=True)
 
 def find_best(yt: YTMusic, track: Dict) -> Tuple[Optional[Dict], float, List[Dict]]:
 	options = _rank_candidates(yt, track)
@@ -295,7 +329,10 @@ def more_candidates(track: Dict, exclude_ids: Set[str] | None = None, limit: int
 	# Alternatives are explicitly user-selected. Keep duration-mismatched results
 	# visible while duration scoring still ranks likely versions first.
 	options = _rank_candidates(yt, track, limit, source_mode, enforce_duration=False)
-	return [opt for opt in options if opt.get("videoId") not in exclude]
+	visible = [opt for opt in options if opt.get("videoId") not in exclude]
+	# Keep score order within each source, but make the manual browser's source
+	# order predictable: YouTube Music first, regular YouTube second.
+	return sorted(visible, key=lambda opt: 0 if opt.get("source") == "music" else 1)
 
 def batch_match(tracks: List[Dict]) -> List[Dict]:
 	"""

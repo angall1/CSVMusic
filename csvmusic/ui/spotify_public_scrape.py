@@ -49,8 +49,11 @@ _CAPTURE_SCRIPT = r"""
 		const artwork = row.querySelector('img');
 		const lines = (row.innerText || '').split('\n').map(x => x.trim()).filter(Boolean);
 		const title = (trackLink.innerText || trackLink.textContent || lines[0] || '').trim();
+		const positionText = lines.find(line => /^\d{1,5}$/.test(line)) || '';
+		const position = positionText ? parseInt(positionText, 10) : null;
 		tracks.push({
 			id: match[1],
+			position,
 			title,
 			artists: artistLinks.map(x => (x.innerText || x.textContent || '').trim()).filter(Boolean),
 			album: albumLink ? (albumLink.innerText || albumLink.textContent || '').trim() : '',
@@ -138,11 +141,32 @@ def normalized_capture(item: Any) -> dict | None:
 		return None
 	return {
 		"id": track_id,
+		"position": _safe_position(item.get("position")),
 		"title": title,
 		"artists": artist_text,
 		"album": str(item.get("album") or "").strip(),
 		"cover_url": str(item.get("cover_url") or "").strip() or None,
 	}
+
+
+def _safe_position(value: Any) -> int | None:
+	try:
+		position = int(value)
+	except (TypeError, ValueError):
+		return None
+	return position if position > 0 else None
+
+
+def ordered_playlist_tracks(tracks: list[dict], reported_total: int | None) -> list[dict]:
+	"""Return numbered playlist rows in stable order, excluding recommendation cards."""
+	if not reported_total:
+		return tracks
+	by_position: dict[int, dict] = {}
+	for track in tracks:
+		position = _safe_position(track.get("position"))
+		if position is not None and position <= reported_total:
+			by_position[position] = track
+	return [by_position[position] for position in sorted(by_position)]
 
 
 def metadata_gap_positions(tracks: list[dict], playlist_cover_url: str | None, reported_total: int | None = None) -> list[int]:
@@ -293,11 +317,12 @@ class SpotifyPublicScrapeDialog(QDialog):
 			log(f"spotify_public_scrape session={self.session_id} event=baseline_failed playlist_id={self.playlist_id} error={error}")
 			self._finish(f"Phase 1 failed: {error}")
 			return
-		for track in getattr(playlist, "tracks", []):
+		for playlist_position, track in enumerate(getattr(playlist, "tracks", []), start=1):
 			track_id = str(track.get("sp_id") or "").strip()
 			if track_id:
 				self.tracks[track_id] = {
 					"id": track_id,
+					"position": playlist_position,
 					"title": track.get("title") or "",
 					"artists": track.get("artists") or "",
 					"album": track.get("album") or "",
@@ -315,6 +340,14 @@ class SpotifyPublicScrapeDialog(QDialog):
 		)
 		self._render_tracks()
 		self.scrape_progress.emit(self.baseline_count, self.reported_total or 0, self.playlist_name)
+		if (
+			self.reported_total
+			and self.baseline_count >= self.reported_total
+			and not getattr(playlist, "warning", None)
+			and not self._metadata_gap_positions()
+		):
+			self._finish(f"Success: embed confirmed all {self.reported_total} reported tracks.")
+			return
 		self.status.setText(
 			f"Phase 1 confirmed {self.baseline_count} public embed tracks"
 			f" of {self.reported_total or 'an unknown total'}. Phase 2: opening the normal page at 25% zoom..."
@@ -368,7 +401,9 @@ class SpotifyPublicScrapeDialog(QDialog):
 			self.reported_total = max(self.reported_total or 0, int(browser_total))
 		for raw in result.get("tracks") or []:
 			track = normalized_capture(raw)
-			if not track:
+			if not track or not track.get("position"):
+				continue
+			if self.reported_total and int(track["position"]) > self.reported_total:
 				continue
 			if track["id"] not in self.tracks:
 				self.tracks[track["id"]] = track
@@ -376,6 +411,8 @@ class SpotifyPublicScrapeDialog(QDialog):
 				# The public embed often supplies the playlist image as a generic
 				# fallback. Rendered rows contain the actual per-album artwork.
 				existing = self.tracks[track["id"]]
+				# The embed's position is authoritative. Numbers found in rendered
+				# row text can be years or other metadata and must not replace it.
 				for field in ("title", "artists", "album", "cover_url"):
 					if track.get(field):
 						existing[field] = track[field]
@@ -468,12 +505,12 @@ class SpotifyPublicScrapeDialog(QDialog):
 		self.stop_button.setEnabled(False)
 		self.status.setText(message)
 		if was_running:
-			emitted_tracks = list(self.tracks.values())
-			if self.reported_total and len(emitted_tracks) > self.reported_total:
-				discarded = len(emitted_tracks) - self.reported_total
-				emitted_tracks = emitted_tracks[:self.reported_total]
+			all_tracks = list(self.tracks.values())
+			emitted_tracks = ordered_playlist_tracks(all_tracks, self.reported_total)
+			if self.reported_total and len(all_tracks) > len(emitted_tracks):
+				discarded = len(all_tracks) - len(emitted_tracks)
 				log(
-					f"spotify_public_scrape session={self.session_id} event=reported_total_cap "
+					f"spotify_public_scrape session={self.session_id} event=playlist_position_filter "
 					f"discarded={discarded} reported_total={self.reported_total}"
 				)
 			missing = max(0, (self.reported_total or len(emitted_tracks)) - len(emitted_tracks))
@@ -484,7 +521,7 @@ class SpotifyPublicScrapeDialog(QDialog):
 			)
 			if not self.finish_emitted:
 				self.finish_emitted = True
-				metadata_gaps = self._metadata_gap_positions()
+				metadata_gaps = metadata_gap_positions(emitted_tracks, self.playlist_cover_url, self.reported_total)
 				self.scrape_finished.emit({
 					"id": self.playlist_id,
 					"name": self.playlist_name,
@@ -492,7 +529,7 @@ class SpotifyPublicScrapeDialog(QDialog):
 					"reported_total": self.reported_total,
 					"cover_url": self.playlist_cover_url,
 					"message": message,
-					"complete": bool(self.reported_total and len(emitted_tracks) >= self.reported_total and not metadata_gaps),
+					"complete": bool(self.reported_total and len(emitted_tracks) == self.reported_total and not metadata_gaps),
 					"metadata_gap_positions": metadata_gaps,
 				})
 

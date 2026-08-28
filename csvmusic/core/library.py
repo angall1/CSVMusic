@@ -11,8 +11,10 @@ from urllib.parse import urlparse
 from csvmusic.core.spotify_import import parse_spotify_source
 from csvmusic.core.downloader import sanitize_name
 from csvmusic.core.track_output import expected_track_path
-from csvmusic.core.youtube_music_import import parse_youtube_playlist_id
+from csvmusic.core.youtube_music_import import parse_youtube_music_source
 from csvmusic.core.apple_music_import import parse_apple_music_source_url
+from csvmusic.core.deezer_import import parse_deezer_source
+from csvmusic.core.amazon_music_import import parse_amazon_music_source
 from csvmusic.core.csv_import import load_csv, tracks_from_csv
 
 
@@ -60,6 +62,7 @@ def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], lis
 		if not text:
 			continue
 		try:
+			host = urlparse(text).netloc.lower().removeprefix("www.")
 			if "music.apple.com" in text.casefold():
 				source_type, source_id, url = parse_apple_music_source_url(text)
 				platform = "apple_music"
@@ -70,16 +73,26 @@ def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], lis
 					raise ValueError(
 						"Standard YouTube playlists are not supported. Videos outside YouTube Music often lack reliable song, artist, album, and artwork metadata, so importing them accurately can be difficult or impossible. Use the playlist's music.youtube.com link if it exists there."
 					)
-				source_id = parse_youtube_playlist_id(text)
+				source_type, source_id = parse_youtube_music_source(text)
 				platform = "youtube_music"
-				url = f"https://music.youtube.com/playlist?list={source_id}"
-				placeholder = "Unscanned YouTube Music Playlist"
+				url = f"https://music.youtube.com/browse/{source_id}" if source_type == "album" else f"https://music.youtube.com/playlist?list={source_id}"
+				placeholder = f"Unscanned YouTube Music {source_type.title()}"
+			elif host in ("deezer.com", "deezer.page.link"):
+				source_type, source_id = parse_deezer_source(text)
+				platform = "deezer"
+				url = text
+				placeholder = f"Unscanned Deezer {source_type.title()}"
+			elif "music.amazon." in host:
+				url, source_type, source_id = parse_amazon_music_source(text)
+				platform = "amazon_music"
+				placeholder = f"Unscanned Amazon Music {source_type.title()}"
 			else:
-				source = parse_spotify_source(text, expected_type="playlist")
+				source = parse_spotify_source(text)
+				source_type = source.type
 				source_id = source.id
 				platform = "spotify"
-				url = f"https://open.spotify.com/playlist/{source_id}"
-				placeholder = "Unscanned Spotify Playlist"
+				url = f"https://open.spotify.com/{source_type}/{source_id}"
+				placeholder = f"Unscanned Spotify {source_type.title()}"
 		except Exception as exc:
 			errors.append(f"{text}: {exc}")
 			continue
@@ -89,6 +102,7 @@ def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], lis
 		playlist = {
 			"id": source_id,
 			"platform": platform,
+			"source_type": source_type,
 			"url": url,
 			"name": placeholder,
 			"last_scanned_at": None,

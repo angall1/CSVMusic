@@ -10,7 +10,7 @@ from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QFontDatabase
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
 	QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-	QHBoxLayout, QHeaderView, QFrame, QInputDialog, QLabel, QLineEdit, QListWidget,
+	QGridLayout, QHBoxLayout, QHeaderView, QFrame, QInputDialog, QLabel, QLineEdit, QListWidget,
 	QListWidgetItem, QMessageBox, QPushButton, QSizePolicy, QSlider, QSplitter, QProgressBar,
 	QPlainTextEdit, QScrollArea, QTabWidget, QTextBrowser, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -30,6 +30,9 @@ from csvmusic.ui.spotify_public_scrape import SpotifyPublicScrapeDialog
 from csvmusic.ui.workers import AlternativesFetchWorker, PipelineWorker, SingleDownloadWorker
 from csvmusic.core.youtube_music_import import fetch_youtube_music_source
 from csvmusic.core.apple_music_import import fetch_apple_music_source
+from csvmusic.core.spotify_import import fetch_spotify_playlist
+from csvmusic.core.deezer_import import fetch_deezer_source
+from csvmusic.core.amazon_music_import import fetch_amazon_music_source
 from csvmusic.version import APP_VERSION
 
 
@@ -53,18 +56,27 @@ class DirectLibraryScanWorker(QThread):
 					"id": self.source_id,
 					"name": tracks[0].get("playlist") or pathlib.Path(self.url).stem,
 					"tracks": tracks, "reported_total": len(tracks), "message": "",
-					"complete": bool(tracks), "platform": "csv", "cover_url": None,
+					"complete": bool(tracks), "platform": "csv", "cover_url": None, "direct": True,
 				})
 				return
-			source = fetch_apple_music_source(self.url) if self.platform == "apple_music" else fetch_youtube_music_source(self.url)
+			if self.platform == "apple_music":
+				source = fetch_apple_music_source(self.url)
+			elif self.platform == "spotify_album":
+				source = fetch_spotify_playlist(self.url)
+			elif self.platform == "deezer":
+				source = fetch_deezer_source(self.url)
+			elif self.platform == "amazon_music":
+				source = fetch_amazon_music_source(self.url)
+			else:
+				source = fetch_youtube_music_source(self.url)
 			self.finished_scan.emit({
 				"id": source.id, "name": source.name, "tracks": source.tracks,
 				"reported_total": source.total_count, "message": source.warning or "",
-				"complete": not bool(source.warning), "platform": self.platform,
-				"cover_url": getattr(source, "cover_url", None),
+				"complete": not bool(source.warning), "platform": "spotify" if self.platform == "spotify_album" else self.platform,
+				"cover_url": getattr(source, "cover_url", None), "direct": True,
 			})
 		except Exception as exc:
-			self.finished_scan.emit({"error": str(exc), "complete": False, "platform": self.platform})
+			self.finished_scan.emit({"error": str(exc), "complete": False, "platform": self.platform, "direct": True})
 
 
 class ClickableFrame(QFrame):
@@ -76,6 +88,30 @@ class ClickableFrame(QFrame):
 
 class EditablePlaylistTitle(QLabel):
 	double_clicked = Signal()
+
+	def __init__(self, text: str = "", parent=None):
+		self._full_text = str(text)
+		super().__init__("", parent)
+		self.setMinimumWidth(0)
+		self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+		self._update_tooltip()
+		self._update_elided_text()
+
+	def setText(self, text: str) -> None:
+		self._full_text = str(text)
+		self._update_tooltip()
+		self._update_elided_text()
+
+	def _update_tooltip(self) -> None:
+		self.setToolTip(f"{self._full_text}\n\nDouble-click to rename this playlist and its output folder")
+
+	def resizeEvent(self, event) -> None:
+		super().resizeEvent(event)
+		self._update_elided_text()
+
+	def _update_elided_text(self) -> None:
+		available = max(20, self.width() - 4)
+		QLabel.setText(self, self.fontMetrics().elidedText(self._full_text, Qt.ElideRight, available))
 
 	def mouseDoubleClickEvent(self, event) -> None:
 		if event.button() == Qt.LeftButton:
@@ -185,15 +221,67 @@ def _download_icon() -> QIcon:
 	return QIcon(pixmap)
 
 
+def _clear_search_icon() -> QIcon:
+	pixmap = QPixmap(20, 20)
+	pixmap.fill(Qt.transparent)
+	painter = QPainter(pixmap)
+	painter.setRenderHint(QPainter.Antialiasing)
+	painter.setPen(QPen(QColor("#ffffff"), 2.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+	painter.drawLine(QPointF(5, 5), QPointF(15, 15))
+	painter.drawLine(QPointF(15, 5), QPointF(5, 15))
+	painter.end()
+	return QIcon(pixmap)
+
+
+def _header_button_icon(kind: str) -> QIcon:
+	pixmap = QPixmap(22, 22)
+	pixmap.fill(Qt.transparent)
+	painter = QPainter(pixmap)
+	painter.setRenderHint(QPainter.Antialiasing)
+	pen = QPen(QColor("#202020"), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+	painter.setPen(pen)
+	painter.setBrush(Qt.NoBrush)
+	if kind == "equalizer":
+		for x, knob_y in ((5, 7), (11, 14), (17, 9)):
+			painter.drawLine(QPointF(x, 3), QPointF(x, 19))
+			painter.setBrush(QColor("#e8e8e8"))
+			painter.drawRoundedRect(QRectF(x - 2.5, knob_y - 2, 5, 4), 1, 1)
+			painter.setBrush(Qt.NoBrush)
+	elif kind == "settings":
+		painter.drawEllipse(QRectF(5, 5, 12, 12))
+		painter.drawEllipse(QRectF(9, 9, 4, 4))
+		for start, end in (((11, 2), (11, 5)), ((11, 17), (11, 20)), ((2, 11), (5, 11)), ((17, 11), (20, 11))):
+			painter.drawLine(QPointF(*start), QPointF(*end))
+	elif kind == "tutorial":
+		painter.setBrush(QColor("#fffbea"))
+		painter.drawPolygon(QPolygonF([QPointF(2, 4), QPointF(10.5, 6), QPointF(10.5, 19), QPointF(2, 17)]))
+		painter.drawPolygon(QPolygonF([QPointF(11.5, 6), QPointF(20, 4), QPointF(20, 17), QPointF(11.5, 19)]))
+		painter.drawLine(QPointF(11, 6), QPointF(11, 19))
+	elif kind == "info":
+		painter.setBrush(QColor("#f4f4f4"))
+		painter.drawEllipse(QRectF(2.5, 2.5, 17, 17))
+		painter.setFont(QFont("Times New Roman", 13, QFont.Bold))
+		painter.drawText(pixmap.rect(), Qt.AlignCenter, "i")
+	else:
+		painter.setBrush(QColor("#f3f3f3"))
+		painter.drawRect(QRectF(3, 3, 13, 16))
+		painter.drawLine(QPointF(6, 7), QPointF(13, 7))
+		painter.drawLine(QPointF(18, 7), QPointF(18, 16))
+		painter.drawLine(QPointF(18, 16), QPointF(14.5, 12.5))
+		painter.drawLine(QPointF(18, 16), QPointF(21, 13))
+	painter.end()
+	return QIcon(pixmap)
+
+
 def _source_placeholder_icon(platform: str) -> QIcon:
 	pixmap = QPixmap(48, 48)
-	colors = {"spotify": "#1b8f48", "youtube_music": "#b52424", "apple_music": "#595959", "csv": "#000080"}
+	colors = {"spotify": "#1b8f48", "youtube_music": "#b52424", "apple_music": "#595959", "deezer": "#6b35b5", "amazon_music": "#1678a5", "csv": "#000080"}
 	pixmap.fill(QColor(colors.get(platform, "#000080")))
 	painter = QPainter(pixmap)
 	painter.setPen(Qt.white)
 	font = QFont("Comic Sans MS", 18, QFont.Bold)
 	painter.setFont(font)
-	label = {"spotify": "S", "youtube_music": "Y", "apple_music": "A", "csv": "C"}.get(platform, "♪")
+	label = {"spotify": "S", "youtube_music": "Y", "apple_music": "A", "deezer": "D", "amazon_music": "A", "csv": "C"}.get(platform, "♪")
 	painter.drawText(pixmap.rect(), Qt.AlignCenter, label)
 	painter.end()
 	return QIcon(pixmap)
@@ -290,28 +378,30 @@ class LibraryScanProgressDialog(QDialog):
 		super().__init__(parent)
 		self.setWindowTitle("Scanning Spotify Playlists")
 		self.setWindowModality(Qt.WindowModal)
-		self.resize(720, 260)
-		layout = QHBoxLayout(self)
-		info = QVBoxLayout()
+		self.resize(560, 350)
+		layout = QVBoxLayout(self)
+		layout.setContentsMargins(12, 10, 12, 10)
+		layout.setSpacing(7)
 		self.label = QLabel("Preparing playlist scan...")
 		self.label.setWordWrap(True)
 		self.progress = QProgressBar()
 		self.cancel_button = QPushButton("Cancel")
 		self.cancel_button.clicked.connect(self.canceled.emit)
-		info.addWidget(self.label)
-		info.addWidget(self.progress)
-		info.addStretch(1)
-		info.addWidget(self.cancel_button)
-		layout.addLayout(info, 1)
-		preview_column = QVBoxLayout()
-		preview_column.addWidget(QLabel("Live page preview"))
+		layout.addWidget(self.label)
+		layout.addWidget(self.progress)
+		layout.addSpacing(3)
+		preview_label = QLabel("Live page preview")
+		preview_label.setStyleSheet("font-weight: bold; color: #303030;")
+		layout.addWidget(preview_label)
 		self.preview = QScrollArea()
-		self.preview.setFixedSize(340, 200)
+		self.preview.setMinimumHeight(185)
+		self.preview.setMaximumHeight(210)
 		self.preview.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 		self.preview.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 		self.preview.setWidgetResizable(False)
-		preview_column.addWidget(self.preview)
-		layout.addLayout(preview_column)
+		layout.addWidget(self.preview, 1)
+		layout.addSpacing(3)
+		layout.addWidget(self.cancel_button)
 
 	def setRange(self, minimum: int, maximum: int) -> None:
 		self.progress.setRange(minimum, maximum)
@@ -728,8 +818,10 @@ class TrackAlternativesDialog(QDialog):
 		self.options = options
 		self.status.setText(error or f"Found {len(options)} alternatives. Double-click to preview in your browser.")
 		for option in options:
-			item = QListWidgetItem(f"{option.get('title', 'Unknown')} — {option.get('author', '')}")
+			source_label = "YouTube Music" if option.get("source") == "music" else "YouTube"
+			item = QListWidgetItem(f"[{source_label}]  {option.get('title', 'Unknown')} — {option.get('author', '')}")
 			item.setData(Qt.UserRole, option)
+			item.setToolTip(f"Source: {source_label}")
 			self.list.addItem(item)
 
 	def _open_item(self, item: QListWidgetItem) -> None:
@@ -747,7 +839,7 @@ class TrackAlternativesDialog(QDialog):
 		title = str(option.get("title") or "Unknown video")
 		author = str(option.get("author") or "").strip()
 		self.pending_match.setText(f"New selection: {title}" + (f" — {author}" if author else ""))
-		self.save_button.setText("Download Selected")
+		self.save_button.setText("Save Selection")
 		if self.manual.text():
 			self.manual.blockSignals(True)
 			self.manual.clear()
@@ -758,7 +850,7 @@ class TrackAlternativesDialog(QDialog):
 		if value:
 			self.list.clearSelection()
 			self.pending_match.setText(f"New selection: {value}")
-			self.save_button.setText("Download Selected")
+			self.save_button.setText("Save Selection")
 		elif not self.list.selectedItems():
 			self.pending_match.setText("New selection: No change")
 			self.save_button.setText("Save Settings")
@@ -870,6 +962,8 @@ class LibraryModeDialog(QDialog):
 		self.library = self._load_or_create()
 		self.scan_queue: list[dict] = []
 		self.scans_completed = 0
+		self.scan_results: list[dict] = []
+		self.current_scan_name = ""
 		self.scraper: SpotifyPublicScrapeDialog | None = None
 		self.direct_worker: DirectLibraryScanWorker | None = None
 		self.download_worker: PipelineWorker | None = None
@@ -958,6 +1052,54 @@ class LibraryModeDialog(QDialog):
 				text-align: center; min-height: 18px;
 			}
 			QProgressBar::chunk { background: #000080; border-right: 2px solid #c0c0c0; }
+			QScrollBar:vertical {
+				background: #a8a8a8; width: 18px; margin: 18px 0 18px 0;
+				border-top: 2px solid #505050; border-left: 2px solid #505050;
+				border-right: 2px solid #ffffff; border-bottom: 2px solid #ffffff;
+			}
+			QScrollBar::handle:vertical {
+				min-height: 30px;
+				background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #f4f4f4, stop:0.18 #d8d8d8, stop:0.72 #b8b8b8, stop:1 #8c8c8c);
+				border-top: 2px solid #ffffff; border-left: 2px solid #ffffff;
+				border-right: 2px solid #404040; border-bottom: 2px solid #404040;
+			}
+			QScrollBar::handle:vertical:hover { background: #dcdcdc; }
+			QScrollBar::handle:vertical:pressed {
+				background: #a8a8a8; border-top: 2px solid #404040; border-left: 2px solid #404040;
+				border-right: 2px solid #ffffff; border-bottom: 2px solid #ffffff;
+			}
+			QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+				height: 18px; background: #c0c0c0;
+				border-top: 2px solid #ffffff; border-left: 2px solid #ffffff;
+				border-right: 2px solid #404040; border-bottom: 2px solid #404040;
+			}
+			QScrollBar::sub-line:vertical { subcontrol-position: top; subcontrol-origin: margin; }
+			QScrollBar::add-line:vertical { subcontrol-position: bottom; subcontrol-origin: margin; }
+			QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: #a8a8a8; }
+			QScrollBar:horizontal {
+				background: #a8a8a8; height: 18px; margin: 0 18px 0 18px;
+				border-top: 2px solid #505050; border-left: 2px solid #505050;
+				border-right: 2px solid #ffffff; border-bottom: 2px solid #ffffff;
+			}
+			QScrollBar::handle:horizontal {
+				min-width: 30px;
+				background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f4f4f4, stop:0.18 #d8d8d8, stop:0.72 #b8b8b8, stop:1 #8c8c8c);
+				border-top: 2px solid #ffffff; border-left: 2px solid #ffffff;
+				border-right: 2px solid #404040; border-bottom: 2px solid #404040;
+			}
+			QScrollBar::handle:horizontal:hover { background: #dcdcdc; }
+			QScrollBar::handle:horizontal:pressed {
+				background: #a8a8a8; border-top: 2px solid #404040; border-left: 2px solid #404040;
+				border-right: 2px solid #ffffff; border-bottom: 2px solid #ffffff;
+			}
+			QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+				width: 18px; background: #c0c0c0;
+				border-top: 2px solid #ffffff; border-left: 2px solid #ffffff;
+				border-right: 2px solid #404040; border-bottom: 2px solid #404040;
+			}
+			QScrollBar::sub-line:horizontal { subcontrol-position: left; subcontrol-origin: margin; }
+			QScrollBar::add-line:horizontal { subcontrol-position: right; subcontrol-origin: margin; }
+			QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: #a8a8a8; }
 			QMenu { background: #c0c0c0; border: 2px outset #ffffff; }
 			QMenu::item:selected { background: #000080; color: #ffffff; }
 		""")
@@ -976,14 +1118,16 @@ class LibraryModeDialog(QDialog):
 		title.setStyleSheet("color: white;")
 		header_layout.addWidget(title)
 		header_layout.addStretch(1)
-		for label, callback in (
-			("Equalizer", self._open_equalizer),
-			("Settings", self._open_settings),
-			("Tutorial", self._open_tutorial),
-			("Info", self._open_info),
-			("Legacy Mode", self._switch_to_legacy_mode),
+		for label, icon_kind, callback in (
+			("Equalizer", "equalizer", self._open_equalizer),
+			("Settings", "settings", self._open_settings),
+			("Tutorial", "tutorial", self._open_tutorial),
+			("Info", "info", self._open_info),
+			("Legacy Mode", "legacy", self._switch_to_legacy_mode),
 		):
 			button = QPushButton(label)
+			button.setIcon(_header_button_icon(icon_kind))
+			button.setIconSize(QSize(22, 22))
 			button.setFlat(True)
 			button.setStyleSheet("QPushButton { color: #101010; min-width: 70px; }")
 			if callable(callback):
@@ -1003,7 +1147,7 @@ class LibraryModeDialog(QDialog):
 		add_title = QLabel("Add to library")
 		add_title.setFont(header_font)
 		add_layout.addWidget(add_title)
-		url_description = QLabel("Public playlists: Spotify, YouTube Music, and Apple Music")
+		url_description = QLabel("Public playlists and albums: Spotify, YouTube Music, Apple Music, Deezer, and Amazon Music")
 		url_description.setStyleSheet("color: #505050; font-size: 11px;")
 		add_layout.addWidget(url_description)
 		url_row = QHBoxLayout()
@@ -1125,8 +1269,8 @@ class LibraryModeDialog(QDialog):
 		self.download_log_button.clicked.connect(self._show_download_log)
 		download_buttons.addWidget(self.download_button)
 		download_buttons.addWidget(self.stop_download_button)
-		download_buttons.addWidget(self.download_log_button)
 		download_buttons.addStretch(1)
+		download_buttons.addWidget(self.download_log_button)
 		download_layout.addLayout(download_buttons)
 		download_layout.addStretch(1)
 		upper.addWidget(download_panel, 5)
@@ -1171,15 +1315,39 @@ class LibraryModeDialog(QDialog):
 		right.setObjectName("bottomPanel")
 		right_layout = QVBoxLayout(right)
 		right_layout.setContentsMargins(8, 7, 8, 8)
-		right_actions = QHBoxLayout()
+		right_actions = QGridLayout()
+		right_actions.setContentsMargins(0, 0, 0, 0)
+		right_actions.setHorizontalSpacing(8)
+		right_actions.setColumnStretch(0, 1)
+		right_actions.setColumnStretch(2, 1)
+		right_actions.setColumnMinimumWidth(0, 150)
+		right_actions.setColumnMinimumWidth(2, 150)
 		songs_heading = QLabel("Songs")
 		songs_heading.setFont(header_font)
-		right_actions.addWidget(songs_heading)
-		right_actions.addStretch(1)
+		right_actions.addWidget(songs_heading, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
+		search_controls = QWidget()
+		search_layout = QHBoxLayout(search_controls)
+		search_layout.setContentsMargins(0, 0, 0, 0)
+		search_layout.setSpacing(5)
+		self.song_search = QLineEdit()
+		self.song_search.setPlaceholderText("Search songs...")
+		self.song_search.setFixedWidth(280)
+		self.song_search.textChanged.connect(self._show_tracks)
+		search_layout.addWidget(self.song_search)
+		clear_search = QToolButton()
+		clear_search.setIcon(_clear_search_icon())
+		clear_search.setIconSize(QSize(20, 20))
+		clear_search.setFixedSize(30, 28)
+		clear_search.setStyleSheet("QToolButton { background: #c00000; }")
+		clear_search.setToolTip("Clear song search")
+		clear_search.setAccessibleName("Clear song search")
+		clear_search.clicked.connect(self.song_search.clear)
+		search_layout.addWidget(clear_search)
+		right_actions.addWidget(search_controls, 0, 1, Qt.AlignCenter)
 		self.load_more_tracks_button = QPushButton("Load More Songs")
 		self.load_more_tracks_button.setVisible(False)
 		self.load_more_tracks_button.clicked.connect(self._load_more_tracks)
-		right_actions.addWidget(self.load_more_tracks_button)
+		right_actions.addWidget(self.load_more_tracks_button, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
 		right_layout.addLayout(right_actions)
 		self.track_tree = QTreeWidget()
 		self.track_tree.setHeaderLabels(["Songs"])
@@ -1463,6 +1631,8 @@ class LibraryModeDialog(QDialog):
 		self.scans_completed = 0
 		self.scan_cancelled = False
 		self.scan_warnings = []
+		self.scan_results = []
+		self.current_scan_name = ""
 		log(f"library scan started playlists={len(playlists)}")
 		self.scan_dialog = LibraryScanProgressDialog(self)
 		self.scan_dialog.canceled.connect(self._cancel_scan)
@@ -1481,17 +1651,30 @@ class LibraryModeDialog(QDialog):
 				self.scan_dialog.deleteLater()
 				self.scan_dialog = None
 			self._refresh()
-			if self.scan_warnings and not self.scan_cancelled:
-				QMessageBox.warning(
-					self,
-					"Incomplete Playlist Scan",
-					"One or more playlists did not reach Spotify's reported total:\n\n" + "\n".join(self.scan_warnings),
-				)
+			if not self.scan_cancelled and self.scan_results:
+				lines = []
+				for result in self.scan_results:
+					if result.get("error"):
+						lines.append(f"✗ {result['name']}\n  Failed: {result['error']}")
+						continue
+					diff = result.get("diff") or {}
+					captured = result.get("captured", 0)
+					reported = result.get("reported") or captured
+					lines.append(
+						f"{'✓' if not result.get('warning') else '⚠'} {result['name']}\n"
+						f"  Tracks: {captured}/{reported}  •  Added: {diff.get('added', 0)}  •  "
+						f"Removed: {diff.get('removed', 0)}  •  Unchanged: {diff.get('unchanged', 0)}\n"
+						f"  Downloaded: {result.get('downloaded', 0)}  •  Missing: {result.get('missing', 0)}"
+						+ (f"\n  Warning: {result['warning']}" if result.get("warning") else "")
+					)
+				QMessageBox.information(self, "Rescan Summary", "\n\n".join(lines))
 			return
 		playlist = self.scan_queue.pop(0)
+		self.current_scan_name = str(playlist.get("name") or playlist.get("id") or "Playlist")
 		self.status.setText(f"Scanning {playlist.get('name') or playlist['id']} ({len(self.scan_queue)} remaining)...")
-		if playlist.get("platform") in ("youtube_music", "apple_music", "csv"):
-			platform = str(playlist["platform"])
+		is_spotify_album = playlist.get("platform") == "spotify" and playlist.get("source_type") == "album"
+		if playlist.get("platform") in ("youtube_music", "apple_music", "deezer", "amazon_music", "csv") or is_spotify_album:
+			platform = "spotify_album" if is_spotify_album else str(playlist["platform"])
 			self.direct_worker = DirectLibraryScanWorker(
 				playlist.get("csv_path") or playlist["url"], platform, self, source_id=str(playlist.get("id") or "")
 			)
@@ -1501,7 +1684,7 @@ class LibraryModeDialog(QDialog):
 				self.scan_dialog.setRange(0, 0)
 				self.scan_dialog.setLabelText(
 					f"Playlist {self.scans_completed + 1}: {playlist.get('name') or playlist['id']}\n"
-					f"Loading {'CSV' if platform == 'csv' else 'Apple Music' if platform == 'apple_music' else 'YouTube Music'} metadata..."
+					f"Loading {'CSV' if platform == 'csv' else 'Spotify album' if platform == 'spotify_album' else 'Apple Music' if platform == 'apple_music' else 'Deezer' if platform == 'deezer' else 'Amazon Music' if platform == 'amazon_music' else 'YouTube Music'} metadata..."
 				)
 			return
 		if self.scraper is None:
@@ -1554,15 +1737,17 @@ class LibraryModeDialog(QDialog):
 		data = dict(result or {})
 		if data.get("error"):
 			self.scan_warnings.append(str(data["error"]))
+			self.scan_results.append({"name": self.current_scan_name or "Playlist", "error": str(data["error"])})
 		playlist_id = str(data.get("id") or "")
 		if not self.scan_cancelled and playlist_id and data.get("tracks"):
 			message = str(data.get("message") or "")
 			warning = None if data.get("complete") else message
 			if warning:
 				self.scan_warnings.append(f"{data.get('name') or playlist_id}: {warning}")
-			merge_playlist_scan(
+			target_id = f"{data.get('platform')}:{playlist_id}" if data.get("platform") else playlist_id
+			merged = merge_playlist_scan(
 				self.library,
-				f"{data.get('platform')}:{playlist_id}" if data.get("platform") in ("youtube_music", "apple_music", "csv") else playlist_id,
+				target_id,
 				str(data.get("name") or "Spotify Playlist"),
 				list(data.get("tracks") or []),
 				reported_total=data.get("reported_total"),
@@ -1570,8 +1755,23 @@ class LibraryModeDialog(QDialog):
 				cover_url=data.get("cover_url"),
 			)
 			self._save()
+			playlist_key = f"{merged.get('platform') or 'spotify'}:{merged.get('id')}"
+			counts = library_status(
+				self.library,
+				self.library.get("output_dir") or "",
+				self.format_combo.currentText(),
+			).get("playlists", {}).get(playlist_key, {})
+			self.scan_results.append({
+				"name": str(merged.get("name") or data.get("name") or playlist_id),
+				"captured": len(merged.get("tracks") or []),
+				"reported": data.get("reported_total"),
+				"diff": dict(merged.get("last_diff") or {}),
+				"downloaded": int(counts.get("downloaded", 0) or 0),
+				"missing": int(counts.get("missing", 0) or 0),
+				"warning": warning,
+			})
 			log(f"library playlist scan merged id={playlist_id} tracks={len(data.get('tracks') or [])} complete={bool(data.get('complete'))}")
-		is_direct_result = data.get("platform") in ("youtube_music", "apple_music", "csv")
+		is_direct_result = bool(data.get("direct"))
 		if self.scraper and not is_direct_result:
 			if self.scan_dialog:
 				self.scan_dialog.detach_browser(self.scraper.browser, self.scraper)
@@ -1753,12 +1953,18 @@ class LibraryModeDialog(QDialog):
 			item.setToolTip(0, f"Last scanned: {last_scan}")
 			error_count = self._playlist_error_count(playlist)
 			missing_count = int(counts.get("missing", 0) or 0)
+			redownload_count = int(counts.get("redownload", 0) or 0)
 			unscanned = not bool(playlist.get("last_scanned_at"))
-			item.setSizeHint(0, QSize(0, 78 if unscanned else 68))
+			incomplete_scan = bool(playlist.get("scan_warning")) or bool(total and track_count < total)
+			item.setSizeHint(0, QSize(0, 78 if unscanned or incomplete_scan or redownload_count else 68))
 			if unscanned:
 				row_color = QColor("#e08080")
+			elif incomplete_scan:
+				row_color = QColor("#f0cf82")
 			elif error_count:
 				row_color = QColor("#dda0a0")
+			elif redownload_count:
+				row_color = QColor("#fff0a8")
 			elif missing_count:
 				row_color = QColor("#e7bcbc")
 			else:
@@ -1782,9 +1988,8 @@ class LibraryModeDialog(QDialog):
 			art.setStyleSheet("background: #606060; border: 1px inset #404040;")
 			card_layout.addWidget(art)
 			name_label = EditablePlaylistTitle(str(name))
-			name_label.setWordWrap(True)
+			name_label.setWordWrap(False)
 			name_label.setFont(QFont("Comic Sans MS", 10, QFont.Bold))
-			name_label.setToolTip("Double-click to rename this playlist and its output folder")
 			name_label.double_clicked.connect(lambda playlist_id=key: self._rename_playlist(str(playlist_id)))
 			card_layout.addWidget(name_label, 1)
 			status_layout = QVBoxLayout()
@@ -1794,10 +1999,18 @@ class LibraryModeDialog(QDialog):
 			if unscanned:
 				tracks_label.setStyleSheet("color: #700000; font-weight: bold; background: #ffd0a0; border: 1px solid #904000; padding: 3px;")
 			status_labels = [tracks_label]
+			scan_label = QLabel("INCOMPLETE SCAN") if incomplete_scan else None
 			missing_label = QLabel(f"{missing_count} missing") if missing_count else None
+			redownload_label = QLabel(f"{redownload_count} queued") if redownload_count else None
 			error_label = QPushButton(f"{error_count} errors") if error_count else None
+			if scan_label:
+				scan_label.setStyleSheet("color: #704000; font-weight: bold;")
+				scan_label.setToolTip(str(playlist.get("scan_warning") or "The captured track count is below Spotify's reported total."))
+				status_labels.append(scan_label)
 			if missing_label:
 				status_labels.append(missing_label)
+			if redownload_label:
+				status_labels.append(redownload_label)
 			if error_label:
 				status_labels.append(error_label)
 			for status_label in status_labels:
@@ -1815,11 +2028,13 @@ class LibraryModeDialog(QDialog):
 			playlist_status = QLabel()
 			playlist_status.setFixedSize(26, 26)
 			playlist_status.setAlignment(Qt.AlignCenter)
-			playlist_status.setPixmap(_song_status_icon("warning" if unscanned or error_count or missing_count else "downloaded").pixmap(24, 24))
+			playlist_status.setPixmap(_song_status_icon("warning" if unscanned or incomplete_scan or error_count or missing_count or redownload_count else "downloaded").pixmap(24, 24))
 			playlist_status.setToolTip(
 				"This playlist has not been scanned. Press the green refresh button." if unscanned
+				else str(playlist.get("scan_warning") or "The playlist scan was incomplete. Rescan it.") if incomplete_scan
 				else "One or more songs have download errors" if error_count
 				else f"{missing_count} song(s) have no downloaded file" if missing_count
+				else f"{redownload_count} song replacement(s) are queued" if redownload_count
 				else "Every song has a downloaded file"
 			)
 			if not unscanned:
@@ -1862,7 +2077,8 @@ class LibraryModeDialog(QDialog):
 
 	def _show_tracks(self) -> None:
 		ids = self._selected_ids()
-		selection_key = frozenset(ids)
+		query = self.song_search.text().casefold().strip() if hasattr(self, "song_search") else ""
+		selection_key = (frozenset(ids), query)
 		if selection_key != self.shown_playlist_ids:
 			self.shown_playlist_ids = selection_key
 			self.track_display_limit = self.track_display_batch
@@ -1880,6 +2096,13 @@ class LibraryModeDialog(QDialog):
 			if not playlist:
 				continue
 			indexed_tracks = list(enumerate(playlist.get("tracks", [])))
+			if query:
+				indexed_tracks = [
+					entry for entry in indexed_tracks
+					if query in " ".join(str(entry[1].get(field) or "") for field in (
+						"title", "artists", "album", "downloaded_video_title", "downloaded_video_publisher",
+					)).casefold()
+				]
 			total_tracks += len(indexed_tracks)
 			def issue_order(entry: tuple[int, dict]) -> int:
 				_original_index, source_track = entry
@@ -1932,6 +2155,8 @@ class LibraryModeDialog(QDialog):
 					shade = "#fff0a8"
 				elif state == "Error":
 					shade = "#dda0a0"
+				elif track.get("force_redownload"):
+					shade = "#fff0a8"
 				elif not file_exists:
 					shade = "#e7bcbc"
 				else:
@@ -1984,12 +2209,17 @@ class LibraryModeDialog(QDialog):
 				text_column.addWidget(album_label)
 				text_column.addWidget(download)
 				card_layout.addLayout(text_column, 1)
-				icon_kind = "downloaded" if file_exists and not has_error else "warning"
+				icon_kind = "downloaded" if file_exists and not has_error and not track.get("force_redownload") else "warning"
 				status_icon = QLabel()
 				status_icon.setFixedSize(26, 26)
 				status_icon.setAlignment(Qt.AlignCenter)
 				status_icon.setPixmap(_song_status_icon(icon_kind).pixmap(24, 24))
-				status_icon.setToolTip("Last download failed" if has_error else "Audio file found" if icon_kind == "downloaded" else "Audio file is missing")
+				status_icon.setToolTip(
+					"Last download failed" if has_error
+					else "Replacement queued for the next Download run" if track.get("force_redownload")
+					else "Audio file found" if icon_kind == "downloaded"
+					else "Audio file is missing"
+				)
 				card_layout.addWidget(status_icon)
 				if has_error:
 					state_label = QPushButton("Error")
@@ -2071,6 +2301,7 @@ class LibraryModeDialog(QDialog):
 		dialog = TrackAlternativesDialog(track, self)
 
 		def _selected(video_id: str, label: str, volume_gain: int) -> None:
+			scroll_position = self.track_tree.verticalScrollBar().value()
 			old_video_id = str(track.get("preferred_video_id") or "")
 			old_volume_gain = int(track.get("audio_volume_gain", 0) or 0)
 			track["preferred_video_id"] = video_id or None
@@ -2080,8 +2311,12 @@ class LibraryModeDialog(QDialog):
 				track["force_redownload"] = True
 			self._save()
 			self._refresh()
-			if video_id and old_video_id != video_id:
-				self._start_alternative_download(str(playlist_id), index, video_id, label)
+			QTimer.singleShot(0, lambda value=scroll_position: self.track_tree.verticalScrollBar().setValue(value))
+			if old_video_id != video_id or old_volume_gain != track["audio_volume_gain"]:
+				self.status.setText(
+					f"Saved a replacement for '{track.get('title') or 'song'}'. "
+					"It is queued for the next Download run."
+				)
 
 		dialog.selected.connect(_selected)
 		dialog.exec()

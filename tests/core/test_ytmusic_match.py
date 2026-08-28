@@ -67,3 +67,71 @@ def test_alternative_ranking_can_include_duration_mismatch():
 
 	assert ytmusic_match._rank_candidates(yt, track, enforce_duration=True) == []
 	assert len(ytmusic_match._rank_candidates(yt, track, enforce_duration=False)) == 1
+
+
+def test_confident_youtube_music_song_is_preferred_over_higher_scoring_video(monkeypatch):
+	yt = FakeYTMusic({
+		"songs": [{"videoId": "music", "title": "Song", "artists": [{"name": "Artist"}], "duration": "3:00"}],
+		"videos": [{"videoId": "video", "title": "Song", "author": "Artist Official", "duration": "3:00"}],
+	})
+	track = {"title": "Song", "artists": "Artist", "duration_ms": 180000}
+
+	def fake_score(_track, candidate):
+		return 0.75 if candidate["source"] == "music" else 0.95
+
+	monkeypatch.setattr(ytmusic_match, "_score", fake_score)
+	options = ytmusic_match._rank_candidates(yt, track)
+	assert [option["videoId"] for option in options[:2]] == ["music", "video"]
+
+
+def test_unconfident_music_result_does_not_displace_confident_video(monkeypatch):
+	yt = FakeYTMusic({
+		"songs": [{"videoId": "music", "title": "Wrong", "artists": [{"name": "Other"}], "duration": "3:00"}],
+		"videos": [{"videoId": "video", "title": "Song", "author": "Artist", "duration": "3:00"}],
+	})
+	track = {"title": "Song", "artists": "Artist", "duration_ms": 180000}
+
+	def fake_score(_track, candidate):
+		return 0.4 if candidate["source"] == "music" else 0.8
+
+	monkeypatch.setattr(ytmusic_match, "_score", fake_score)
+	options = ytmusic_match._rank_candidates(yt, track)
+	assert options[0]["videoId"] == "video"
+
+
+def test_manual_alternatives_group_youtube_music_first(monkeypatch):
+	options = [
+		{"videoId": "video", "source": "videos", "score": 0.95},
+		{"videoId": "music", "source": "music", "score": 0.35},
+	]
+	monkeypatch.setattr(ytmusic_match, "YTMusic", lambda: object())
+	monkeypatch.setattr(ytmusic_match, "_rank_candidates", lambda *_args, **_kwargs: options)
+	results = ytmusic_match.more_candidates({"title": "Song"})
+	assert [result["videoId"] for result in results] == ["music", "video"]
+
+
+def test_live_and_acoustic_versions_are_strongly_penalized_unless_requested():
+	track = {"title": "The Trooper", "artists": "Iron Maiden", "duration_ms": 240000}
+	studio = {"title": "The Trooper", "author": "Iron Maiden", "duration_seconds": 240}
+	live = {"title": "The Trooper (Live at Rock in Rio)", "author": "Iron Maiden", "duration_seconds": 240}
+	acoustic = {"title": "The Trooper (Acoustic)", "author": "Iron Maiden", "duration_seconds": 240}
+	assert ytmusic_match._score(track, studio) > ytmusic_match._score(track, live)
+	assert ytmusic_match._score(track, studio) > ytmusic_match._score(track, acoustic)
+	requested = {"title": "The Trooper Live", "artists": "Iron Maiden", "duration_ms": 240000}
+	assert ytmusic_match._score(requested, live) > ytmusic_match._score(requested, studio)
+
+
+def test_requested_extended_version_beats_single_versions():
+	track = {"title": "Hocus Pocus - Extended Version", "artists": "Focus", "duration_ms": 420000}
+	extended = {"title": "Hocus Pocus (Extended Version)", "author": "Focus", "duration_seconds": 420}
+	single = {"title": "Hocus Pocus (U.S. Single Version)", "author": "Focus", "duration_seconds": 420}
+	original_single = {"title": "Hocus Pocus (Original Single Version)", "author": "Focus", "duration_seconds": 420}
+	assert ytmusic_match._score(track, extended) > ytmusic_match._score(track, single)
+	assert ytmusic_match._score(track, extended) > ytmusic_match._score(track, original_single)
+
+
+def test_requested_single_version_does_not_choose_extended_version():
+	track = {"title": "Hocus Pocus - U.S. Single Version", "artists": "Focus", "duration_ms": 240000}
+	single = {"title": "Hocus Pocus (U.S. Single Version)", "author": "Focus", "duration_seconds": 240}
+	extended = {"title": "Hocus Pocus (Extended Version)", "author": "Focus", "duration_seconds": 240}
+	assert ytmusic_match._score(track, single) > ytmusic_match._score(track, extended)

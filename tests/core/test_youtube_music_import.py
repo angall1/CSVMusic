@@ -1,10 +1,14 @@
 import csvmusic.core.youtube_music_import as youtube_music_import
-from csvmusic.core.youtube_music_import import fetch_youtube_music_source, parse_youtube_playlist_id, _tracks_from_playlist
+from csvmusic.core.youtube_music_import import fetch_youtube_music_source, parse_youtube_music_source, parse_youtube_playlist_id, _tracks_from_playlist
 
 
 def test_parse_youtube_music_playlist_id():
 	assert parse_youtube_playlist_id("https://music.youtube.com/playlist?list=PLabc123") == "PLabc123"
 	assert parse_youtube_playlist_id("https://www.youtube.com/watch?v=abc&list=VLPLabc123") == "PLabc123"
+
+
+def test_parse_youtube_music_album_browse_url():
+	assert parse_youtube_music_source("https://music.youtube.com/browse/MPREb_example123") == ("album", "MPREb_example123")
 
 
 def test_tracks_from_youtube_music_playlist():

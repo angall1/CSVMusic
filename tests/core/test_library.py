@@ -10,6 +10,10 @@ from csvmusic.core.track_output import expected_track_path
 URL = "https://open.spotify.com/playlist/611N3KSs459UD5IVPH1ES4"
 YOUTUBE_URL = "https://music.youtube.com/playlist?list=PLX9UXSa6UdR8"
 APPLE_URL = "https://music.apple.com/us/playlist/disco-essentials/pl.88cf86bb7a8f4b5d9feb7e393e5bbc73"
+SPOTIFY_ALBUM_URL = "https://open.spotify.com/album/6IV7472Hni7A1ENilCManS"
+YOUTUBE_MUSIC_ALBUM_URL = "https://music.youtube.com/browse/MPREb_exampleAlbum123"
+DEEZER_ALBUM_URL = "https://www.deezer.com/us/album/456"
+AMAZON_ALBUM_URL = "https://music.amazon.com/albums/B012345678"
 
 
 def _track(track_id="one", title="Song"):
@@ -39,6 +43,33 @@ def test_library_round_trip_and_add_urls(tmp_path):
 	path = tmp_path / "library.json"
 	save_library(path, library)
 	assert load_library(path)["playlists"][0]["id"] == "611N3KSs459UD5IVPH1ES4"
+
+
+def test_spotify_album_is_added_as_album_source():
+	library = new_library()
+	added, errors = add_playlist_urls(library, [SPOTIFY_ALBUM_URL])
+	assert not errors
+	assert added[0]["platform"] == "spotify"
+	assert added[0]["source_type"] == "album"
+	assert added[0]["url"] == SPOTIFY_ALBUM_URL
+
+
+def test_youtube_music_album_is_added_as_album_source():
+	library = new_library()
+	added, errors = add_playlist_urls(library, [YOUTUBE_MUSIC_ALBUM_URL])
+	assert not errors
+	assert added[0]["platform"] == "youtube_music"
+	assert added[0]["source_type"] == "album"
+
+
+def test_deezer_and_amazon_albums_are_added_as_album_sources():
+	library = new_library()
+	added, errors = add_playlist_urls(library, [DEEZER_ALBUM_URL, AMAZON_ALBUM_URL])
+	assert not errors
+	assert [(item["platform"], item["source_type"]) for item in added] == [
+		("deezer", "album"),
+		("amazon_music", "album"),
+	]
 
 
 def test_csv_is_imported_directly_and_refreshes_same_library_playlist(tmp_path):

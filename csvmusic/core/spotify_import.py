@@ -377,7 +377,12 @@ def _cover_url(data: dict[str, Any]) -> str | None:
 		url = _clean_text(source.get("url"))
 		if not url:
 			continue
-		size = _safe_int(source.get("width")) or _safe_int(source.get("height")) or 0
+		size = max(
+			_safe_int(source.get("width")) or 0,
+			_safe_int(source.get("height")) or 0,
+			_safe_int(source.get("maxWidth")) or 0,
+			_safe_int(source.get("maxHeight")) or 0,
+		)
 		if size > best_size:
 			best = url
 			best_size = size
@@ -407,9 +412,11 @@ def _entity_cover_url(entity: dict[str, Any]) -> str | None:
 def _embed_cover_url(entity: dict[str, Any]) -> str | None:
 	cover = entity.get("coverArt") if isinstance(entity, dict) else None
 	sources = cover.get("sources") if isinstance(cover, dict) else None
-	if not isinstance(sources, list):
-		return None
-	return _best_source_url(sources)
+	if isinstance(sources, list):
+		return _best_source_url(sources)
+	visual = entity.get("visualIdentity") if isinstance(entity, dict) else None
+	images = visual.get("image") if isinstance(visual, dict) else None
+	return _best_source_url(images) if isinstance(images, list) else None
 
 
 def _best_source_url(sources: list[Any]) -> str | None:
@@ -421,7 +428,12 @@ def _best_source_url(sources: list[Any]) -> str | None:
 		url = _clean_text(source.get("url"))
 		if not url:
 			continue
-		size = _safe_int(source.get("width")) or _safe_int(source.get("height")) or 0
+		size = max(
+			_safe_int(source.get("width")) or 0,
+			_safe_int(source.get("height")) or 0,
+			_safe_int(source.get("maxWidth")) or 0,
+			_safe_int(source.get("maxHeight")) or 0,
+		)
 		if size > best_size:
 			best = url
 			best_size = size

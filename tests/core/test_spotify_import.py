@@ -252,6 +252,30 @@ def test_parse_spotify_embed_album_page_tracks():
 	assert album.tracks[0]["cover_url"] == "cover.jpg"
 
 
+def test_parse_spotify_embed_album_visual_identity_artwork():
+	entity = {
+		"type": "album",
+		"id": "584Igcr5ixQUeE4rHIPN9c",
+		"title": "Portal 2",
+		"visualIdentity": {
+			"image": [
+				{"url": "small.jpg", "maxWidth": 64, "maxHeight": 64},
+				{"url": "large.jpg", "maxWidth": 640, "maxHeight": 640},
+			],
+		},
+		"trackList": [{
+			"uri": "spotify:track:5OdZJPQCR624D4yq7UVUNx",
+			"title": "Science Is Fun",
+			"subtitle": "Aperture Science Psychoacoustic Laboratories",
+			"duration": 156066,
+			"entityType": "track",
+		}],
+	}
+	album = parse_spotify_embed_page(_embed_page(entity), SpotifySource("album", "584Igcr5ixQUeE4rHIPN9c"))
+	assert album.cover_url == "large.jpg"
+	assert album.tracks[0]["cover_url"] == "large.jpg"
+
+
 def test_parse_spotify_embed_playlist_warns_when_exactly_100_tracks():
 	entity = {
 		"type": "playlist",

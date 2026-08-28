@@ -1,20 +1,32 @@
-from csvmusic.ui.spotify_public_scrape import jittered_scroll_delay_ms, metadata_gap_positions, normalized_capture
+from csvmusic.ui.spotify_public_scrape import jittered_scroll_delay_ms, metadata_gap_positions, normalized_capture, ordered_playlist_tracks
 
 
 def test_normalized_capture_maps_public_row():
 	assert normalized_capture({
 		"id": "track-id",
+		"position": 7,
 		"title": " Song ",
 		"artists": ["Artist One", "Artist Two"],
 		"album": "Album",
 		"cover_url": "https://i.scdn.co/image/cover",
 	}) == {
 		"id": "track-id",
+		"position": 7,
 		"title": "Song",
 		"artists": "Artist One, Artist Two",
 		"album": "Album",
 		"cover_url": "https://i.scdn.co/image/cover",
 	}
+
+
+def test_playlist_position_filter_excludes_recommendations_and_orders_rows():
+	tracks = [
+		{"id": "recommended", "position": None},
+		{"id": "second", "position": 2},
+		{"id": "outside", "position": 4},
+		{"id": "first", "position": 1},
+	]
+	assert [track["id"] for track in ordered_playlist_tracks(tracks, 3)] == ["first", "second"]
 
 
 def test_normalized_capture_rejects_missing_identity():
