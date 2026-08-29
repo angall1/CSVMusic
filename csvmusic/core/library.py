@@ -69,14 +69,14 @@ def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], lis
 				placeholder = f"Unscanned Apple Music {source_type.title()}"
 			elif "youtube.com" in text.casefold() or "youtu.be" in text.casefold():
 				host = urlparse(text).netloc.lower().split(":", 1)[0]
-				if host != "music.youtube.com":
-					raise ValueError(
-						"Standard YouTube playlists are not supported. Videos outside YouTube Music often lack reliable song, artist, album, and artwork metadata, so importing them accurately can be difficult or impossible. Use the playlist's music.youtube.com link if it exists there."
-					)
 				source_type, source_id = parse_youtube_music_source(text)
-				platform = "youtube_music"
-				url = f"https://music.youtube.com/browse/{source_id}" if source_type == "album" else f"https://music.youtube.com/playlist?list={source_id}"
-				placeholder = f"Unscanned YouTube Music {source_type.title()}"
+				is_youtube_music = host == "music.youtube.com"
+				platform = "youtube_music" if is_youtube_music else "youtube"
+				url = (
+					f"https://music.youtube.com/browse/{source_id}" if source_type == "album"
+					else f"https://{'music.' if is_youtube_music else 'www.'}youtube.com/playlist?list={source_id}"
+				)
+				placeholder = f"Unscanned {'YouTube Music' if is_youtube_music else 'YouTube'} {source_type.title()}"
 			elif host in ("deezer.com", "deezer.page.link"):
 				source_type, source_id = parse_deezer_source(text)
 				platform = "deezer"
@@ -224,13 +224,10 @@ def edit_library_track(library: dict, playlist_id: str, track_index: int, title:
 	if not clean_title:
 		raise ValueError("Song title cannot be blank.")
 	track = tracks[track_index]
-	changed = clean_title != str(track.get("title") or "").strip() or clean_album != str(track.get("album") or "").strip()
 	track["title"] = clean_title
 	track["album"] = clean_album
 	track["custom_title"] = True
 	track["custom_album"] = True
-	if changed and track.get("last_downloaded_at"):
-		track["force_redownload"] = True
 	return track
 
 
@@ -247,12 +244,24 @@ def merge_playlist_scan(
 	playlist = playlist_by_id(library, playlist_id)
 	if playlist is None:
 		raise KeyError(f"Playlist {playlist_id} is not in this library.")
-	previous = {_track_key(track): track for track in playlist.get("tracks", [])}
+	previous: dict[str, dict] = {}
+	previous_occurrences: dict[str, int] = {}
+	for old_track in playlist.get("tracks", []):
+		base_key = _track_base_key(old_track)
+		occurrence = int(old_track.get("playlist_occurrence") or (previous_occurrences.get(base_key, 0) + 1))
+		previous_occurrences[base_key] = max(previous_occurrences.get(base_key, 0), occurrence)
+		old_track["playlist_occurrence"] = occurrence
+		previous[_track_key(old_track)] = old_track
 	effective_name = str(playlist.get("name") or name or "Spotify Playlist").strip() if playlist.get("custom_name") else str(name or playlist.get("name") or "Spotify Playlist").strip()
 	merged: list[dict] = []
 	seen: set[str] = set()
+	new_occurrences: dict[str, int] = {}
 	for position, raw in enumerate(tracks, start=1):
 		track = _normalized_track(raw, effective_name, position)
+		base_key = _track_base_key(track)
+		occurrence = int(raw.get("playlist_occurrence") or (new_occurrences.get(base_key, 0) + 1))
+		new_occurrences[base_key] = max(new_occurrences.get(base_key, 0), occurrence)
+		track["playlist_occurrence"] = occurrence
 		key = _track_key(track)
 		if key in seen:
 			continue
@@ -275,6 +284,8 @@ def merge_playlist_scan(
 		track["downloaded_video_id"] = old.get("downloaded_video_id") or None
 		track["downloaded_video_title"] = old.get("downloaded_video_title") or None
 		track["downloaded_video_publisher"] = old.get("downloaded_video_publisher") or None
+		track["low_confidence_review"] = bool(old.get("low_confidence_review", False))
+		track["download_confidence"] = old.get("download_confidence")
 		merged.append(track)
 	removed = [old for key, old in previous.items() if key not in seen]
 	playlist.update({
@@ -351,6 +362,8 @@ def record_library_download_result(
 	downloaded: bool,
 	error: str | None = None,
 	match: dict | None = None,
+	low_confidence: bool = False,
+	confidence: float | None = None,
 ) -> None:
 	"""Persist a library track's latest download outcome for later inspection."""
 	library = load_library(path)
@@ -371,6 +384,8 @@ def record_library_download_result(
 			stored["downloaded_video_publisher"] = (
 				(match or {}).get("author") or (match or {}).get("artists") or stored.get("downloaded_video_publisher")
 			)
+			stored["low_confidence_review"] = bool(low_confidence)
+			stored["download_confidence"] = confidence
 		elif error:
 			stored["last_error"] = str(error).strip()[:4000]
 			stored["last_error_at"] = _now()
@@ -444,7 +459,7 @@ def _normalized_track(raw: dict[str, Any], playlist_name: str, position: int) ->
 	return track
 
 
-def _track_key(track: dict) -> str:
+def _track_base_key(track: dict) -> str:
 	youtube_id = str(track.get("youtube_video_id") or "").strip()
 	if youtube_id:
 		return f"youtube:{youtube_id}"
@@ -455,6 +470,12 @@ def _track_key(track: dict) -> str:
 	if spotify_id:
 		return f"spotify:{spotify_id}"
 	return f"text:{str(track.get('artists') or '').casefold().strip()}|{str(track.get('title') or '').casefold().strip()}"
+
+
+def _track_key(track: dict) -> str:
+	base = _track_base_key(track)
+	occurrence = int(track.get("playlist_occurrence") or 1)
+	return f"{base}|occurrence:{occurrence}"
 
 
 def _now() -> str:

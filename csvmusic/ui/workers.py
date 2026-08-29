@@ -431,6 +431,7 @@ class PipelineWorker(QThread):
 				self.sig_match_stats.emit(matched, skipped_count)
 				vid = match["videoId"]
 				low_confidence = payload.get("forced_match") or confidence < CONFIDENCE_MIN
+				payload["low_confidence"] = bool(low_confidence)
 				if low_confidence:
 					self.sig_row_status.emit(row_idx, f"Downloading low-confidence match ({self.fmt})…")
 				else:

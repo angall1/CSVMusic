@@ -11,6 +11,7 @@ from csvmusic.core.spotify_import import (
 	parse_spotify_page,
 	parse_spotify_embed_page,
 	SpotifySource,
+	_tracks_from_items,
 )
 
 
@@ -97,6 +98,24 @@ def test_parse_spotify_playlist_page_tracks():
 			"disc_no": 1,
 		}
 	]
+
+
+def test_playlist_rows_ignore_album_track_numbers_for_position():
+	def item(track_id: str, title: str, album_track_number: int) -> dict:
+		return {"itemV2": {"data": {
+			"__typename": "Track",
+			"name": title,
+			"uri": f"spotify:track:{track_id}",
+			"trackNumber": album_track_number,
+			"artists": {"items": [{"profile": {"name": "Artist"}}]},
+		}}}
+
+	tracks = _tracks_from_items([
+		item("1111111111111111", "Album Opener A", 1),
+		item("2222222222222222", "Album Opener B", 1),
+	], "Playlist")
+
+	assert [track["track_no"] for track in tracks] == [1, 2]
 
 
 def test_parse_spotify_playlist_page_missing_playlist_message():
@@ -274,6 +293,26 @@ def test_parse_spotify_embed_album_visual_identity_artwork():
 	album = parse_spotify_embed_page(_embed_page(entity), SpotifySource("album", "584Igcr5ixQUeE4rHIPN9c"))
 	assert album.cover_url == "large.jpg"
 	assert album.tracks[0]["cover_url"] == "large.jpg"
+
+
+def test_parse_spotify_embed_preserves_repeated_playlist_tracks():
+	item = {
+		"uri": "spotify:track:5OdZJPQCR624D4yq7UVUNx",
+		"title": "Repeated Song",
+		"subtitle": "Artist",
+		"duration": 156066,
+		"entityType": "track",
+	}
+	entity = {
+		"type": "playlist",
+		"id": "37i9dQZF1DXcBWIGoYBM5M",
+		"title": "Duplicates",
+		"trackList": [item, dict(item)],
+	}
+	playlist = parse_spotify_embed_page(_embed_page(entity), SpotifySource("playlist", "37i9dQZF1DXcBWIGoYBM5M"))
+
+	assert len(playlist.tracks) == 2
+	assert [track["track_no"] for track in playlist.tracks] == [1, 2]
 
 
 def test_parse_spotify_embed_playlist_warns_when_exactly_100_tracks():

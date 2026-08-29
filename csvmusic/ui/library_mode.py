@@ -5,7 +5,7 @@ import shutil
 import datetime
 import html
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, QUrl, QUrlQuery, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -24,7 +24,7 @@ from csvmusic.core.log import log
 from csvmusic.core.settings import load_settings, save_settings, settings_path
 from csvmusic.core.paths import resource_base
 from csvmusic.core.track_output import expected_track_path
-from csvmusic.core.downloader import sanitize_name, youtube_batch_mitigation, youtube_risk_acknowledgement
+from csvmusic.core.downloader import sanitize_name, tag_file, write_m3u, youtube_batch_mitigation, youtube_risk_acknowledgement
 from csvmusic.core.youtube_url import YouTubeVideoUrlError, parse_youtube_video_id
 from csvmusic.ui.spotify_public_scrape import SpotifyPublicScrapeDialog
 from csvmusic.ui.workers import AlternativesFetchWorker, PipelineWorker, SingleDownloadWorker
@@ -111,7 +111,24 @@ class EditablePlaylistTitle(QLabel):
 
 	def _update_elided_text(self) -> None:
 		available = max(20, self.width() - 4)
-		QLabel.setText(self, self.fontMetrics().elidedText(self._full_text, Qt.ElideRight, available))
+		metrics = self.fontMetrics()
+		words = self._full_text.split()
+		lines: list[str] = []
+		while words and len(lines) < 3:
+			if len(lines) == 2:
+				lines.append(metrics.elidedText(" ".join(words), Qt.ElideRight, available))
+				break
+			line_words: list[str] = []
+			while words:
+				candidate = " ".join((*line_words, words[0]))
+				if line_words and metrics.horizontalAdvance(candidate) > available:
+					break
+				line_words.append(words.pop(0))
+				if metrics.horizontalAdvance(candidate) > available:
+					break
+			line = " ".join(line_words)
+			lines.append(metrics.elidedText(line, Qt.ElideRight, available))
+		QLabel.setText(self, "\n".join(lines))
 
 	def mouseDoubleClickEvent(self, event) -> None:
 		if event.button() == Qt.LeftButton:
@@ -399,6 +416,8 @@ class LibraryScanProgressDialog(QDialog):
 		self.preview.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 		self.preview.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 		self.preview.setWidgetResizable(False)
+		self.preview.setFocusPolicy(Qt.NoFocus)
+		self.preview.viewport().setAttribute(Qt.WA_TransparentForMouseEvents, True)
 		layout.addWidget(self.preview, 1)
 		layout.addSpacing(3)
 		layout.addWidget(self.cancel_button)
@@ -415,6 +434,8 @@ class LibraryScanProgressDialog(QDialog):
 	def attach_browser(self, browser) -> None:
 		browser.setMinimumSize(1000, 650)
 		browser.resize(1000, 650)
+		browser.setFocusPolicy(Qt.NoFocus)
+		browser.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 		self.preview.setWidget(browser)
 		browser.show()
 		QTimer.singleShot(0, self._offset_preview)
@@ -430,6 +451,8 @@ class LibraryScanProgressDialog(QDialog):
 
 	def detach_browser(self, browser, owner) -> None:
 		self.preview.takeWidget()
+		browser.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+		browser.setFocusPolicy(Qt.StrongFocus)
 		browser.hide()
 		browser.setParent(owner)
 
@@ -950,6 +973,101 @@ class DownloadLogDialog(QDialog):
 		self.append("note", f"Tracks queued: {track_count}")
 
 
+class StartupDisclaimerDialog(QDialog):
+	def __init__(self, parent=None, *, show_preference: bool = True):
+		super().__init__(parent)
+		self.setWindowTitle("CSVMusic - Before You Start")
+		self.setModal(True)
+		self.setMinimumSize(1000, 650)
+		self.resize(1000, 650)
+		self.setFont(QFont("Comic Sans MS", 10))
+		self.setStyleSheet("""
+			QDialog { background: #c0c0c0; color: #101010; font-family: "Comic Sans MS"; }
+			QLabel#disclaimerBanner {
+				background: #000080; color: #ffff00; border: 3px outset #ffffff;
+				padding: 12px; font-size: 19px; font-weight: bold;
+			}
+			QFrame#warningCard { background: #ffff99; border: 3px outset #ffffff; }
+			QFrame#dangerCard { background: #ffe0b2; border: 3px outset #ffffff; }
+			QFrame#infoCard { background: #cce8ff; border: 3px outset #ffffff; }
+			QLabel#cardText { color: #101010; font-family: "Comic Sans MS"; font-size: 10pt; }
+			QCheckBox { background: #ffffcc; border: 2px inset #ffffff; padding: 11px 18px; font-family: "Comic Sans MS"; font-size: 15px; font-weight: bold; }
+			QCheckBox::indicator { width: 30px; height: 30px; }
+			QPushButton {
+				background: #008000; color: white; border: 3px outset #ffffff;
+				padding: 9px 22px; font-family: "Comic Sans MS"; font-size: 12px; font-weight: bold;
+			}
+			QPushButton:pressed { border: 3px inset #ffffff; }
+		""")
+		layout = QVBoxLayout(self)
+		layout.setContentsMargins(14, 14, 14, 14)
+		layout.setSpacing(10)
+		banner = QLabel("!!!  BEFORE YOU START  !!!" if show_preference else "SAFETY & SUPPORT")
+		banner.setObjectName("disclaimerBanner")
+		banner.setAlignment(Qt.AlignCenter)
+		layout.addWidget(banner)
+		cards = QGridLayout()
+		cards.setHorizontalSpacing(10)
+		cards.setVerticalSpacing(10)
+		cards.setColumnStretch(0, 1)
+		cards.setColumnStretch(1, 1)
+		cards.setRowStretch(0, 1)
+		cards.setRowStretch(1, 1)
+		cards.setRowMinimumHeight(0, 220)
+		cards.setRowMinimumHeight(1, 220)
+
+		def add_card(row: int, column: int, object_name: str, text: str) -> None:
+			card = QFrame()
+			card.setObjectName(object_name)
+			card.setMinimumHeight(220)
+			card.setMaximumHeight(220)
+			card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+			card_layout = QVBoxLayout(card)
+			card_layout.setContentsMargins(12, 10, 12, 10)
+			label = QLabel(text)
+			label.setObjectName("cardText")
+			label.setTextFormat(Qt.RichText)
+			label.setWordWrap(True)
+			label.setOpenExternalLinks(True)
+			label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+			card_layout.addWidget(label)
+			cards.addWidget(card, row, column)
+
+		add_card(0, 0, "warningCard", """
+			<font color="#000080" size="5"><b>1. Try to avoid enormous playlists</b></font><br><br>
+			Large playlists are supported, but they naturally require many more page loads, searches, downloads, and metadata operations. This means they can take a long time and are more likely to encounter incomplete public metadata, temporary service limits, or an interrupted scan.
+		""")
+		add_card(0, 1, "dangerCard", """
+			<font color="#804000" size="5"><b>2. YouTube requests and throttling</b></font><br><br>
+			YouTube sometimes slows or temporarily rejects repeated requests with HTTP 403 errors, rate limits, sign-in checks, or extraction failures. These are usually service protections rather than a broken playlist. CSVMusic adds pauses and throttling to reduce the chance, and waiting before retrying often helps.<br><br>
+			<a href="https://github.com/yt-dlp/yt-dlp"><b>yt-dlp project</b></a> &nbsp;|&nbsp;
+			<a href="https://github.com/yt-dlp/yt-dlp/wiki/FAQ"><b>yt-dlp FAQ</b></a>
+		""")
+		add_card(1, 0, "infoCard", """
+			<font color="#000080" size="5"><b>3. Review automatic results</b></font><br><br>
+			Song matching and scraped metadata are not guaranteed to be correct. Review yellow low-confidence entries and use Song Settings to choose alternatives. Only download media you are authorized to access and use.
+		""")
+		add_card(1, 1, "infoCard", """
+			<font color="#000080" size="5"><b>4. Need help?</b></font><br><br>
+			Open the Download Log and include the relevant error. Remove personal paths, cookies, tokens, or account details before sharing logs.<br><br>
+			<a href="https://github.com/angall1/CSVMusic/issues"><b>Post a GitHub issue</b></a> &nbsp;|&nbsp;
+			<a href="https://www.reddit.com/user/agalli/"><b>Message agalli on Reddit</b></a><br><br>
+			<a href="https://buymeacoffee.com/agalli"><b>Enjoying CSVMusic? Buy me a coffee</b></a>
+		""")
+		layout.addLayout(cards, 1)
+		self.hide_next_time = QCheckBox("Don't show this disclaimer again")
+		self.hide_next_time.setVisible(show_preference)
+		layout.addWidget(self.hide_next_time, 0, Qt.AlignCenter)
+		continue_button = QPushButton("I UNDERSTAND - CONTINUE" if show_preference else "CLOSE")
+		continue_button.clicked.connect(self._continue)
+		layout.addWidget(continue_button, 0, Qt.AlignCenter)
+
+	def _continue(self) -> None:
+		if self.hide_next_time.isChecked():
+			save_settings({"hide_startup_disclaimer": True})
+		self.accept()
+
+
 class LibraryModeDialog(QDialog):
 	tracks_ready = Signal(object, str, str, str)
 	legacy_mode_requested = Signal()
@@ -991,6 +1109,12 @@ class LibraryModeDialog(QDialog):
 		self.header_font_family = self._load_header_font()
 		self._build_ui()
 		self._refresh()
+		if not bool(load_settings().get("hide_startup_disclaimer", False)):
+			QTimer.singleShot(0, self._show_startup_disclaimer)
+
+	def _show_startup_disclaimer(self) -> None:
+		dialog = StartupDisclaimerDialog(self)
+		dialog.exec()
 
 	def _load_or_create(self) -> dict:
 		if self.library_path.exists():
@@ -1281,17 +1405,24 @@ class LibraryModeDialog(QDialog):
 		left.setObjectName("bottomPanel")
 		left_layout = QVBoxLayout(left)
 		left_layout.setContentsMargins(8, 7, 8, 8)
-		playlist_heading = QHBoxLayout()
+		playlist_heading = QGridLayout()
+		playlist_heading.setContentsMargins(0, 0, 0, 0)
+		playlist_heading.setHorizontalSpacing(7)
+		playlist_heading.setColumnStretch(0, 1)
+		playlist_heading.setColumnStretch(2, 1)
 		playlist_heading_label = QLabel("Playlists")
 		playlist_heading_label.setFont(header_font)
-		playlist_heading.addWidget(playlist_heading_label)
-		playlist_heading.addStretch(1)
+		playlist_heading.addWidget(playlist_heading_label, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
+		playlist_actions = QWidget()
+		playlist_actions_layout = QHBoxLayout(playlist_actions)
+		playlist_actions_layout.setContentsMargins(0, 0, 0, 0)
+		playlist_actions_layout.setSpacing(6)
 		rescan_all = QPushButton("Rescan All")
 		rescan_all.setIcon(_rescan_all_icon())
 		rescan_all.setIconSize(QSize(34, 26))
 		rescan_all.setStyleSheet("QPushButton { background: #008000; color: white; font-weight: bold; padding: 4px 10px; }")
 		rescan_all.clicked.connect(self._rescan_all)
-		playlist_heading.addWidget(rescan_all)
+		playlist_actions_layout.addWidget(rescan_all)
 		open_output = QToolButton()
 		open_output.setIcon(_folder_icon())
 		open_output.setIconSize(QSize(28, 24))
@@ -1299,7 +1430,8 @@ class LibraryModeDialog(QDialog):
 		open_output.setToolTip("Open the library output folder")
 		open_output.setAccessibleName("Open output folder")
 		open_output.clicked.connect(self._open_output_folder)
-		playlist_heading.addWidget(open_output)
+		playlist_actions_layout.addWidget(open_output)
+		playlist_heading.addWidget(playlist_actions, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
 		left_layout.addLayout(playlist_heading)
 		self.playlist_tree = QTreeWidget()
 		self.playlist_tree.setHeaderLabels(["Playlists"])
@@ -1335,10 +1467,9 @@ class LibraryModeDialog(QDialog):
 		self.song_search.textChanged.connect(self._show_tracks)
 		search_layout.addWidget(self.song_search)
 		clear_search = QToolButton()
-		clear_search.setIcon(_clear_search_icon())
-		clear_search.setIconSize(QSize(20, 20))
-		clear_search.setFixedSize(30, 28)
-		clear_search.setStyleSheet("QToolButton { background: #c00000; }")
+		clear_search.setText("X")
+		clear_search.setFixedSize(24, 24)
+		clear_search.setStyleSheet("QToolButton { background: #c00000; color: white; font-weight: bold; font-size: 11px; }")
 		clear_search.setToolTip("Clear song search")
 		clear_search.setAccessibleName("Clear song search")
 		clear_search.clicked.connect(self.song_search.clear)
@@ -1364,7 +1495,8 @@ class LibraryModeDialog(QDialog):
 		right_layout.addWidget(self.track_tree)
 		splitter.addWidget(left)
 		splitter.addWidget(right)
-		splitter.setSizes([480, 800])
+		left.setMinimumWidth(500)
+		splitter.setSizes([510, 770])
 		layout.addWidget(splitter, 1)
 		self.status = QLabel()
 		self.status.setWordWrap(True)
@@ -1431,7 +1563,7 @@ class LibraryModeDialog(QDialog):
 			<li>Press that playlist's green refresh button. Keep CSVMusic open while it captures and verifies the track list.</li>
 			<li>When the scan finishes, review its captured count and any warning. Large song lists appear 200 at a time; use <b>Load More Songs</b> to browse farther.</li>
 		</ol>
-		<div class="note"><b>Standard YouTube playlists are blocked.</b> Use a music.youtube.com playlist. Ordinary videos often do not provide dependable song, artist, album, or artwork metadata.</div>
+		<div class="note"><b>Regular YouTube playlists are allowed with a warning.</b> YouTube Music is recommended because ordinary videos often do not provide dependable song, artist, album, or artwork metadata. Carefully review imported results.</div>
 		<h2>2. Choose songs and download</h2>
 		<ol>
 			<li>Click the playlist you want to work with. Only the selected playlist is downloaded.</li>
@@ -1475,6 +1607,9 @@ class LibraryModeDialog(QDialog):
 			h2 {{ color: #000080; margin-top: 18px; }}
 			li {{ margin-bottom: 7px; }}
 			.note {{ background: #ffffcc; border: 1px solid #808000; padding: 8px; }}
+			.disclaimer-warning {{ background: #ffff99; border: 2px outset #ffffff; padding: 12px; margin-top: 12px; }}
+			.disclaimer-throttle {{ background: #ffe0b2; border: 2px outset #ffffff; padding: 12px; margin-top: 12px; }}
+			.disclaimer-info {{ background: #cce8ff; border: 2px outset #ffffff; padding: 12px; margin-top: 12px; }}
 		</style>
 		<h2>CSVMusic Library Mode v{APP_VERSION}</h2>
 		<p>Library Mode keeps a reusable local catalog of playlists, tracks, artwork URLs, download choices, per-song volume adjustments, and download results.</p>
@@ -1482,10 +1617,11 @@ class LibraryModeDialog(QDialog):
 		<ul>
 			<li>Public Spotify playlists, captured from Spotify's public web page without a Spotify developer application.</li>
 			<li>YouTube Music playlists from music.youtube.com.</li>
+			<li>Regular YouTube playlists after acknowledging that their song metadata may be inaccurate.</li>
 			<li>Apple Music playlists that expose public metadata.</li>
 			<li>TuneMyMusic, Exportify, and compatible CSVMusic CSV playlist files.</li>
 		</ul>
-		<div class="note">Standard YouTube playlists are intentionally unsupported because ordinary video titles and channels cannot consistently identify the correct artist, song, album, or artwork.</div>
+		<div class="note">Regular YouTube playlists can be added after a warning, but ordinary video titles and channels cannot consistently identify the correct artist, song, album, or artwork. YouTube Music remains the more reliable option.</div>
 		<h2>How matching and downloads work</h2>
 		<p>Playlist services supply metadata and artwork. CSVMusic searches YouTube Music for audio matches, downloads through yt-dlp, processes and tags audio with FFmpeg, and stores each playlist in its own output folder.</p>
 		<p>Automatic matching can be wrong. Use a song's gear button to preview alternatives and save the correct version before downloading again.</p>
@@ -1503,6 +1639,28 @@ class LibraryModeDialog(QDialog):
 			<li>Always review incomplete-scan warnings and captured totals before downloading.</li>
 			<li>Only download media you are authorized to save and follow the source service's terms and applicable law.</li>
 		</ul>
+		<h2>Safety &amp; Support</h2>
+		<div class="disclaimer-warning">
+			<h2>1. Try to avoid enormous playlists</h2>
+			Large playlists are supported, but they naturally require many more page loads, searches, downloads, and metadata operations. This means they can take a long time and are more likely to encounter incomplete public metadata, temporary service limits, or an interrupted scan.
+		</div>
+		<div class="disclaimer-throttle">
+			<h2>2. YouTube requests and throttling</h2>
+			YouTube sometimes slows or temporarily rejects repeated requests with HTTP 403 errors, rate limits, sign-in checks, or extraction failures. These are usually service protections rather than a broken playlist. CSVMusic adds pauses and throttling to reduce the chance, and waiting before retrying often helps.<br><br>
+			<a href="https://github.com/yt-dlp/yt-dlp"><b>yt-dlp project</b></a> &nbsp;|&nbsp;
+			<a href="https://github.com/yt-dlp/yt-dlp/wiki/FAQ"><b>yt-dlp FAQ</b></a>
+		</div>
+		<div class="disclaimer-info">
+			<h2>3. Review automatic results</h2>
+			Song matching and scraped metadata are not guaranteed to be correct. Review yellow low-confidence entries and use Song Settings to choose alternatives. Only download media you are authorized to access and use.
+		</div>
+		<div class="disclaimer-info">
+			<h2>4. Need help?</h2>
+			Open the Download Log and include the relevant error. Remove personal paths, cookies, tokens, or account details before sharing logs.<br><br>
+			<a href="https://github.com/angall1/CSVMusic/issues"><b>Post a GitHub issue</b></a> &nbsp;|&nbsp;
+			<a href="https://www.reddit.com/user/agalli/"><b>Message agalli on Reddit</b></a><br><br>
+			<a href="https://buymeacoffee.com/agalli"><b>Enjoying CSVMusic? Buy me a coffee</b></a>
+		</div>
 		"""
 		LibraryGuideDialog("About Library Mode", "LIBRARY MODE INFO", html, self).exec()
 
@@ -1573,6 +1731,31 @@ class LibraryModeDialog(QDialog):
 		if not value:
 			self.status.setText("Paste a public playlist URL first.")
 			return
+		host = QUrl(value).host().casefold().removeprefix("www.")
+		if host in ("youtube.com", "youtu.be"):
+			if not QUrlQuery(QUrl(value)).queryItemValue("list").strip():
+				message = (
+					"This is a single YouTube video link, not a playlist link. Open the playlist on YouTube and copy its URL. "
+					"The correct address contains '?list=' or '&list=' followed by the playlist ID."
+				)
+				self.status.setText(message)
+				QMessageBox.information(self, "Playlist Link Required", message)
+				return
+			warning = QMessageBox(self)
+			warning.setIcon(QMessageBox.Warning)
+			warning.setWindowTitle("Regular YouTube Playlist")
+			warning.setText("Regular YouTube playlists may import inaccurate song information.")
+			warning.setInformativeText(
+				"Unlike YouTube Music, ordinary videos often have inconsistent titles, uploader names, albums, and artwork. "
+				"CSVMusic will try to interpret them, but some songs may need manual title edits or replacement selections."
+			)
+			add_anyway = warning.addButton("Add Anyway", QMessageBox.AcceptRole)
+			warning.addButton(QMessageBox.Cancel)
+			warning.setDefaultButton(QMessageBox.Cancel)
+			warning.exec()
+			if warning.clickedButton() is not add_anyway:
+				self.status.setText("YouTube playlist was not added.")
+				return
 		before = len(self.library.get("playlists", []))
 		values = [value]
 		added, errors = add_playlist_urls(self.library, values)
@@ -1581,8 +1764,6 @@ class LibraryModeDialog(QDialog):
 		self._refresh()
 		if errors:
 			self.status.setText(errors[0])
-			if "Standard YouTube playlists are not supported" in errors[0]:
-				QMessageBox.warning(self, "YouTube Playlist Not Supported", errors[0].split(": ", 1)[-1])
 		elif not added and len(self.library.get("playlists", [])) == before:
 			self.status.setText("That playlist is already in this library.")
 		else:
@@ -1673,7 +1854,7 @@ class LibraryModeDialog(QDialog):
 		self.current_scan_name = str(playlist.get("name") or playlist.get("id") or "Playlist")
 		self.status.setText(f"Scanning {playlist.get('name') or playlist['id']} ({len(self.scan_queue)} remaining)...")
 		is_spotify_album = playlist.get("platform") == "spotify" and playlist.get("source_type") == "album"
-		if playlist.get("platform") in ("youtube_music", "apple_music", "deezer", "amazon_music", "csv") or is_spotify_album:
+		if playlist.get("platform") in ("youtube_music", "youtube", "apple_music", "deezer", "amazon_music", "csv") or is_spotify_album:
 			platform = "spotify_album" if is_spotify_album else str(playlist["platform"])
 			self.direct_worker = DirectLibraryScanWorker(
 				playlist.get("csv_path") or playlist["url"], platform, self, source_id=str(playlist.get("id") or "")
@@ -1684,7 +1865,7 @@ class LibraryModeDialog(QDialog):
 				self.scan_dialog.setRange(0, 0)
 				self.scan_dialog.setLabelText(
 					f"Playlist {self.scans_completed + 1}: {playlist.get('name') or playlist['id']}\n"
-					f"Loading {'CSV' if platform == 'csv' else 'Spotify album' if platform == 'spotify_album' else 'Apple Music' if platform == 'apple_music' else 'Deezer' if platform == 'deezer' else 'Amazon Music' if platform == 'amazon_music' else 'YouTube Music'} metadata..."
+					f"Loading {'CSV' if platform == 'csv' else 'Spotify album' if platform == 'spotify_album' else 'Apple Music' if platform == 'apple_music' else 'Deezer' if platform == 'deezer' else 'Amazon Music' if platform == 'amazon_music' else 'YouTube' if platform == 'youtube' else 'YouTube Music'} metadata..."
 				)
 			return
 		if self.scraper is None:
@@ -1931,10 +2112,11 @@ class LibraryModeDialog(QDialog):
 		playlists = list(self.library.get("playlists", []))
 		playlists.sort(
 			key=lambda playlist: (
-				self._playlist_error_count(playlist),
-				status.get("playlists", {}).get(f"{playlist.get('platform') or 'spotify'}:{playlist.get('id')}", {}).get("missing", 0),
+				0 if not playlist.get("last_scanned_at") else 1,
+				-self._playlist_error_count(playlist),
+				-int(status.get("playlists", {}).get(f"{playlist.get('platform') or 'spotify'}:{playlist.get('id')}", {}).get("missing", 0) or 0),
+				str(playlist.get("name") or "").casefold(),
 			),
-			reverse=True,
 		)
 		for playlist_index, playlist in enumerate(playlists):
 			key = f"{playlist.get('platform') or 'spotify'}:{playlist.get('id')}"
@@ -1945,6 +2127,7 @@ class LibraryModeDialog(QDialog):
 			name = playlist.get("name") or (
 				"Unscanned Apple Music Playlist" if playlist.get("platform") == "apple_music"
 				else "Unscanned YouTube Music Playlist" if playlist.get("platform") == "youtube_music"
+				else "Unscanned YouTube Playlist" if playlist.get("platform") == "youtube"
 				else "Unscanned CSV Playlist" if playlist.get("platform") == "csv"
 				else "Unscanned Spotify Playlist"
 			)
@@ -1989,7 +2172,9 @@ class LibraryModeDialog(QDialog):
 			card_layout.addWidget(art)
 			name_label = EditablePlaylistTitle(str(name))
 			name_label.setWordWrap(False)
+			name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 			name_label.setFont(QFont("Comic Sans MS", 10, QFont.Bold))
+			name_label.setFixedHeight(name_label.fontMetrics().lineSpacing() * 3)
 			name_label.double_clicked.connect(lambda playlist_id=key: self._rename_playlist(str(playlist_id)))
 			card_layout.addWidget(name_label, 1)
 			status_layout = QVBoxLayout()
@@ -2106,11 +2291,13 @@ class LibraryModeDialog(QDialog):
 			total_tracks += len(indexed_tracks)
 			def issue_order(entry: tuple[int, dict]) -> int:
 				_original_index, source_track = entry
-				if source_track.get("download_error") or source_track.get("last_error") or source_track.get("error"):
+				if source_track.get("low_confidence_review"):
 					return 0
+				if source_track.get("download_error") or source_track.get("last_error") or source_track.get("error"):
+					return 1
 				probe = dict(source_track)
 				probe["playlist"] = playlist.get("name") or "Playlist"
-				return 2 if expected_track_path(probe, output, fmt).exists() else 1
+				return 3 if expected_track_path(probe, output, fmt).exists() else 2
 			indexed_tracks.sort(key=issue_order)
 			remaining = max(0, self.track_display_limit - displayed_tracks)
 			for display_index, (index, track) in enumerate(indexed_tracks[:remaining], start=displayed_tracks):
@@ -2118,8 +2305,11 @@ class LibraryModeDialog(QDialog):
 				candidate = dict(track)
 				candidate["playlist"] = playlist.get("name") or "Playlist"
 				has_error = bool(track.get("download_error") or track.get("last_error") or track.get("error"))
+				needs_review = bool(track.get("low_confidence_review"))
 				file_exists = expected_track_path(candidate, output, fmt).exists()
-				if has_error:
+				if needs_review:
+					state = "Review"
+				elif has_error:
 					state = "Error"
 				elif track.get("force_redownload"):
 					state = "Redownload"
@@ -2152,6 +2342,8 @@ class LibraryModeDialog(QDialog):
 				if runtime_state in ("Matching", "Downloading", "Tagging"):
 					state = runtime_state
 				if runtime_state in ("Matching", "Downloading", "Tagging"):
+					shade = "#fff0a8"
+				elif needs_review:
 					shade = "#fff0a8"
 				elif state == "Error":
 					shade = "#dda0a0"
@@ -2201,7 +2393,9 @@ class LibraryModeDialog(QDialog):
 				album_label.setToolTip("Double-click to edit the song title and album")
 				album_label.double_clicked.connect(lambda playlist_key=str(playlist_id), track_index=index: self._edit_track_metadata(playlist_key, track_index))
 				download = QLabel(youtube_info)
-				download.setFont(QFont("Comic Sans MS", 8))
+				download_font = QFont("Comic Sans MS", 8)
+				download_font.setBold(needs_review)
+				download.setFont(download_font)
 				download.setStyleSheet("color: #555555;")
 				download.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 				download.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -2209,13 +2403,14 @@ class LibraryModeDialog(QDialog):
 				text_column.addWidget(album_label)
 				text_column.addWidget(download)
 				card_layout.addLayout(text_column, 1)
-				icon_kind = "downloaded" if file_exists and not has_error and not track.get("force_redownload") else "warning"
+				icon_kind = "downloaded" if file_exists and not has_error and not track.get("force_redownload") and not needs_review else "warning"
 				status_icon = QLabel()
 				status_icon.setFixedSize(26, 26)
 				status_icon.setAlignment(Qt.AlignCenter)
 				status_icon.setPixmap(_song_status_icon(icon_kind).pixmap(24, 24))
 				status_icon.setToolTip(
-					"Last download failed" if has_error
+					"Review this low-confidence downloaded match" if needs_review
+					else "Last download failed" if has_error
 					else "Replacement queued for the next Download run" if track.get("force_redownload")
 					else "Audio file found" if icon_kind == "downloaded"
 					else "Audio file is missing"
@@ -2233,14 +2428,34 @@ class LibraryModeDialog(QDialog):
 				card_layout.addWidget(state_label)
 				self.track_state_labels[target_key] = state_label
 				self.track_cards[target_key] = card
-				settings_button = QToolButton()
-				settings_button.setIcon(_settings_icon())
-				settings_button.setIconSize(QSize(24, 24))
-				settings_button.setToolTip("Song settings: YouTube match and sound level")
-				settings_button.setAccessibleName("Song settings")
-				settings_button.setFixedSize(42, 42)
-				settings_button.clicked.connect(lambda _checked=False, target=item: self._open_track_settings(target))
-				card_layout.addWidget(settings_button)
+				if needs_review:
+					accept_button = QToolButton()
+					accept_button.setText("✓")
+					accept_button.setToolTip("Accept this low-confidence match")
+					accept_button.setAccessibleName("Accept downloaded match")
+					accept_button.setFixedSize(38, 38)
+					accept_button.setStyleSheet("QToolButton { background: #008000; color: white; font-size: 22px; font-weight: bold; }")
+					accept_button.clicked.connect(
+						lambda _checked=False, playlist_key=str(playlist_id), track_index=index: self._accept_low_confidence(playlist_key, track_index)
+					)
+					card_layout.addWidget(accept_button)
+					reject_button = QToolButton()
+					reject_button.setText("✕")
+					reject_button.setToolTip("Reject this match and choose an alternative")
+					reject_button.setAccessibleName("Reject downloaded match")
+					reject_button.setFixedSize(38, 38)
+					reject_button.setStyleSheet("QToolButton { background: #c00000; color: white; font-size: 20px; font-weight: bold; }")
+					reject_button.clicked.connect(lambda _checked=False, target=item: self._open_track_settings(target))
+					card_layout.addWidget(reject_button)
+				else:
+					settings_button = QToolButton()
+					settings_button.setIcon(_settings_icon())
+					settings_button.setIconSize(QSize(24, 24))
+					settings_button.setToolTip("Song settings: YouTube match and sound level")
+					settings_button.setAccessibleName("Song settings")
+					settings_button.setFixedSize(42, 42)
+					settings_button.clicked.connect(lambda _checked=False, target=item: self._open_track_settings(target))
+					card_layout.addWidget(settings_button)
 				self.track_tree.setItemWidget(item, 0, card)
 				self.track_art_targets[self.track_tree.indexOfTopLevelItem(item)] = art
 				displayed_tracks += 1
@@ -2249,6 +2464,20 @@ class LibraryModeDialog(QDialog):
 		self.load_more_tracks_button.setVisible(remaining_tracks > 0)
 		self.load_more_tracks_button.setText(f"Load More Songs ({remaining_tracks} remaining)")
 		self.track_art_timer.start(0)
+		if (self.download_worker and self.download_worker.isRunning()) or (self.single_download_worker and self.single_download_worker.isRunning()):
+			self._set_library_lists_locked(True)
+
+	def _set_library_lists_locked(self, locked: bool) -> None:
+		"""Lock row actions during downloads without disabling either scrollbar."""
+		mode = QAbstractItemView.NoSelection if locked else QAbstractItemView.ExtendedSelection
+		for tree in (self.playlist_tree, self.track_tree):
+			tree.setSelectionMode(mode)
+			tree.setEnabled(True)
+			for row in range(tree.topLevelItemCount()):
+				widget = tree.itemWidget(tree.topLevelItem(row), 0)
+				if widget:
+					widget.setEnabled(not locked)
+		self.song_search.setEnabled(not locked)
 
 	def _edit_track_metadata(self, playlist_id: str, track_index: int) -> None:
 		if (self.download_worker and self.download_worker.isRunning()) or (self.single_download_worker and self.single_download_worker.isRunning()):
@@ -2276,18 +2505,58 @@ class LibraryModeDialog(QDialog):
 		layout.addWidget(buttons)
 		if dialog.exec() != QDialog.Accepted:
 			return
+		scroll_position = self.track_tree.verticalScrollBar().value()
+		output_root = pathlib.Path(self.library.get("output_dir") or "")
+		fmt = str(self.library.get("format") or self.format_combo.currentText() or "m4a")
+		old_file_track = dict(track)
+		old_file_track["playlist"] = playlist.get("name") or "Playlist"
+		old_path = expected_track_path(old_file_track, output_root, fmt)
 		try:
 			updated = edit_library_track(self.library, playlist_id, track_index, title_edit.text(), album_edit.text())
+			new_file_track = dict(updated)
+			new_file_track["playlist"] = playlist.get("name") or "Playlist"
+			new_path = expected_track_path(new_file_track, output_root, fmt)
+			local_file_updated = False
+			if old_path.exists():
+				if old_path != new_path:
+					if new_path.exists():
+						raise FileExistsError(f"Cannot rename the audio file because '{new_path.name}' already exists.")
+					new_path.parent.mkdir(parents=True, exist_ok=True)
+					old_path.rename(new_path)
+				tag_file(new_path, new_file_track, None)
+				local_file_updated = True
+			cfg = load_settings()
+			playlist_tracks = []
+			for source_track in playlist.get("tracks", []):
+				if not source_track.get("enabled", True):
+					continue
+				playlist_track = dict(source_track)
+				playlist_track["playlist"] = playlist.get("name") or "Playlist"
+				playlist_tracks.append(playlist_track)
+			if cfg.get("write_m3u8", True):
+				write_m3u(output_root, playlist.get("name") or "Playlist", playlist_tracks, fmt, suffix=".m3u8", encoding="utf-8")
+			if cfg.get("write_m3u_plain", False):
+				write_m3u(output_root, playlist.get("name") or "Playlist", playlist_tracks, fmt, suffix=".m3u", encoding="utf-8-sig")
 			self._save()
 		except Exception as exc:
 			QMessageBox.warning(self, "Edit Failed", str(exc))
 			return
-		self._show_tracks()
 		self._refresh()
+		QTimer.singleShot(0, lambda value=scroll_position: self.track_tree.verticalScrollBar().setValue(value))
 		message = f"Updated metadata for '{updated['title']}'."
-		if updated.get("force_redownload"):
-			message += " It is marked for redownload so the file and embedded tags can be updated."
+		if local_file_updated:
+			message += " The existing audio file and playlist entry were updated locally."
 		self.status.setText(message)
+
+	def _accept_low_confidence(self, playlist_id: str, track_index: int) -> None:
+		playlist = playlist_by_id(self.library, playlist_id)
+		if not playlist or track_index < 0 or track_index >= len(playlist.get("tracks", [])):
+			return
+		track = playlist["tracks"][track_index]
+		track["low_confidence_review"] = False
+		self._save()
+		self._refresh()
+		self.status.setText(f"Accepted the downloaded match for '{track.get('title') or 'song'}'.")
 
 	def _load_more_tracks(self) -> None:
 		self.track_display_limit += self.track_display_batch
@@ -2366,8 +2635,7 @@ class LibraryModeDialog(QDialog):
 		target = (playlist_id, index)
 		self.download_track_states[target] = "Downloading"
 		self._show_tracks()
-		self.playlist_tree.setEnabled(False)
-		self.track_tree.setEnabled(False)
+		self._set_library_lists_locked(True)
 		self.download_button.setEnabled(False)
 		use_cookies = bool(cfg.get("use_cookies", False))
 		worker = SingleDownloadWorker(
@@ -2400,6 +2668,7 @@ class LibraryModeDialog(QDialog):
 		record_library_download_result(
 			self.library_path, target[0], track,
 			downloaded=bool(payload.get("downloaded")), error=payload.get("error"), match=payload.get("match"),
+			low_confidence=bool(payload.get("low_confidence")), confidence=payload.get("confidence"),
 		)
 		self.download_track_states.pop(target, None)
 		self.library = load_library(self.library_path)
@@ -2413,8 +2682,7 @@ class LibraryModeDialog(QDialog):
 		if self.single_download_worker:
 			self.single_download_worker.deleteLater()
 		self.single_download_worker = None
-		self.playlist_tree.setEnabled(True)
-		self.track_tree.setEnabled(True)
+		self._set_library_lists_locked(False)
 		self.download_button.setEnabled(True)
 
 	def _load_visible_track_images(self) -> None:
@@ -2648,8 +2916,7 @@ class LibraryModeDialog(QDialog):
 		self.download_worker.sig_done.connect(self._download_done)
 		self.download_button.setEnabled(False)
 		self.stop_download_button.setEnabled(True)
-		self.playlist_tree.setEnabled(False)
-		self.track_tree.setEnabled(False)
+		self._set_library_lists_locked(True)
 		self.load_more_tracks_button.setEnabled(False)
 		self.download_target.setText(f"Downloading playlist: {target_text}")
 		self.download_activity.setText(f"Starting {len(tracks)} track(s) from {target_text}...")
@@ -2721,6 +2988,7 @@ class LibraryModeDialog(QDialog):
 			record_library_download_result(
 				self.library_path, track["library_playlist_id"], track,
 				downloaded=bool(payload.get("downloaded")), error=payload.get("error"), match=payload.get("match"),
+				low_confidence=bool(payload.get("low_confidence")), confidence=payload.get("confidence"),
 			)
 			target = self.download_row_targets.get(row)
 			if target:
@@ -2738,8 +3006,7 @@ class LibraryModeDialog(QDialog):
 		self.download_log_dialog.append("note", f"Finished: downloaded {len(done)}, skipped {len(skipped)}, failed {len(failed)}")
 		self.download_button.setEnabled(True)
 		self.stop_download_button.setEnabled(False)
-		self.playlist_tree.setEnabled(True)
-		self.track_tree.setEnabled(True)
+		self._set_library_lists_locked(False)
 		self.load_more_tracks_button.setEnabled(True)
 		self.download_worker = None
 		self.download_row_targets.clear()

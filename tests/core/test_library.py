@@ -28,7 +28,7 @@ def test_track_metadata_edits_survive_rescan():
 	merge_playlist_scan(library, playlist_id, "Playlist", [_track()])
 	library["playlists"][0]["tracks"][0]["last_downloaded_at"] = "2026-01-01T00:00:00+00:00"
 	updated = edit_library_track(library, playlist_id, 0, "Correct Title", "Correct Album")
-	assert updated["force_redownload"] is True
+	assert updated.get("force_redownload") is not True
 	merge_playlist_scan(library, playlist_id, "Playlist", [_track(title="Scraped Title")])
 	rescanned = library["playlists"][0]["tracks"][0]
 	assert rescanned["title"] == "Correct Title"
@@ -105,7 +105,7 @@ def test_csv_is_imported_directly_and_refreshes_same_library_playlist(tmp_path):
 	assert refreshed["last_diff"] == {"added": 1, "removed": 0, "unchanged": 1}
 
 
-def test_add_youtube_music_and_reject_regular_youtube_playlist_urls():
+def test_add_youtube_music_and_regular_youtube_playlist_urls():
 	library = new_library()
 	added, errors = add_playlist_urls(library, [
 		YOUTUBE_URL,
@@ -113,9 +113,8 @@ def test_add_youtube_music_and_reject_regular_youtube_playlist_urls():
 		YOUTUBE_URL,
 	])
 
-	assert len(errors) == 1
-	assert "Standard YouTube playlists are not supported" in errors[0]
-	assert [item["platform"] for item in added] == ["youtube_music"]
+	assert errors == []
+	assert [item["platform"] for item in added] == ["youtube_music", "youtube"]
 	assert added[0]["url"] == YOUTUBE_URL
 
 
@@ -154,6 +153,18 @@ def test_rescan_preserves_selection_and_override():
 	assert playlist["last_diff"] == {"added": 1, "removed": 1, "unchanged": 1}
 	assert playlist["tracks"][0]["preferred_video_id"] == "youtube-id"
 	assert [track["sp_id"] for track in enabled_tracks(library)] == ["two", "three"]
+
+
+def test_library_preserves_repeated_track_occurrences():
+	library = new_library()
+	add_playlist_urls(library, [URL])
+	playlist = merge_playlist_scan(library, "611N3KSs459UD5IVPH1ES4", "Mix", [_track("same"), _track("same")], reported_total=2)
+
+	assert len(playlist["tracks"]) == 2
+	assert [track["playlist_occurrence"] for track in playlist["tracks"]] == [1, 2]
+	playlist["tracks"][1]["enabled"] = False
+	rescanned = merge_playlist_scan(library, "spotify:611N3KSs459UD5IVPH1ES4", "Mix", [_track("same"), _track("same")], reported_total=2)
+	assert [track["enabled"] for track in rescanned["tracks"]] == [True, False]
 
 
 def test_rename_playlist_updates_folder_m3u_tracks_and_survives_rescan(tmp_path):
@@ -278,3 +289,29 @@ def test_library_download_error_is_recorded_and_cleared_on_success(tmp_path):
 	assert completed["last_downloaded_at"]
 	assert completed["downloaded_video_title"] == "Actual YouTube Video"
 	assert completed["downloaded_video_publisher"] == "Uploader"
+
+
+def test_low_confidence_download_review_survives_rescan(tmp_path):
+	library = new_library()
+	add_playlist_urls(library, [URL])
+	playlist = merge_playlist_scan(library, "611N3KSs459UD5IVPH1ES4", "Mix", [_track("one")])
+	path = tmp_path / "library.json"
+	save_library(path, library)
+
+	record_library_download_result(
+		path,
+		"spotify:611N3KSs459UD5IVPH1ES4",
+		playlist["tracks"][0],
+		downloaded=True,
+		match={"videoId": "uncertain", "title": "Possible Match", "author": "Uploader"},
+		low_confidence=True,
+		confidence=0.41,
+	)
+	updated = load_library(path)
+	assert updated["playlists"][0]["tracks"][0]["low_confidence_review"] is True
+	assert updated["playlists"][0]["tracks"][0]["download_confidence"] == 0.41
+
+	merge_playlist_scan(updated, "spotify:611N3KSs459UD5IVPH1ES4", "Mix", [_track("one")])
+	rescanned = updated["playlists"][0]["tracks"][0]
+	assert rescanned["low_confidence_review"] is True
+	assert rescanned["download_confidence"] == 0.41

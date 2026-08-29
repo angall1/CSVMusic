@@ -169,6 +169,30 @@ def ordered_playlist_tracks(tracks: list[dict], reported_total: int | None) -> l
 	return [by_position[position] for position in sorted(by_position)]
 
 
+def recover_single_missing_position(captured: list[dict], existing: dict[str, dict], reported_total: int | None) -> list[dict]:
+	"""Recover one rendered row when Spotify omits its visible playlist number."""
+	if not reported_total:
+		return captured
+	occupied = {
+		position for track in existing.values()
+		if (position := _safe_position(track.get("position"))) is not None and position <= reported_total
+	}
+	for track in captured:
+		position = _safe_position(track.get("position"))
+		if position is not None and position <= reported_total:
+			occupied.add(position)
+	missing = [position for position in range(1, reported_total + 1) if position not in occupied]
+	positionless = [
+		track for track in captured
+		if not _safe_position(track.get("position")) and track.get("id") not in existing
+	]
+	unique = {str(track.get("id") or ""): track for track in positionless if track.get("id")}
+	if len(missing) == 1 and len(unique) == 1:
+		recovered = next(iter(unique.values()))
+		recovered["position"] = missing[0]
+	return captured
+
+
 def metadata_gap_positions(tracks: list[dict], playlist_cover_url: str | None, reported_total: int | None = None) -> list[int]:
 	rows = tracks[:reported_total] if reported_total and reported_total > 0 else tracks
 	return [
@@ -320,9 +344,10 @@ class SpotifyPublicScrapeDialog(QDialog):
 		for playlist_position, track in enumerate(getattr(playlist, "tracks", []), start=1):
 			track_id = str(track.get("sp_id") or "").strip()
 			if track_id:
-				self.tracks[track_id] = {
+				position = int(track.get("track_no") or playlist_position)
+				self.tracks[f"{position}:{track_id}"] = {
 					"id": track_id,
-					"position": playlist_position,
+					"position": position,
 					"title": track.get("title") or "",
 					"artists": track.get("artists") or "",
 					"album": track.get("album") or "",
@@ -399,18 +424,23 @@ class SpotifyPublicScrapeDialog(QDialog):
 			self.playlist_cover_url = str(result["playlistCover"])
 		if isinstance(browser_total, (int, float)) and browser_total > 0:
 			self.reported_total = max(self.reported_total or 0, int(browser_total))
-		for raw in result.get("tracks") or []:
-			track = normalized_capture(raw)
+		captured_tracks = [
+			track for raw in (result.get("tracks") or [])
+			if (track := normalized_capture(raw)) is not None
+		]
+		captured_tracks = recover_single_missing_position(captured_tracks, self.tracks, self.reported_total)
+		for track in captured_tracks:
 			if not track or not track.get("position"):
 				continue
 			if self.reported_total and int(track["position"]) > self.reported_total:
 				continue
-			if track["id"] not in self.tracks:
-				self.tracks[track["id"]] = track
+			storage_key = f"{int(track['position'])}:{track['id']}"
+			if storage_key not in self.tracks:
+				self.tracks[storage_key] = track
 			else:
 				# The public embed often supplies the playlist image as a generic
 				# fallback. Rendered rows contain the actual per-album artwork.
-				existing = self.tracks[track["id"]]
+				existing = self.tracks[storage_key]
 				# The embed's position is authoritative. Numbers found in rendered
 				# row text can be years or other metadata and must not replace it.
 				for field in ("title", "artists", "album", "cover_url"):
@@ -471,6 +501,8 @@ class SpotifyPublicScrapeDialog(QDialog):
 
 	def _stalled_safety_limit(self) -> int:
 		"""Give Spotify extra render attempts when a large scan is close to its reported end."""
+		if self.reported_total and 0 < self.reported_total - len(self.tracks) <= 2:
+			return 20
 		if self.reported_total and len(self.tracks) >= int(self.reported_total * 0.9):
 			return 80
 		return 40

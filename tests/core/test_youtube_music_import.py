@@ -1,10 +1,20 @@
 import csvmusic.core.youtube_music_import as youtube_music_import
-from csvmusic.core.youtube_music_import import fetch_youtube_music_source, parse_youtube_music_source, parse_youtube_playlist_id, _tracks_from_playlist
+from csvmusic.core.youtube_music_import import YouTubeMusicImportError, fetch_youtube_music_source, parse_youtube_music_source, parse_youtube_playlist_id, _tracks_from_playlist
 
 
 def test_parse_youtube_music_playlist_id():
 	assert parse_youtube_playlist_id("https://music.youtube.com/playlist?list=PLabc123") == "PLabc123"
 	assert parse_youtube_playlist_id("https://www.youtube.com/watch?v=abc&list=VLPLabc123") == "PLabc123"
+
+
+def test_single_youtube_video_link_has_actionable_playlist_error():
+	try:
+		parse_youtube_playlist_id("https://youtu.be/u5zcnBuTm9Q?si=share-token")
+	except YouTubeMusicImportError as exc:
+		assert "single YouTube video link" in str(exc)
+		assert "list=" in str(exc)
+	else:
+		raise AssertionError("Expected a single-video URL to be rejected as a playlist")
 
 
 def test_parse_youtube_music_album_browse_url():

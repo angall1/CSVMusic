@@ -259,7 +259,6 @@ def _find_album_entity(state: dict[str, Any], album_id: str) -> dict[str, Any] |
 
 def _tracks_from_items(items: list[Any], playlist_name: str, *, album_name: str | None = None, cover_url: str | None = None) -> list[dict]:
 	tracks: list[dict] = []
-	seen: set[str] = set()
 	for idx, item in enumerate(items, start=1):
 		data = _track_data(item)
 		if not data:
@@ -271,10 +270,6 @@ def _tracks_from_items(items: list[Any], playlist_name: str, *, album_name: str 
 		if not artists:
 			continue
 		sp_id = _spotify_id(data.get("uri") or data.get("id"))
-		if sp_id and sp_id in seen:
-			continue
-		if sp_id:
-			seen.add(sp_id)
 		tracks.append({
 			"title": title,
 			"artists": artists,
@@ -285,7 +280,10 @@ def _tracks_from_items(items: list[Any], playlist_name: str, *, album_name: str 
 			"duration_ms": _duration_ms(data),
 			"year": None,
 			"cover_url": _cover_url(data) or cover_url,
-			"track_no": _safe_int(data.get("trackNumber")) or idx,
+			# Album track numbers are not playlist positions. A playlist can contain
+			# many songs whose album track number is 1, so using that value here
+			# collapses unrelated playlist rows during ordered capture.
+			"track_no": (_safe_int(data.get("trackNumber")) or idx) if album_name else idx,
 			"disc_no": _safe_int(data.get("discNumber")) or 1,
 		})
 	return tracks
@@ -308,7 +306,6 @@ def _track_data(item: Any) -> dict[str, Any] | None:
 
 def _tracks_from_embed_items(items: list[Any], playlist_name: str, *, album_name: str | None = None, cover_url: str | None = None) -> list[dict]:
 	tracks: list[dict] = []
-	seen: set[str] = set()
 	for idx, item in enumerate(items, start=1):
 		if not isinstance(item, dict) or item.get("entityType") != "track":
 			continue
@@ -317,10 +314,6 @@ def _tracks_from_embed_items(items: list[Any], playlist_name: str, *, album_name
 		sp_id = _spotify_id(item.get("uri"))
 		if not title or not artists:
 			continue
-		if sp_id and sp_id in seen:
-			continue
-		if sp_id:
-			seen.add(sp_id)
 		tracks.append({
 			"title": title,
 			"artists": artists,

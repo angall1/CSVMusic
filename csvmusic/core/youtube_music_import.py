@@ -70,6 +70,11 @@ def parse_youtube_playlist_id(value: str) -> str:
 	query = parse_qs(parsed.query)
 	playlist_id = (query.get("list") or [""])[0].strip()
 	if not playlist_id:
+		if host in ("www.youtube.com", "youtube.com", "youtu.be"):
+			raise YouTubeMusicImportError(
+				"This is a single YouTube video link, not a playlist link. Open the playlist on YouTube and copy its URL; "
+				"a usable playlist link contains '?list=' or '&list=' followed by the playlist ID."
+			)
 		raise YouTubeMusicImportError("This YouTube Music link does not contain a playlist ID.")
 	if playlist_id.startswith("VL"):
 		playlist_id = playlist_id[2:]

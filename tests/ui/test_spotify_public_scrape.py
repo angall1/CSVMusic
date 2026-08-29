@@ -1,4 +1,4 @@
-from csvmusic.ui.spotify_public_scrape import jittered_scroll_delay_ms, metadata_gap_positions, normalized_capture, ordered_playlist_tracks
+from csvmusic.ui.spotify_public_scrape import jittered_scroll_delay_ms, metadata_gap_positions, normalized_capture, ordered_playlist_tracks, recover_single_missing_position
 
 
 def test_normalized_capture_maps_public_row():
@@ -55,3 +55,27 @@ def test_metadata_verification_reports_incomplete_playlist_rows():
 	]
 
 	assert metadata_gap_positions(tracks, "playlist-cover", reported_total=2) == [2]
+
+
+def test_single_positionless_final_track_is_recovered():
+	existing = {
+		str(position): {"id": str(position), "position": position}
+		for position in range(1, 53)
+	}
+	captured = [{"id": "last-track", "position": None, "title": "Final Song"}]
+
+	recovered = recover_single_missing_position(captured, existing, 53)
+
+	assert recovered[0]["position"] == 53
+
+
+def test_ambiguous_positionless_tracks_are_not_guessed():
+	existing = {"1": {"id": "1", "position": 1}}
+	captured = [
+		{"id": "unknown-a", "position": None},
+		{"id": "unknown-b", "position": None},
+	]
+
+	recovered = recover_single_missing_position(captured, existing, 2)
+
+	assert all(track["position"] is None for track in recovered)
