@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from csvmusic.core.library import (
-	add_playlist_urls, edit_library_track, enabled_tracks, export_csv, library_status, load_library,
+	add_playlist_urls, edit_library_track, enabled_tracks, export_csv, library_status, library_track_path, load_library,
 	import_csv_playlist, merge_playlist_scan, new_library, playlist_by_id, record_library_download_result,
 	rename_library_playlist, save_library,
 )
@@ -27,6 +27,7 @@ from csvmusic.core.track_output import expected_track_path
 from csvmusic.core.downloader import sanitize_name, tag_file, write_m3u, youtube_batch_mitigation, youtube_risk_acknowledgement
 from csvmusic.core.youtube_url import YouTubeVideoUrlError, parse_youtube_video_id
 from csvmusic.ui.spotify_public_scrape import SpotifyPublicScrapeDialog
+from csvmusic.ui.device_sync import DeviceSyncDialog
 from csvmusic.ui.workers import AlternativesFetchWorker, PipelineWorker, SingleDownloadWorker
 from csvmusic.core.youtube_music_import import fetch_youtube_music_source
 from csvmusic.core.apple_music_import import fetch_apple_music_source
@@ -264,6 +265,12 @@ def _header_button_icon(kind: str) -> QIcon:
 			painter.setBrush(QColor("#e8e8e8"))
 			painter.drawRoundedRect(QRectF(x - 2.5, knob_y - 2, 5, 4), 1, 1)
 			painter.setBrush(Qt.NoBrush)
+	elif kind == "sync":
+		painter.drawRoundedRect(QRectF(3, 3, 16, 12), 2, 2)
+		painter.drawLine(QPointF(11, 6), QPointF(11, 18))
+		painter.drawLine(QPointF(7, 14), QPointF(11, 18))
+		painter.drawLine(QPointF(15, 14), QPointF(11, 18))
+		painter.drawLine(QPointF(7, 20), QPointF(15, 20))
 	elif kind == "settings":
 		painter.drawEllipse(QRectF(5, 5, 12, 12))
 		painter.drawEllipse(QRectF(9, 9, 4, 4))
@@ -1243,6 +1250,7 @@ class LibraryModeDialog(QDialog):
 		header_layout.addWidget(title)
 		header_layout.addStretch(1)
 		for label, icon_kind, callback in (
+			("Sync", "sync", self._open_device_sync),
 			("Equalizer", "equalizer", self._open_equalizer),
 			("Settings", "settings", self._open_settings),
 			("Tutorial", "tutorial", self._open_tutorial),
@@ -1546,6 +1554,9 @@ class LibraryModeDialog(QDialog):
 	def _open_equalizer(self) -> None:
 		if LibraryEqualizerDialog(self).exec():
 			self.status.setText("Equalizer settings saved and will be applied to new downloads.")
+
+	def _open_device_sync(self) -> None:
+		DeviceSyncDialog(self.library, self).exec()
 
 	def _open_tutorial(self) -> None:
 		html = """
@@ -2297,7 +2308,7 @@ class LibraryModeDialog(QDialog):
 					return 1
 				probe = dict(source_track)
 				probe["playlist"] = playlist.get("name") or "Playlist"
-				return 3 if expected_track_path(probe, output, fmt).exists() else 2
+				return 3 if library_track_path(probe, output, fmt).exists() else 2
 			indexed_tracks.sort(key=issue_order)
 			remaining = max(0, self.track_display_limit - displayed_tracks)
 			for display_index, (index, track) in enumerate(indexed_tracks[:remaining], start=displayed_tracks):
@@ -2306,7 +2317,7 @@ class LibraryModeDialog(QDialog):
 				candidate["playlist"] = playlist.get("name") or "Playlist"
 				has_error = bool(track.get("download_error") or track.get("last_error") or track.get("error"))
 				needs_review = bool(track.get("low_confidence_review"))
-				file_exists = expected_track_path(candidate, output, fmt).exists()
+				file_exists = library_track_path(candidate, output, fmt).exists()
 				if needs_review:
 					state = "Review"
 				elif has_error:
@@ -2575,6 +2586,7 @@ class LibraryModeDialog(QDialog):
 			old_volume_gain = int(track.get("audio_volume_gain", 0) or 0)
 			track["preferred_video_id"] = video_id or None
 			track["preferred_video_label"] = label or None
+			track["preferred_selection_locked"] = bool(video_id)
 			track["audio_volume_gain"] = max(-12, min(12, int(volume_gain)))
 			if old_video_id != video_id or old_volume_gain != track["audio_volume_gain"]:
 				track["force_redownload"] = True
@@ -2807,6 +2819,7 @@ class LibraryModeDialog(QDialog):
 			return
 		track["preferred_video_id"] = video_id
 		track["preferred_video_label"] = value.strip() or None
+		track["preferred_selection_locked"] = bool(video_id)
 		track["force_redownload"] = bool(video_id)
 		self._save()
 		self._refresh()
@@ -2837,7 +2850,7 @@ class LibraryModeDialog(QDialog):
 		all_playlist_tracks = enabled_tracks(self.library, selected_ids)
 		tracks = list(all_playlist_tracks)
 		output_path = pathlib.Path(output)
-		tracks = [track for track in tracks if track.get("force_redownload") or not expected_track_path(track, output_path, fmt).exists()]
+		tracks = [track for track in tracks if track.get("force_redownload") or not library_track_path(track, output_path, fmt).exists()]
 		if not tracks:
 			QMessageBox.information(self, "Playlist Current", "All enabled tracks in the selected playlist are already downloaded.")
 			return

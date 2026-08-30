@@ -315,3 +315,67 @@ def test_low_confidence_download_review_survives_rescan(tmp_path):
 	rescanned = updated["playlists"][0]["tracks"][0]
 	assert rescanned["low_confidence_review"] is True
 	assert rescanned["download_confidence"] == 0.41
+
+
+def test_youtube_alternative_and_downloaded_file_survive_rescan_identity_change(tmp_path):
+	library = new_library(output_dir=str(tmp_path / "music"))
+	library["format"] = "mp3"
+	added, errors = add_playlist_urls(library, [YOUTUBE_URL])
+	assert added and not errors
+	playlist_id = f"youtube_music:{added[0]['id']}"
+	playlist = merge_playlist_scan(
+		library, playlist_id, "Video Mix",
+		[{"title": "Song", "artists": "Channel", "album": "", "youtube_video_id": "source-video"}],
+	)
+	track = playlist["tracks"][0]
+	track["preferred_video_id"] = "selected-alternative"
+	track["preferred_video_label"] = "Selected alternative"
+	track["preferred_selection_locked"] = True
+	downloaded_file = expected_track_path(track, pathlib.Path(library["output_dir"]), "mp3")
+	downloaded_file.parent.mkdir(parents=True)
+	downloaded_file.write_bytes(b"audio")
+	library_path = tmp_path / "library.json"
+	save_library(library_path, library)
+	record_library_download_result(
+		library_path, playlist_id, track, downloaded=True,
+		match={"videoId": "selected-alternative", "title": "Chosen upload", "author": "Uploader"},
+	)
+
+	rescanned_library = load_library(library_path)
+	merge_playlist_scan(
+		rescanned_library, playlist_id, "Video Mix",
+		[{"title": "Song", "artists": "Channel", "album": "", "youtube_video_id": "changed-source-video"}],
+	)
+	rescanned = rescanned_library["playlists"][0]["tracks"][0]
+
+	assert rescanned["preferred_video_id"] == "selected-alternative"
+	assert rescanned["preferred_selection_locked"] is True
+	assert rescanned["downloaded_video_id"] == "selected-alternative"
+	assert pathlib.Path(rescanned["downloaded_path"]) == downloaded_file
+	assert library_status(rescanned_library, library["output_dir"], "mp3")["totals"]["missing"] == 0
+
+
+def test_successful_selected_alternative_removes_superseded_local_file(tmp_path):
+	library = new_library(output_dir=str(tmp_path / "music"))
+	library["format"] = "mp3"
+	add_playlist_urls(library, [URL])
+	playlist = merge_playlist_scan(library, "spotify:611N3KSs459UD5IVPH1ES4", "Mix", [_track("one")])
+	track = playlist["tracks"][0]
+	track["preferred_video_id"] = "new-choice"
+	track["preferred_selection_locked"] = True
+	old_file = pathlib.Path(library["output_dir"]) / "Mix" / "old-version.mp3"
+	old_file.parent.mkdir(parents=True)
+	old_file.write_bytes(b"old")
+	track["downloaded_path"] = str(old_file)
+	new_file = expected_track_path(track, pathlib.Path(library["output_dir"]), "mp3")
+	new_file.write_bytes(b"new")
+	library_path = tmp_path / "library.json"
+	save_library(library_path, library)
+
+	record_library_download_result(
+		library_path, "spotify:611N3KSs459UD5IVPH1ES4", track, downloaded=True,
+		match={"videoId": "new-choice", "title": "New version", "author": "Artist"},
+	)
+
+	assert not old_file.exists()
+	assert new_file.exists()

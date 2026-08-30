@@ -27,6 +27,7 @@ packages = ["csvmusic", "csvmusic.core", "csvmusic.ui"]
 
 [tool.setuptools.package-data]
 csvmusic = [
+	"core/*.c",
 	"../resources/ffmpeg/darwin/ffmpeg",
 	"../resources/ffmpeg/linux/ffmpeg",
 	"../resources/ffmpeg/windows/ffmpeg.exe",

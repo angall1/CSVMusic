@@ -267,6 +267,11 @@ def merge_playlist_scan(
 			continue
 		seen.add(key)
 		old = previous.get(key, {})
+		if not old:
+			text_key = _track_text_key(track)
+			matching_old = [candidate for candidate in playlist.get("tracks", []) if _track_text_key(candidate) == text_key]
+			if len(matching_old) == 1:
+				old = matching_old[0]
 		if old.get("custom_title"):
 			track["title"] = old.get("title") or track["title"]
 			track["custom_title"] = True
@@ -276,6 +281,7 @@ def merge_playlist_scan(
 		track["enabled"] = bool(old.get("enabled", True))
 		track["preferred_video_id"] = old.get("preferred_video_id") or track.get("preferred_video_id") or None
 		track["preferred_video_label"] = old.get("preferred_video_label") or track.get("preferred_video_label") or None
+		track["preferred_selection_locked"] = bool(old.get("preferred_selection_locked", False))
 		track["audio_volume_gain"] = int(old.get("audio_volume_gain", track.get("audio_volume_gain", 0)) or 0)
 		track["force_redownload"] = bool(old.get("force_redownload", False))
 		track["last_error"] = old.get("last_error") or None
@@ -284,6 +290,14 @@ def merge_playlist_scan(
 		track["downloaded_video_id"] = old.get("downloaded_video_id") or None
 		track["downloaded_video_title"] = old.get("downloaded_video_title") or None
 		track["downloaded_video_publisher"] = old.get("downloaded_video_publisher") or None
+		old_downloaded_path = old.get("downloaded_path")
+		if not old_downloaded_path and old:
+			old_probe = dict(old)
+			old_probe["playlist"] = str(playlist.get("name") or effective_name or "Playlist")
+			candidate = expected_track_path(old_probe, pathlib.Path(library.get("output_dir") or ""), str(library.get("format") or "mp3"))
+			if candidate.is_file():
+				old_downloaded_path = str(candidate)
+		track["downloaded_path"] = old_downloaded_path or None
 		track["low_confidence_review"] = bool(old.get("low_confidence_review", False))
 		track["download_confidence"] = old.get("download_confidence")
 		merged.append(track)
@@ -386,6 +400,23 @@ def record_library_download_result(
 			)
 			stored["low_confidence_review"] = bool(low_confidence)
 			stored["download_confidence"] = confidence
+			probe = dict(track)
+			probe["playlist"] = playlist.get("name") or "Playlist"
+			downloaded_file = expected_track_path(
+				probe, pathlib.Path(library.get("output_dir") or ""), str(library.get("format") or "mp3"),
+			)
+			if downloaded_file.is_file():
+				old_downloaded = str(stored.get("downloaded_path") or "").strip()
+				if old_downloaded and stored.get("preferred_selection_locked"):
+					old_path = pathlib.Path(old_downloaded)
+					output_root = pathlib.Path(library.get("output_dir") or "").resolve()
+					try:
+						old_resolved = old_path.resolve()
+						if old_resolved != downloaded_file.resolve() and old_resolved.is_relative_to(output_root) and old_resolved.is_file():
+							old_resolved.unlink()
+					except (OSError, RuntimeError):
+						pass
+				stored["downloaded_path"] = str(downloaded_file)
 		elif error:
 			stored["last_error"] = str(error).strip()[:4000]
 			stored["last_error_at"] = _now()
@@ -405,7 +436,7 @@ def library_status(library: dict, output_dir: str | pathlib.Path, fmt: str) -> d
 			track["playlist"] = playlist.get("name") or "Playlist"
 			if stored.get("force_redownload"):
 				status["redownload"] += 1
-			if expected_track_path(track, root, fmt).exists():
+			if library_track_path(track, root, fmt).exists():
 				status["downloaded"] += 1
 			else:
 				status["missing"] += 1
@@ -470,6 +501,20 @@ def _track_base_key(track: dict) -> str:
 	if spotify_id:
 		return f"spotify:{spotify_id}"
 	return f"text:{str(track.get('artists') or '').casefold().strip()}|{str(track.get('title') or '').casefold().strip()}"
+
+
+def _track_text_key(track: dict) -> str:
+	return f"{str(track.get('artists') or '').casefold().strip()}|{str(track.get('title') or '').casefold().strip()}"
+
+
+def library_track_path(track: dict, output_dir: str | pathlib.Path, fmt: str) -> pathlib.Path:
+	"""Resolve the file actually downloaded for a library row before its current expected filename."""
+	stored = str(track.get("downloaded_path") or "").strip()
+	if stored:
+		stored_path = pathlib.Path(stored)
+		if stored_path.is_file():
+			return stored_path
+	return expected_track_path(track, pathlib.Path(output_dir), fmt)
 
 
 def _track_key(track: dict) -> str:
