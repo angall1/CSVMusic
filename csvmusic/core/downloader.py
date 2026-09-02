@@ -95,6 +95,8 @@ def _run_capture(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 		stdout=subprocess.PIPE,
 		stderr=subprocess.PIPE,
 		text=True,
+		encoding="utf-8",
+		errors="replace",
 		**subprocess_kwargs()
 	)
 
@@ -272,6 +274,8 @@ def _run_ytdlp(cmd: list[str]) -> int:
 			stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE,
 			text=True,
+			encoding="utf-8",
+			errors="replace",
 			**subprocess_kwargs()
 		)
 		rc = proc.returncode
@@ -299,6 +303,8 @@ def _run_ytdlp(cmd: list[str]) -> int:
 					stdout=subprocess.PIPE,
 					stderr=subprocess.PIPE,
 					text=True,
+					encoding="utf-8",
+					errors="replace",
 					**subprocess_kwargs()
 				)
 				rc2 = proc2.returncode

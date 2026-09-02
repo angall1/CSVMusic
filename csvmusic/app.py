@@ -3,7 +3,7 @@ if __package__ in (None, ""):
 	import sys, pathlib
 	sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-import builtins, sys, time, subprocess, datetime, pathlib
+import builtins, sys, time, subprocess, pathlib
 
 # --- Hard block tkinter imports everywhere (some libs import it implicitly) ---
 _orig_import = builtins.__import__
@@ -28,7 +28,7 @@ except Exception:
 
 from PySide6.QtWidgets import QApplication, QSplashScreen
 from PySide6.QtGui import QPixmap, QIcon
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from csvmusic.core.paths import (
 	ffmpeg_path,
 	splash_image_path,
@@ -38,6 +38,10 @@ from csvmusic.core.paths import (
 from csvmusic.core.log import log
 from csvmusic.core.subprocess_env import subprocess_kwargs
 from csvmusic.version import APP_VERSION
+# Qt WebEngine-backed Library Mode must be imported before QApplication is
+# constructed. Importing it afterward can deadlock Qt initialization on
+# Windows, leaving only the bootstrap window visible.
+from csvmusic.ui.library_mode import LibraryModeDialog
 
 _WINDOWS = sys.platform.startswith("win")
 
@@ -49,6 +53,8 @@ def probe_ffmpeg() -> None:
 			[path, "-version"],
 			capture_output=True,
 			text=True,
+			encoding="utf-8",
+			errors="replace",
 			timeout=2,
 			**subprocess_kwargs()
 		)
@@ -85,6 +91,9 @@ def show_qt_splash(app: QApplication) -> QSplashScreen | None:
 	splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
 	splash.show()
 	app.processEvents()
+	# A slow or failed main-window initialization must never leave an
+	# always-on-top splash stranded over the desktop.
+	QTimer.singleShot(8000, splash.close)
 	return splash
 
 def main() -> int:
@@ -101,24 +110,30 @@ def main() -> int:
 		log(f"Application icon set from {icon_path}")
 	else:
 		log("Application icon missing; using default.")
-	qt_splash = show_qt_splash(app)
+	# Library Mode is lightweight enough to open directly. Do not place an
+	# always-on-top splash or synchronous FFmpeg process in front of it; tool
+	# availability is checked by the existing download preflight when needed.
 
-	try:
-		probe_ffmpeg()
-	except Exception:
-		pass
+	# Library Mode is the primary application. The legacy window remains
+	# available from Library Mode's header and shares the same core modules.
+	w = LibraryModeDialog()
+	legacy_windows = []
 
-	from csvmusic.ui.main_window import MainWindow
-	w = MainWindow()
+	def _open_legacy_mode() -> None:
+		from csvmusic.ui.main_window import MainWindow
+		window = MainWindow()
+		window.show()
+		window.raise_()
+		window.activateWindow()
+		legacy_windows.append(window)
+
+	w.legacy_mode_requested.connect(_open_legacy_mode)
 	if icon_path:
 		w.setWindowIcon(QIcon(str(icon_path)))
 	else:
-		log("Main window icon fallback in use.")
-	w.setWindowTitle(f"CSVMusic — v{APP_VERSION}  [{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+		log("Library window icon fallback in use.")
+	w.setWindowTitle(f"CSVMusic Library Mode — v{APP_VERSION}")
 	w.show()
-	if qt_splash is not None:
-		qt_splash.finish(w)
-
 	return app.exec()
 
 if __name__ == "__main__":

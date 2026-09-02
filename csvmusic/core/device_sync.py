@@ -1,8 +1,11 @@
 # tabs only
 import ctypes
+from ctypes import wintypes
 import datetime
 import os
 import pathlib
+import platform
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -16,6 +19,7 @@ from mutagen import File as MutagenFile
 from csvmusic.core.downloader import sanitize_name
 from csvmusic.core.log import log
 from csvmusic.core.library import library_track_path
+from csvmusic.core.paths import resource_base
 from csvmusic.core.settings import settings_path
 
 
@@ -88,8 +92,21 @@ def _unix_devices() -> list[PortableDevice]:
 	devices = []
 	for root in roots:
 		kind, description = _device_kind(root)
+		if sys.platform.startswith("darwin") and kind != "ipod_classic" and not _mac_volume_is_portable(root):
+			continue
 		devices.append(PortableDevice(root.name, root, kind, description))
 	return devices
+
+
+def _mac_volume_is_portable(root: pathlib.Path) -> bool:
+	try:
+		result = subprocess.run(["diskutil", "info", "-plist", str(root)], capture_output=True, timeout=3)
+		if result.returncode:
+			return False
+		info = plistlib.loads(result.stdout)
+		return bool(info.get("Ejectable") or info.get("RemovableMedia") or info.get("Internal") is False)
+	except Exception:
+		return False
 
 
 def discover_devices() -> list[PortableDevice]:
@@ -106,10 +123,15 @@ def _ready_playlists(library: dict) -> tuple[list[tuple[dict, list[tuple[dict, p
 		name = str(playlist.get("name") or "Playlist")
 		tracks = [track for track in playlist.get("tracks", []) if track.get("enabled", True)]
 		resolved = [(track, library_track_path(track, root, fmt)) for track in tracks]
-		if not resolved or any(not path.is_file() for _track, path in resolved):
+		# Never sync an existing-but-stale file while an alternative or audio
+		# change is still queued. The playlist becomes ready after Download
+		# successfully clears force_redownload.
+		if not resolved or any(track.get("force_redownload") or not path.is_file() for track, path in resolved):
 			skipped.append(name)
 			continue
 		ready.append((playlist, resolved))
+	ready.sort(key=lambda item: str(item[0].get("name") or "Playlist").casefold())
+	skipped.sort(key=str.casefold)
 	return ready, skipped
 
 
@@ -159,20 +181,39 @@ def _windows_to_wsl(path: pathlib.Path) -> str:
 	return f"/mnt/{drive[0].lower()}/{posix_tail}"
 
 
+def _ipod_platform_bundle() -> str:
+	machine = platform.machine().lower()
+	architecture = "arm64" if machine in {"arm64", "aarch64"} else "x86_64"
+	if sys.platform.startswith("win"):
+		return "linux-x86_64"
+	if sys.platform.startswith("darwin"):
+		return f"darwin-{architecture}"
+	return f"linux-{architecture}"
+
+
 def _ipod_tool_paths() -> tuple[pathlib.Path, pathlib.Path]:
-	base = pathlib.Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "Temp" / "csvmusic-libgpod"
-	return base / "ipod-sync", base / "root" / "usr" / "lib" / "x86_64-linux-gnu"
+	bundled = resource_base() / "ipod" / _ipod_platform_bundle()
+	bundled_helper = bundled / "bin" / "ipod-sync"
+	bundled_libraries = bundled / "lib"
+	if bundled_helper.is_file() and bundled_libraries.is_dir():
+		return bundled_helper, bundled_libraries
+	if sys.platform.startswith("win"):
+		base = pathlib.Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "Temp" / "csvmusic-libgpod"
+		return base / "ipod-sync", base / "root" / "usr" / "lib" / "x86_64-linux-gnu"
+	return bundled_helper, bundled_libraries
 
 
 def ipod_sync_available() -> tuple[bool, str]:
-	if not sys.platform.startswith("win"):
-		return False, "Classic-iPod database sync is currently available on Windows only."
-	if not shutil.which("wsl.exe"):
+	if sys.platform.startswith("win") and not shutil.which("wsl.exe"):
 		return False, "Windows Subsystem for Linux is required for experimental classic-iPod sync."
 	helper, libraries = _ipod_tool_paths()
 	if not helper.is_file() or not libraries.is_dir():
-		return False, "The experimental classic-iPod helper is not installed on this PC."
+		return False, f"This installation does not include the {_ipod_platform_bundle()} classic-iPod helper. Reinstall CSVMusic."
 	return True, ""
+
+
+def _ipod_helper_path(path: pathlib.Path) -> str:
+	return _windows_to_wsl(path) if sys.platform.startswith("win") else str(path.resolve())
 
 
 def _manifest(playlists: list[tuple[dict, list[tuple[dict, pathlib.Path]]]], selected: dict) -> bytes:
@@ -189,7 +230,7 @@ def _manifest(playlists: list[tuple[dict, list[tuple[dict, pathlib.Path]]]], sel
 					value = value[0] if value else fallback
 				return str(value or fallback or "").replace("\t", " ").replace("\r", " ").replace("\n", " ")
 			fields = (
-				_windows_to_wsl(path), tag("title", track.get("title")), tag("artist", track.get("artists")),
+				_ipod_helper_path(path), tag("title", track.get("title")), tag("artist", track.get("artists")),
 				tag("album", track.get("album")), index, round(float(getattr(info, "length", 0)) * 1000),
 				path.stat().st_size, round(float(getattr(info, "bitrate", 0)) / 1000), int(getattr(info, "sample_rate", 0)),
 				_ipod_track_identity(track),
@@ -210,12 +251,20 @@ def _ipod_track_identity(track: dict) -> str:
 
 def _run_ipod_helper(arguments: list[str], *, input_data: bytes | None = None) -> str:
 	helper, libraries = _ipod_tool_paths()
-	command = " ".join((
-		f"LD_LIBRARY_PATH='{_windows_to_wsl(libraries)}'",
-		f"'{_windows_to_wsl(helper)}'",
-		*(f"'{argument.replace(chr(39), '')}'" for argument in arguments),
-	))
-	result = subprocess.run(["wsl.exe", "-d", "Ubuntu", "--", "bash", "-lc", command], input=input_data, capture_output=True)
+	if sys.platform.startswith("win"):
+		command = " ".join((
+			f"LD_LIBRARY_PATH='{_windows_to_wsl(libraries)}'",
+			f"'{_windows_to_wsl(helper)}'",
+			*(f"'{argument.replace(chr(39), '')}'" for argument in arguments),
+		))
+		invocation = ["wsl.exe", "-d", "Ubuntu", "--", "bash", "-lc", command]
+		environment = None
+	else:
+		invocation = [str(helper), *arguments]
+		environment = os.environ.copy()
+		variable = "DYLD_LIBRARY_PATH" if sys.platform.startswith("darwin") else "LD_LIBRARY_PATH"
+		environment[variable] = os.pathsep.join(filter(None, (str(libraries), environment.get(variable, ""))))
+	result = subprocess.run(invocation, input=input_data, capture_output=True, env=environment)
 	if result.returncode:
 		raise RuntimeError(result.stderr.decode("utf-8", errors="replace").strip() or "The iPod helper failed.")
 	return result.stdout.decode("utf-8", errors="replace")
@@ -251,7 +300,7 @@ def list_device_playlists(device: PortableDevice, status: StatusCallback | None 
 	stage = _stage_ipod_control(device, status)
 	if status:
 		status("Parsing the staged iPod database and counting playlist songs...")
-	output = _run_ipod_helper(["inspect", _windows_to_wsl(stage)])
+	output = _run_ipod_helper(["inspect", _ipod_helper_path(stage)])
 	playlists: list[DevicePlaylist] = []
 	for line in output.splitlines():
 		parts = line.split("\t")
@@ -275,7 +324,7 @@ def delete_device_playlist(device: PortableDevice, playlist_name: str) -> None:
 	backup.mkdir(parents=True, exist_ok=False)
 	shutil.copytree(device.root / "iPod_Control" / "iTunes", backup / "iTunes")
 	stage = _stage_ipod_control(device)
-	_run_ipod_helper(["delete", _windows_to_wsl(stage), playlist_name])
+	_run_ipod_helper(["delete", _ipod_helper_path(stage), playlist_name])
 	database_source = stage / "iPod_Control" / "iTunes" / "iTunesDB"
 	database_destination = device.root / "iPod_Control" / "iTunes" / "iTunesDB"
 	shutil.copy2(database_source, database_destination)
@@ -318,7 +367,7 @@ def sync_ipod_classic(device: PortableDevice, library: dict, progress: ProgressC
 	for playlist, tracks in ready:
 		name = str(playlist.get("name") or "Playlist")
 		progress(done, total, f"Preparing {name}...")
-		_run_ipod_helper(["sync", _windows_to_wsl(stage), name], input_data=_manifest(ready, playlist))
+		_run_ipod_helper(["sync", _ipod_helper_path(stage), name], input_data=_manifest(ready, playlist))
 		done += len(tracks)
 		progress(done, total, f"Prepared {name}")
 	new_files = [path for path in stage_music.rglob("*") if path.is_file() and path.stat().st_size > 0]
@@ -371,26 +420,101 @@ def sync_device(device: PortableDevice, library: dict, progress: ProgressCallbac
 	return sync_mass_storage(device, library, progress)
 
 
+def _windows_volume_is_ready(drive: str) -> bool:
+	try:
+		return bool(ctypes.windll.kernel32.GetVolumeInformationW(
+			f"{drive}\\", None, 0, None, None, None, None, 0,
+		))
+	except Exception:
+		return pathlib.Path(f"{drive}\\").exists()
+
+
+def _windows_eject_volume(drive: str) -> None:
+	kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+	kernel32.CreateFileW.argtypes = [
+		wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+		wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+	]
+	kernel32.CreateFileW.restype = wintypes.HANDLE
+	kernel32.DeviceIoControl.argtypes = [
+		wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+		ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+	]
+	kernel32.DeviceIoControl.restype = wintypes.BOOL
+	kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+	kernel32.CloseHandle.restype = wintypes.BOOL
+	invalid_handle = wintypes.HANDLE(-1).value
+	handle = kernel32.CreateFileW(
+		f"\\\\.\\{drive}",
+		0x80000000 | 0x40000000,  # GENERIC_READ | GENERIC_WRITE
+		0x00000001 | 0x00000002,  # FILE_SHARE_READ | FILE_SHARE_WRITE
+		None, 3, 0, None,  # OPEN_EXISTING
+	)
+	if handle == invalid_handle:
+		raise ctypes.WinError(ctypes.get_last_error())
+	returned = wintypes.DWORD(0)
+	try:
+		locked = False
+		for _attempt in range(12):
+			if kernel32.DeviceIoControl(handle, 0x00090018, None, 0, None, 0, ctypes.byref(returned), None):  # FSCTL_LOCK_VOLUME
+				locked = True
+				break
+			time.sleep(0.25)
+		if not locked:
+			raise ctypes.WinError(ctypes.get_last_error())
+		if not kernel32.DeviceIoControl(handle, 0x00090020, None, 0, None, 0, ctypes.byref(returned), None):  # FSCTL_DISMOUNT_VOLUME
+			raise ctypes.WinError(ctypes.get_last_error())
+		if not kernel32.DeviceIoControl(handle, 0x002D4808, None, 0, None, 0, ctypes.byref(returned), None):  # IOCTL_STORAGE_EJECT_MEDIA
+			raise ctypes.WinError(ctypes.get_last_error())
+	finally:
+		kernel32.CloseHandle(handle)
+
+
 def eject_device(device: PortableDevice) -> None:
 	if sys.platform.startswith("win"):
-		drive = str(device.root)
-		script = (
-			"$s=New-Object -ComObject Shell.Application;"
-			f"$d=$s.Namespace(17).ParseName('{drive}');"
-			"$v=$d.Verbs()|Where-Object{($_.Name-replace '&','').Trim()-eq 'Eject'}|Select-Object -First 1;"
-			"if(-not $v){exit 2};$v.DoIt()"
-		)
-		result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True)
-		if result.returncode:
-			raise RuntimeError("Windows could not safely eject this device.")
-		for _attempt in range(20):
-			if not device.root.exists():
+		drive = str(device.root.drive or device.root).rstrip("\\/")
+		direct_error: Exception | None = None
+		try:
+			_windows_eject_volume(drive)
+		except Exception as exc:
+			direct_error = exc
+			script = (
+				"$s=New-Object -ComObject Shell.Application;"
+				f"$d=$s.Namespace(17).ParseName('{drive}');"
+				"$v=$d.Verbs()|Where-Object{($_.Name-replace '&','').Trim()-eq 'Eject'}|Select-Object -First 1;"
+				"if(-not $v){exit 2};$v.DoIt()"
+			)
+			result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True)
+			if result.returncode:
+				raise RuntimeError(f"Windows could not safely eject this device. {direct_error}") from direct_error
+		for _attempt in range(60):
+			if not _windows_volume_is_ready(drive):
 				return
 			time.sleep(0.25)
-		if device.root.exists():
-			raise RuntimeError("Windows accepted the eject request, but the device is still mounted.")
-		return
+		detail = f" The volume lock failed with: {direct_error}" if direct_error else ""
+		raise RuntimeError(f"Windows could not release {drive}; another program may still be using it.{detail}")
 	if sys.platform.startswith("darwin"):
 		subprocess.run(["diskutil", "eject", str(device.root)], check=True, capture_output=True)
 		return
-	raise RuntimeError("Automatic eject is not yet available for this Linux mount. Use your desktop's eject control.")
+	findmnt = subprocess.run(
+		["findmnt", "--noheadings", "--output", "SOURCE", "--target", str(device.root)],
+		capture_output=True, text=True, encoding="utf-8", errors="replace",
+	) if shutil.which("findmnt") else None
+	source = findmnt.stdout.strip().splitlines()[0] if findmnt and findmnt.returncode == 0 and findmnt.stdout.strip() else ""
+	if source and shutil.which("udisksctl"):
+		unmount = subprocess.run(["udisksctl", "unmount", "--block-device", source], capture_output=True)
+		if unmount.returncode:
+			raise RuntimeError(unmount.stderr.decode("utf-8", errors="replace").strip() or "Linux could not unmount the player.")
+		parent = subprocess.run(
+			["lsblk", "--noheadings", "--output", "PKNAME", source], capture_output=True,
+			text=True, encoding="utf-8", errors="replace",
+		).stdout.strip()
+		power_target = f"/dev/{parent}" if parent else source
+		power_off = subprocess.run(["udisksctl", "power-off", "--block-device", power_target], capture_output=True)
+		if power_off.returncode:
+			raise RuntimeError(power_off.stderr.decode("utf-8", errors="replace").strip() or "Linux unmounted the player but could not power it off.")
+		return
+	if shutil.which("gio"):
+		subprocess.run(["gio", "mount", "--unmount", str(device.root)], check=True, capture_output=True)
+		return
+	raise RuntimeError("No supported Linux eject utility was found (udisksctl or gio).")

@@ -121,6 +121,30 @@ def test_live_and_acoustic_versions_are_strongly_penalized_unless_requested():
 	assert ytmusic_match._score(requested, live) > ytmusic_match._score(requested, studio)
 
 
+def test_live_album_is_detected_when_song_title_omits_live_marker():
+	track = {"title": "War Pigs - 2009 Remaster", "artists": "Black Sabbath", "duration_ms": 475000}
+	studio = {"title": "War Pigs (2009 Remaster)", "author": "Black Sabbath", "album": {"name": "Paranoid"}, "duration_seconds": 475}
+	live = {"title": "War Pigs (2023 Remaster)", "author": "Black Sabbath", "album": {"name": "Live Evil"}, "duration_seconds": 559}
+	assert ytmusic_match._candidate_version_markers(live) >= {"live"}
+	assert "live" not in ytmusic_match._candidate_version_markers(studio)
+	assert ytmusic_match._score(track, studio) > ytmusic_match._score(track, live)
+
+
+def test_remaster_word_does_not_weaken_unrequested_live_penalty():
+	track = {"title": "War Pigs - 2009 Remaster", "artists": "Black Sabbath"}
+	studio = {"title": "War Pigs / Luke's Wall", "author": "Black Sabbath", "album": {"name": "Paranoid"}}
+	live = {"title": "War Pigs (2023 Remaster)", "author": "Black Sabbath", "album": {"name": "Live Evil"}}
+	assert ytmusic_match._score(track, studio) > ytmusic_match._score(track, live)
+
+
+def test_search_preserves_album_metadata_for_scoring_and_display():
+	yt = FakeYTMusic({
+		"songs": [{"videoId": "live", "title": "War Pigs (2023 Remaster)", "artists": [{"name": "Black Sabbath"}], "album": {"name": "Live Evil"}, "duration": "9:19"}],
+	})
+	result = ytmusic_match._search_filter(yt, "War Pigs", "songs", 10)[0]
+	assert result["album"] == {"name": "Live Evil"}
+
+
 def test_requested_extended_version_beats_single_versions():
 	track = {"title": "Hocus Pocus - Extended Version", "artists": "Focus", "duration_ms": 420000}
 	extended = {"title": "Hocus Pocus (Extended Version)", "author": "Focus", "duration_seconds": 420}

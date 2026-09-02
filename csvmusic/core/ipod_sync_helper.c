@@ -14,6 +14,25 @@ static void print_error(const char *context, GError *error)
 	}
 }
 
+static gint compare_playlist_names(gconstpointer left, gconstpointer right)
+{
+	const Itdb_Playlist *a = left;
+	const Itdb_Playlist *b = right;
+	return g_utf8_collate(a && a->name ? a->name : "", b && b->name ? b->name : "");
+}
+
+static void sort_playlists_alphabetically(Itdb_iTunesDB *db)
+{
+	Itdb_Playlist *master = itdb_playlist_mpl(db);
+	if (master) {
+		db->playlists = g_list_remove(db->playlists, master);
+	}
+	db->playlists = g_list_sort(db->playlists, compare_playlist_names);
+	if (master) {
+		db->playlists = g_list_prepend(db->playlists, master);
+	}
+}
+
 static Itdb_Track *find_track(Itdb_iTunesDB *db, const char *title, const char *artist)
 {
 	for (GList *node = db->tracks; node; node = node->next) {
@@ -72,6 +91,36 @@ static int inspect_ipod(const char *mountpoint)
 		Itdb_Playlist *playlist = node->data;
 		printf("PLAYLIST\t%s\t%u\n", playlist->name ? playlist->name : "", g_list_length(playlist->members));
 	}
+	itdb_free(db);
+	return 0;
+}
+
+static int find_tracks(const char *mountpoint, const char *query)
+{
+	GError *error = NULL;
+	Itdb_iTunesDB *db = itdb_parse(mountpoint, &error);
+	if (!db) {
+		print_error("Could not read the iPod database", error);
+		return 2;
+	}
+	gchar *needle = g_utf8_strdown(query, -1);
+	for (GList *node = db->tracks; node; node = node->next) {
+		Itdb_Track *track = node->data;
+		gchar *title = g_utf8_strdown(track->title ? track->title : "", -1);
+		if (strstr(title, needle)) {
+			printf("TRACK_DETAIL\t%s\t%s\t%u\t%d\t%s\t%s\n",
+				track->title ? track->title : "", track->artist ? track->artist : "", track->size,
+				track->tracklen, track->comment ? track->comment : "", track->ipod_path ? track->ipod_path : "");
+			for (GList *playlist_node = db->playlists; playlist_node; playlist_node = playlist_node->next) {
+				Itdb_Playlist *playlist = playlist_node->data;
+				if (g_list_find(playlist->members, track)) {
+					printf("MEMBER_OF\t%s\n", playlist->name ? playlist->name : "");
+				}
+			}
+		}
+		g_free(title);
+	}
+	g_free(needle);
 	itdb_free(db);
 	return 0;
 }
@@ -212,6 +261,7 @@ static int sync_playlist(const char *mountpoint, const char *playlist_name)
 		itdb_free(db);
 		return 3;
 	}
+	sort_playlists_alphabetically(db);
 	if (!itdb_write(db, &error)) {
 		print_error("Could not write the iPod database", error);
 		itdb_free(db);
@@ -232,6 +282,9 @@ int main(int argc, char **argv)
 	}
 	if (argc == 4 && strcmp(argv[1], "delete") == 0) {
 		return delete_playlist(argv[2], argv[3]);
+	}
+	if (argc == 4 && strcmp(argv[1], "find") == 0) {
+		return find_tracks(argv[2], argv[3]);
 	}
 	fprintf(stderr, "Usage: %s inspect MOUNTPOINT | sync MOUNTPOINT PLAYLIST < manifest.tsv | delete MOUNTPOINT PLAYLIST\n", argv[0]);
 	return 1;

@@ -849,9 +849,20 @@ class TrackAlternativesDialog(QDialog):
 		self.status.setText(error or f"Found {len(options)} alternatives. Double-click to preview in your browser.")
 		for option in options:
 			source_label = "YouTube Music" if option.get("source") == "music" else "YouTube"
-			item = QListWidgetItem(f"[{source_label}]  {option.get('title', 'Unknown')} — {option.get('author', '')}")
+			album = option.get("album")
+			if isinstance(album, dict):
+				album = album.get("name") or album.get("title") or ""
+			album = str(album or "").strip()
+			markers = set(option.get("version_markers") or [])
+			warning = ""
+			if "live" in markers:
+				warning = "  ⚠ LIVE"
+			elif "acoustic" in markers:
+				warning = "  ⚠ ACOUSTIC"
+			album_text = f"  •  Album: {album}" if album else ""
+			item = QListWidgetItem(f"[{source_label}]  {option.get('title', 'Unknown')} — {option.get('author', '')}{album_text}{warning}")
 			item.setData(Qt.UserRole, option)
-			item.setToolTip(f"Source: {source_label}")
+			item.setToolTip(f"Source: {source_label}" + (f"\nAlbum: {album}" if album else "") + (f"\nDetected version: {', '.join(sorted(markers))}" if markers else ""))
 			self.list.addItem(item)
 
 	def _open_item(self, item: QListWidgetItem) -> None:
@@ -1357,7 +1368,7 @@ class LibraryModeDialog(QDialog):
 		output_widget.setVisible(False)
 		add_layout.addWidget(output_widget)
 		add_layout.addStretch(1)
-		upper.addWidget(add_panel, 3)
+		upper.addWidget(add_panel, 2)
 
 		download_panel = QWidget()
 		download_panel.setObjectName("downloadPanel")
@@ -1405,7 +1416,7 @@ class LibraryModeDialog(QDialog):
 		download_buttons.addWidget(self.download_log_button)
 		download_layout.addLayout(download_buttons)
 		download_layout.addStretch(1)
-		upper.addWidget(download_panel, 5)
+		upper.addWidget(download_panel, 3)
 		layout.addLayout(upper)
 
 		splitter = QSplitter()
@@ -1504,7 +1515,7 @@ class LibraryModeDialog(QDialog):
 		splitter.addWidget(left)
 		splitter.addWidget(right)
 		left.setMinimumWidth(500)
-		splitter.setSizes([510, 770])
+		splitter.setSizes([512, 768])
 		layout.addWidget(splitter, 1)
 		self.status = QLabel()
 		self.status.setWordWrap(True)

@@ -42,6 +42,19 @@ def _candidate_artist_text(cand: Dict) -> str:
 			pass
 	return cand.get("author", "") or ""
 
+def _candidate_album_text(cand: Dict) -> str:
+	album = cand.get("album")
+	if isinstance(album, dict):
+		return str(album.get("name") or album.get("title") or "").strip()
+	if isinstance(album, str):
+		return album.strip()
+	return ""
+
+def _candidate_version_markers(cand: Dict) -> Set[str]:
+	# YouTube Music may hide a version in the song title while exposing it in
+	# the album, such as a clean song title attached to the album "Live Evil".
+	return _version_markers(" ".join((str(cand.get("title") or ""), _candidate_album_text(cand))))
+
 def _artist_names(artists) -> List[str]:
 	names: List[str] = []
 	if not isinstance(artists, list):
@@ -143,14 +156,16 @@ def _score(track: Dict, cand: Dict) -> float:
 	titleblob = _norm_text(cand_title + " " + cand_art)
 	requested_title = _norm_text(track.get("title") or "")
 	requested_versions = _version_markers(requested_title)
-	candidate_versions = _version_markers(cand_title)
+	candidate_versions = _candidate_version_markers(cand)
 	p_pen = 0.0
 	for t in _PENALTY_TERMS:
 		if t in titleblob:
 			p_pen += 0.10
 	if requested_versions:
-		p_pen += 0.34 * len(requested_versions - candidate_versions)
-		p_pen += 0.26 * len(candidate_versions - requested_versions)
+		for marker in requested_versions - candidate_versions:
+			p_pen += 0.08 if marker == "remaster" else 0.34
+		for marker in candidate_versions - requested_versions:
+			p_pen += 0.03 if marker == "remaster" else 0.26
 	else:
 		# Prefer the ordinary studio/catalog version when Spotify did not ask
 		# for a particular variant. Remasters are usually equivalent releases.
@@ -161,9 +176,6 @@ def _score(track: Dict, cand: Dict) -> float:
 				p_pen += 0.18
 	if "tribute" in titleblob and artist_overlap < 0.5:
 		p_pen += 0.25
-	if "remaster" in titleblob:
-		p_pen *= 0.6
-
 	version_boost = 0.14 if requested_versions and requested_versions == candidate_versions else 0.0
 	total = max(0.0, d_score * 0.35 + title_overlap * 0.35 + artist_overlap * 0.25 + ch_boost + version_boost - p_pen)
 	return min(total, 0.99)
@@ -250,6 +262,7 @@ def _search_filter(yt: YTMusic, q: str, search_filter: str, limit: int) -> List[
 			"author": author,
 			"channel": author,
 			"duration_seconds": _duration_s(r.get("duration_seconds") or r.get("duration")),
+			"album": r.get("album"),
 			"source": source,
 		})
 	return cands
@@ -290,6 +303,7 @@ def _rank_candidates(
 		s = _score(track, cand)
 		item = dict(cand)
 		item["score"] = s
+		item["version_markers"] = sorted(_candidate_version_markers(cand))
 		scored.append(item)
 
 	def priority(candidate: Dict) -> tuple[int, int, float, int]:

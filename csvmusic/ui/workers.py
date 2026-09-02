@@ -125,6 +125,8 @@ def _run_yt_dlp_command(cmd: list[str], *, timeout: int) -> subprocess.Completed
 		stdout=subprocess.PIPE,
 		stderr=subprocess.PIPE,
 		text=True,
+		encoding="utf-8",
+		errors="replace",
 		timeout=timeout,
 		**subprocess_kwargs()
 	)

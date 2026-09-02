@@ -35,6 +35,8 @@ def _run_version(path: str) -> str:
 		stdout=subprocess.PIPE,
 		stderr=subprocess.STDOUT,
 		text=True,
+		encoding="utf-8",
+		errors="replace",
 		timeout=_VERSION_PROBE_TIMEOUT_S,
 		**subprocess_kwargs(),
 	)

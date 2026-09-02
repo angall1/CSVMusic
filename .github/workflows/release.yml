@@ -23,7 +23,94 @@ env:
   YTDLP_VERSION: "2026.08.19"
 
 jobs:
+  ipod-helper:
+    name: Build portable iPod helper (${{ matrix.bundle }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            bundle: linux-x86_64
+            platform: linux
+          - os: macos-15
+            bundle: darwin-arm64
+            platform: darwin
+          - os: macos-15-intel
+            bundle: darwin-x86_64
+            platform: darwin
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_REF }}
+
+      - name: Build Linux helper and collect runtime libraries
+        if: ${{ matrix.platform == 'linux' }}
+        env:
+          IPOD_BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgpod-dev
+          root="resources/ipod/$IPOD_BUNDLE"
+          mkdir -p "$root/bin" "$root/lib" "$root/licenses"
+          gcc csvmusic/core/ipod_sync_helper.c -o "$root/bin/ipod-sync" \
+            $(pkg-config --cflags --libs libgpod-1.0 glib-2.0)
+          chmod +x "$root/bin/ipod-sync"
+          ldd "$root/bin/ipod-sync" | awk '$2 == "=>" && $3 ~ /^\// { print $1 "\t" $3 }' | \
+          while IFS=$'\t' read -r soname library; do
+            case "$soname" in
+              libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*) continue ;;
+            esac
+            cp -L "$library" "$root/lib/$soname"
+            package=$(dpkg-query -S "$library" 2>/dev/null | head -n 1 | cut -d: -f1 || true)
+            if [ -n "$package" ] && [ -f "/usr/share/doc/$package/copyright" ]; then
+              cp "/usr/share/doc/$package/copyright" "$root/licenses/${package}-copyright.txt"
+            fi
+          done
+          cp /usr/share/doc/libgpod-dev/copyright "$root/licenses/libgpod-copyright.txt"
+          { LD_LIBRARY_PATH="$PWD/$root/lib" "$root/bin/ipod-sync" 2>&1 || true; } | grep -q "Usage:"
+
+      - name: Build macOS helper and collect runtime libraries
+        if: ${{ matrix.platform == 'darwin' }}
+        env:
+          IPOD_BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          brew install autoconf automake libtool pkg-config intltool gettext glib gdk-pixbuf sqlite libplist libusb dylibbundler
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          curl --fail --location --retry 3 \
+            --output "$work/libgpod.tar.bz2" \
+            "https://downloads.sourceforge.net/project/gtkpod/libgpod/libgpod-0.8/libgpod-0.8.3.tar.bz2"
+          tar -xjf "$work/libgpod.tar.bz2" -C "$work"
+          prefix="$work/prefix"
+          cd "$work/libgpod-0.8.3"
+          ./configure --prefix="$prefix" --disable-dependency-tracking --disable-udev --disable-mono \
+            --without-hal --without-libimobiledevice
+          make -j"$(sysctl -n hw.logicalcpu)"
+          make install
+          cd "$GITHUB_WORKSPACE"
+          root="resources/ipod/$IPOD_BUNDLE"
+          mkdir -p "$root/bin" "$root/lib" "$root/licenses"
+          PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
+            cc csvmusic/core/ipod_sync_helper.c -o "$root/bin/ipod-sync" \
+            $(PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}" pkg-config --cflags --libs libgpod-1.0 glib-2.0)
+          chmod +x "$root/bin/ipod-sync"
+          dylibbundler -od -b -x "$root/bin/ipod-sync" -d "$root/lib" -p @executable_path/../lib/
+          cp "$work/libgpod-0.8.3/COPYING" "$root/licenses/libgpod-COPYING.txt"
+          "$root/bin/ipod-sync" 2>&1 | grep -q "Usage:"
+
+      - name: Upload portable iPod helper
+        uses: actions/upload-artifact@v4
+        with:
+          name: csvmusic-ipod-helper-${{ matrix.bundle }}
+          path: resources/ipod/${{ matrix.bundle }}
+          if-no-files-found: error
+
   build:
+    needs: ipod-helper
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -37,6 +124,7 @@ jobs:
             deno_target: x86_64-unknown-linux-gnu
             deno_platform: linux
             deno_binary: deno
+            ipod_bundle: linux-x86_64
             build_sdist: true
           - os: macos-15
             python_version: "3.11"
@@ -46,6 +134,7 @@ jobs:
             deno_target: aarch64-apple-darwin
             deno_platform: darwin
             deno_binary: deno
+            ipod_bundle: darwin-arm64
             build_sdist: false
           - os: macos-15-intel
             python_version: "3.11"
@@ -55,6 +144,7 @@ jobs:
             deno_target: x86_64-apple-darwin
             deno_platform: darwin
             deno_binary: deno
+            ipod_bundle: darwin-x86_64
             build_sdist: false
           - os: windows-latest
             python_version: "3.11"
@@ -63,6 +153,7 @@ jobs:
             deno_target: x86_64-pc-windows-msvc
             deno_platform: windows
             deno_binary: deno.exe
+            ipod_bundle: linux-x86_64
             build_sdist: false
 
     steps:
@@ -90,6 +181,12 @@ jobs:
 
       - name: Ensure license directory
         run: mkdir -p licenses
+
+      - name: Add portable iPod helper to release
+        uses: actions/download-artifact@v4
+        with:
+          name: csvmusic-ipod-helper-${{ matrix.ipod_bundle }}
+          path: resources/ipod/${{ matrix.ipod_bundle }}
 
       - name: Fetch Deno runtime
         env:

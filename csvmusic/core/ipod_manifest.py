@@ -20,8 +20,10 @@ def _tag(audio: object, name: str, fallback: object = "") -> str:
 	return _field(values or fallback)
 
 
-def windows_to_wsl(path: pathlib.Path) -> str:
+def helper_path(path: pathlib.Path) -> str:
 	resolved = path.resolve()
+	if not sys.platform.startswith("win"):
+		return str(resolved)
 	drive, tail = os.path.splitdrive(str(resolved))
 	if not drive:
 		return str(resolved).replace("\\", "/")
@@ -50,7 +52,7 @@ def emit_manifest(library_path: pathlib.Path, playlist_name: str) -> int:
 		bitrate = round(float(getattr(info, "bitrate", 0)) / 1000)
 		sample_rate = int(getattr(info, "sample_rate", 0))
 		fields = (
-			windows_to_wsl(path),
+			helper_path(path),
 			title,
 			artist,
 			album,

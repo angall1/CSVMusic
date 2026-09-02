@@ -18,10 +18,9 @@ DENO = ROOT / 'resources' / 'deno' / deno_platform / deno_name
 if DENO.exists():
     binaries.append((str(DENO), f'deno/{deno_platform}'))
 hiddenimports = []
-tmp_ret = collect_all('PySide6')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('shiboken6')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# PyInstaller's Qt hooks follow the PySide6 modules imported by CSVMusic.
+# Collecting all of PySide6 also bundles unused 3D, Bluetooth, PDF, Charts,
+# QML, and designer components, adding hundreds of megabytes to the release.
 tmp_ret = collect_all('yt_dlp')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('yt_dlp_ejs')
@@ -50,8 +49,6 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
     name='CSVMusic',
     debug=False,
@@ -67,11 +64,22 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=[str(APP_ICON)] if APP_ICON.exists() else None,
+    exclude_binaries=True,
+)
+
+bundle = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='CSVMusic',
 )
 
 if sys.platform.startswith('darwin'):
     app = BUNDLE(
-        exe,
+        bundle,
         name='CSVMusic.app',
         icon=str(MAC_ICON) if MAC_ICON.exists() else None,
         bundle_identifier='com.angall1.csvmusic',

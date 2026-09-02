@@ -5,6 +5,9 @@
     <td><img src="https://github.com/user-attachments/assets/4e91f3b1-dc2b-4f00-aa65-924fbc7dfd6f" alt="CSVMusic playlist view" width="420" /></td>
     <td><img src="https://github.com/user-attachments/assets/3912e9fd-7bb4-4d2b-9f8b-baaeea60e006" alt="CSVMusic queue view" width="420" /></td>
   </tr>
+  <tr>
+    <td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.0 Library Mode showing playlists and downloaded songs" width="860" /></td>
+  </tr>
 </table>
 
 <h2 align="center"><a href="https://buymeacoffee.com/agalli">☕ Enjoying CSVMusic? Buy me a coffee</a></h2>
@@ -23,21 +26,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.6.6
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.0
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.6.6/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -70,6 +73,36 @@ python -m csvmusic
 ```
 
 Python installations still require a supported graphical desktop environment for the Qt interface. Android, Andronix, and other phone-hosted Linux environments are not currently supported or tested.
+
+---
+
+# What's New In 1.7.0
+
+## Library-first workflow
+
+- Made Library Mode the default interface while retaining Legacy Mode from the header.
+- Added persistent multi-playlist management, live scan progress, playlist and song search, per-song metadata editing, alternative-source selection, and low-confidence review.
+- Added direct public playlist and album imports for Spotify, YouTube Music, YouTube, Apple Music, Deezer, and Amazon Music, alongside standalone TuneMyMusic/Exportify-compatible CSV imports.
+- Improved large-playlist scanning, incomplete-scan reporting, duplicate/repeated-track handling, removed-track reconciliation, and download-time UI responsiveness.
+
+## Download matching and output
+
+- Prefer YouTube Music candidates and expose each alternative's source and album metadata.
+- Penalize unintended live, acoustic, remix, edit, and mismatched versions while preserving explicitly requested versions.
+- Queue alternative selections for batch download, remove superseded local versions after successful replacement, and rebuild complete M3U playlists.
+- Added per-song volume adjustment, themed equalizer/settings interfaces, a searchable song list, live download states, and a detailed process/error log.
+
+## Portable-player sync
+
+- Added selective portable-player synchronization, Select All, progress reporting, device playlist inspection/deletion, optional automatic eject, and safer Windows eject handling.
+- Added experimental classic iPod database synchronization on Windows, Linux, and macOS with playlist replacement, selected-alternative identity tracking, verified writes, backups, and alphabetical playlist ordering.
+- Release ZIPs include a native libgpod helper for Linux and each macOS architecture. Windows includes the Linux helper and requires Windows Subsystem for Linux to be enabled.
+- Added folder/M3U8 synchronization for compatible USB mass-storage music players.
+
+## Safety and presentation
+
+- Added the first-run safety/support notice, large-playlist and YouTube-throttling guidance, updated tutorial/info pages, and direct support links.
+- Refined the retro skeuomorphic interface, card states, icons, scrollbars, spacing, long-title handling, and startup behavior.
 
 ---
 
@@ -109,22 +142,20 @@ Python installations still require a supported graphical desktop environment for
 
 # How It Works
 
-1. Open the app. First launch may take a few seconds.
-2. Click **Choose...** next to **Source**.
-3. Paste a supported playlist or album link, then load it.
-4. Choose an output folder.
-5. Click **Start**.
+1. Open the app. Library Mode is the default interface.
+2. Paste a supported public playlist or album link, or click **Add CSV...** for a compatible CSV export.
+3. Scan the added playlist, review any warnings or low-confidence matches, and select it.
+4. Click **Download**, confirm the output settings, then click **Start Download**.
 
 ## Library Mode
 
 Library Mode keeps multiple public Spotify, Apple Music, YouTube Music, and YouTube playlists in one persistent local catalog:
 
-1. Click **Choose...** next to **Source**, then choose **Library Mode**.
-2. Paste a public Spotify, Apple Music, YouTube Music, or YouTube playlist URL and click **Add Playlist**. Repeat for additional playlists; duplicate links are ignored.
-3. Choose the shared output folder and M4A or MP3 format.
-4. Use **Rescan All** or the refresh button beside one playlist. Spotify uses the public-page scanner; Apple Music and YouTube playlists load metadata directly without opening a browser.
-5. Check or uncheck individual tracks. The playlist table shows how many enabled tracks are missing from disk.
-6. Click **Use Enabled Tracks in CSVMusic**, then start the normal download.
+1. Paste a public playlist or album URL into **Add to library**, then click the green add button. Repeat for additional playlists; duplicate links are ignored.
+2. Use **Rescan All** or the refresh button beside one playlist. Spotify uses the public-page scanner; other supported sources load public metadata directly.
+3. Select a playlist and review its song states. Yellow entries need review; red entries still need downloading.
+4. Click **Download**, configure the shared output folder and format, then click **Start Download**.
+5. Use **Sync** if you want to copy selected completed playlists to a supported portable player.
 
 The library is saved locally as `library.json` in CSVMusic's settings folder by default. **Save As...** can create a portable library file. Rescanning preserves track selections and manual YouTube corrections while reporting added and removed tracks.
 
@@ -144,7 +175,7 @@ macOS or Linux:
 
 To fix a wrong download, select the track, click **Set YouTube Match...**, and paste the correct YouTube or YouTube Music video URL. That track is queued for replacement, and the replacement flag clears after a successful download. **Toggle Redownload** can also replace a track while retaining automatic matching.
 
-CSV import is still available when a service link is unsupported, private, incomplete, or when CSVMusic warns that a URL import may not contain every track:
+CSV import is a standalone import method and can be used at any time. It is also useful when a service link is private, unsupported, incomplete, or cannot expose every track:
 
 1. Click **Choose...** next to **Source**.
 2. Select **CSV File**.
@@ -189,7 +220,7 @@ Everything is ready to drop into iTunes, a phone, an MP3 player, or a local musi
 - Cookies are optional, but may help with age-restricted or sign-in-only videos.
 - Current YouTube extraction requires a supported JavaScript runtime. Packaged releases include Deno and the needed `yt-dlp` extras; source installs should use `pip install -e .` and provide Deno 2.3+ or Node 22+.
 - Private playlists or pages that hide track data may not import directly. If that happens, export a CSV from TuneMyMusic and load that instead.
-- Spotify's public website can change without notice. Library Mode uses an experimental browser-based scanner for public playlists; review any incomplete-scan warning before downloading. TuneMyMusic CSV import remains available as a fallback.
+- Spotify's public website can change without notice. Library Mode uses an experimental browser-based scanner for public playlists; review any incomplete-scan warning before downloading. TuneMyMusic CSV import remains available as an independent import method.
 
 ---
 

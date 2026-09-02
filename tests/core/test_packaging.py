@@ -60,3 +60,14 @@ def test_pyinstaller_collects_deno_and_ejs() -> None:
 
 	assert "resources' / 'deno'" in spec
 	assert "collect_all('yt_dlp_ejs')" in spec
+
+
+def test_release_workflow_builds_portable_ipod_helper() -> None:
+	workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+	assert "Build portable iPod helper" in workflow
+	assert "libgpod-dev" in workflow
+	assert "csvmusic-ipod-helper" in workflow
+	assert "linux-x86_64" in workflow
+	assert "darwin-arm64" in workflow
+	assert "darwin-x86_64" in workflow
+	assert "dylibbundler" in workflow

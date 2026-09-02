@@ -43,6 +43,8 @@ def _run_ffmpeg_version(path: str) -> subprocess.CompletedProcess[str]:
 		stdout=subprocess.PIPE,
 		stderr=subprocess.STDOUT,
 		text=True,
+		encoding="utf-8",
+		errors="replace",
 		timeout=_ffmpeg_probe_timeout(path),
 		**subprocess_kwargs()
 	)
@@ -95,6 +97,8 @@ def _check_yt_dlp(errors: List[str], warnings: List[str], details: Dict[str, str
 			stdout=subprocess.PIPE,
 			stderr=subprocess.STDOUT,
 			text=True,
+			encoding="utf-8",
+			errors="replace",
 			timeout=5,
 			**subprocess_kwargs()
 		)
