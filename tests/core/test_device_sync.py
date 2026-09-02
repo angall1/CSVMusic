@@ -109,7 +109,7 @@ def test_ipod_identity_only_marks_explicit_alternatives_for_replacement() -> Non
 
 
 def test_ipod_tool_paths_prefer_bundled_release_helper(monkeypatch, tmp_path: pathlib.Path) -> None:
-	bundle = tmp_path / "resources" / "ipod" / "linux-x86_64"
+	bundle = tmp_path / "resources" / "ipod" / _ipod_platform_bundle()
 	(bundle / "bin").mkdir(parents=True)
 	(bundle / "lib").mkdir()
 	(bundle / "bin" / "ipod-sync").write_bytes(b"helper")
