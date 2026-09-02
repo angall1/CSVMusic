@@ -104,7 +104,7 @@ jobs:
           chmod +x "$root/bin/ipod-sync"
           dylibbundler -od -b -x "$root/bin/ipod-sync" -d "$root/lib" -p @executable_path/../lib/
           cp "$work/libgpod-0.8.3/COPYING" "$root/licenses/libgpod-COPYING.txt"
-          "$root/bin/ipod-sync" 2>&1 | grep -q "Usage:"
+          { "$root/bin/ipod-sync" 2>&1 || true; } | grep -q "Usage:"
 
       - name: Upload portable iPod helper
         uses: actions/upload-artifact@v4
