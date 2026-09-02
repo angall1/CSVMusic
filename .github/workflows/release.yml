@@ -87,6 +87,9 @@ jobs:
             "https://downloads.sourceforge.net/project/gtkpod/libgpod/libgpod-0.8/libgpod-0.8.3.tar.bz2"
           tar -xjf "$work/libgpod.tar.bz2" -C "$work"
           prefix="$work/prefix"
+          mkdir -p "$work/pkgconfig"
+          ln -s "$(brew --prefix libplist)/lib/pkgconfig/libplist-2.0.pc" "$work/pkgconfig/libplist.pc"
+          export PKG_CONFIG_PATH="$work/pkgconfig:$(brew --prefix sqlite)/lib/pkgconfig:$(brew --prefix libplist)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cd "$work/libgpod-0.8.3"
           ./configure --prefix="$prefix" --disable-dependency-tracking --disable-udev --disable-mono \
             --without-hal --without-libimobiledevice
