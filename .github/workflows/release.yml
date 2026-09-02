@@ -184,6 +184,9 @@ jobs:
 
       - name: Test cross-platform library modules
         run: |
+          if [ "${{ matrix.ffmpeg_platform }}" = "linux" ]; then
+            export QT_QPA_PLATFORM=offscreen
+          fi
           python -m pytest -q
           python -c "from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile; from PySide6.QtWebEngineWidgets import QWebEngineView; from csvmusic.ui.library_mode import LibraryModeDialog; print('Library Mode and QtWebEngine imports OK')"
 
