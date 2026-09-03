@@ -178,3 +178,20 @@ def test_tag_file_writes_opus_metadata(monkeypatch, tmp_path):
 	assert tags["date"] == ["2026"]
 	assert tags["tracknumber"] == ["7"]
 	assert tags["discnumber"] == ["2"]
+
+
+def test_write_m3u_defaults_to_audio_folder(tmp_path):
+	track = {"title": "Song", "artists": "Artist", "album": "Album", "duration_ms": 1000}
+	path = downloader.write_m3u(tmp_path, "Mix", [track], "mp3")
+
+	assert path == tmp_path / "Mix" / "Mix.m3u8"
+	assert path.read_text(encoding="utf-8").splitlines()[-1] == "Artist - Song.mp3"
+
+
+def test_write_m3u_uses_relative_media_paths_from_custom_folder(tmp_path):
+	track = {"title": "Song", "artists": "Artist", "album": "Album", "duration_ms": 1000}
+	playlist_dir = tmp_path / "Playlists"
+	path = downloader.write_m3u(tmp_path / "Music", "Mix", [track], "mp3", playlist_output_dir=playlist_dir)
+
+	assert path == playlist_dir / "Mix.m3u8"
+	assert path.read_text(encoding="utf-8").splitlines()[-1] == "../Music/Mix/Artist - Song.mp3"

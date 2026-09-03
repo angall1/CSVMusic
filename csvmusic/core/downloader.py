@@ -891,8 +891,10 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		raise DownloadError(f"ffmpeg mp3 transcode failed: {detail}")
 	return dst
 
-def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict], ext: str, *, suffix: str = ".m3u8", encoding: str = "utf-8") -> pathlib.Path:
-	playlist_dir = out_dir / _safe(playlist_name)
+def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict], ext: str, *, suffix: str = ".m3u8", encoding: str = "utf-8", playlist_output_dir: pathlib.Path | None = None) -> pathlib.Path:
+	media_dir = out_dir / _safe(playlist_name)
+	media_dir.mkdir(parents=True, exist_ok=True)
+	playlist_dir = pathlib.Path(playlist_output_dir) if playlist_output_dir else media_dir
 	playlist_dir.mkdir(parents=True, exist_ok=True)
 	fp = playlist_dir / f"{_safe(playlist_name)}{suffix}"
 	with fp.open("w", encoding=encoding, errors="ignore") as f:
@@ -900,7 +902,12 @@ def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict]
 		f.write(f"#EXTPLAYLIST:{playlist_name}\n")
 		for t in tracks_done:
 			title = t["title"]; artists = t["artists"]; album = t["album"]
-			rel = pathlib.Path(f"{_safe(artists)} - {_safe(title)}.{ext}")
+			media_path = media_dir / f"{_safe(artists)} - {_safe(title)}.{ext}"
+			try:
+				rel = pathlib.Path(os.path.relpath(media_path.resolve(), playlist_dir.resolve()))
+			except ValueError:
+				# Windows cannot make a relative path across different drives.
+				rel = media_path.resolve()
 			dur = int(round((t.get("duration_ms") or 0)/1000))
 			f.write(f"#EXTINF:{dur},{artists} - {title}\n")
 			if t.get("isrc"): f.write(f"#EXTISRC:{t['isrc']}\n")

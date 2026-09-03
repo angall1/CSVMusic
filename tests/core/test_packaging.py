@@ -62,6 +62,20 @@ def test_pyinstaller_collects_deno_and_ejs() -> None:
 	assert "collect_all('yt_dlp_ejs')" in spec
 
 
+def test_cross_platform_theme_assets_are_packaged() -> None:
+	with (ROOT / "pyproject.toml").open("rb") as handle:
+		package_data = tomllib.load(handle)["tool"]["setuptools"]["package-data"]["csvmusic"]
+	spec = (ROOT / "CSVMusic.spec").read_text(encoding="utf-8")
+
+	assert "../resources/fonts/*" in package_data
+	assert "../licenses/*" in package_data
+	assert "('resources', 'resources')" in spec
+	assert "('licenses', 'licenses')" in spec
+	assert (ROOT / "resources" / "fonts" / "ComicNeue-Regular.ttf").is_file()
+	assert (ROOT / "resources" / "fonts" / "ComicNeue-Bold.ttf").is_file()
+	assert (ROOT / "licenses" / "ComicNeue-OFL.txt").is_file()
+
+
 def test_release_workflow_builds_portable_ipod_helper() -> None:
 	workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 	assert "Build portable iPod helper" in workflow

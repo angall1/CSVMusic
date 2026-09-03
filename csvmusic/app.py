@@ -42,6 +42,7 @@ from csvmusic.version import APP_VERSION
 # constructed. Importing it afterward can deadlock Qt initialization on
 # Windows, leaving only the bootstrap window visible.
 from csvmusic.ui.library_mode import LibraryModeDialog
+from csvmusic.ui.theme import apply_retro_theme
 
 _WINDOWS = sys.platform.startswith("win")
 
@@ -98,6 +99,7 @@ def show_qt_splash(app: QApplication) -> QSplashScreen | None:
 
 def main() -> int:
 	app = QApplication(sys.argv)
+	apply_retro_theme(app)
 	if _WINDOWS:
 		try:
 			import ctypes

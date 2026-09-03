@@ -1,4 +1,5 @@
 # tabs only
+import os
 import pathlib
 import sqlite3
 from functools import partial
@@ -1186,6 +1187,29 @@ class MainWindow(QMainWindow):
 		row3.addStretch(1)
 		vl.addLayout(row3)
 
+		m3u_row = QHBoxLayout()
+		m3u_row.setSpacing(self._px(6))
+		m3u_label = QLabel("Playlist files:")
+		m3u_label.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
+		m3u_label.setFixedWidth(self._px(110))
+		self.ed_m3u_out = QLineEdit()
+		self.ed_m3u_out.setReadOnly(True)
+		self.ed_m3u_out.setPlaceholderText("Same folder as the downloaded audio (default)")
+		self.ed_m3u_out.setFont(QFont(retro_font_family, default_pt + 1))
+		btn_m3u_out = QPushButton("Choose...")
+		btn_m3u_out.setFont(btn_font)
+		btn_m3u_out.clicked.connect(self.on_browse_m3u_out)
+		btn_m3u_same = QPushButton("Same as audio")
+		btn_m3u_same.setFont(btn_font)
+		btn_m3u_same.clicked.connect(self.on_clear_m3u_out)
+		m3u_row.addWidget(m3u_label)
+		m3u_row.addWidget(self.ed_m3u_out, 1)
+		m3u_row.addWidget(btn_m3u_out)
+		m3u_row.addWidget(btn_m3u_same)
+		vl.addLayout(m3u_row)
+		self.cb_m3u8.clicked.connect(self._on_m3u_toggled)
+		self.cb_m3u_plain.clicked.connect(self._on_m3u_toggled)
+
 		row4 = QHBoxLayout()
 		row4.setSpacing(self._px(8))
 		self.btn_start = QPushButton("START"); self.btn_start.clicked.connect(self.on_start)
@@ -1714,6 +1738,24 @@ class MainWindow(QMainWindow):
 			self._allow_path_persist = True
 			self._persist_settings(include_paths=True)
 
+	def on_browse_m3u_out(self) -> bool:
+		start = self.ed_m3u_out.text().strip() or self.ed_out.text().strip()
+		path = QFileDialog.getExistingDirectory(self, "Select Playlist File Folder", start)
+		if path:
+			self.ed_m3u_out.setText(path)
+			self._persist_settings()
+			return True
+		return False
+
+	def on_clear_m3u_out(self) -> None:
+		self.ed_m3u_out.clear()
+		self._persist_settings()
+
+	def _on_m3u_toggled(self, checked: bool) -> None:
+		if checked and not self.ed_m3u_out.text().strip():
+			self.on_browse_m3u_out()
+		self._persist_settings()
+
 	def _prompt_load_source_path(self) -> pathlib.Path | None:
 		initial = self.ed_load_source.text().strip() or self.ed_out.text().strip() or ""
 		dialog = ResumeLocationDialog(initial, self)
@@ -2061,6 +2103,9 @@ class MainWindow(QMainWindow):
 			"legacy_mp3_mode": self.combo_legacy_mp3_mode.currentData(),
 			"legacy_cover_art_mode": self.combo_legacy_cover_art.currentData(),
 			"format": "m4a" if self.rb_m4a.isChecked() else "mp3",
+			"write_m3u8": self.cb_m3u8.isChecked(),
+			"write_m3u_plain": self.cb_m3u_plain.isChecked(),
+			"m3u_output_dir": _norm(self.ed_m3u_out.text()),
 		}
 		if include_paths:
 			cfg["csv_path"] = _norm(self.ed_csv.text())
@@ -2204,6 +2249,13 @@ class MainWindow(QMainWindow):
 			self.rb_mp3.setChecked(stored_format == "mp3")
 			del block_m4a
 			del block_mp3
+		block_m3u8 = QSignalBlocker(self.cb_m3u8)
+		block_m3u = QSignalBlocker(self.cb_m3u_plain)
+		self.cb_m3u8.setChecked(bool(cfg.get("write_m3u8", False)))
+		self.cb_m3u_plain.setChecked(bool(cfg.get("write_m3u_plain", True)))
+		del block_m3u8
+		del block_m3u
+		self.ed_m3u_out.setText(str(cfg.get("m3u_output_dir") or ""))
 		self.btn_clear.setEnabled(bool(self.ed_csv.text().strip() or self.ed_out.text().strip()))
 
 	def on_start(self):
@@ -2304,6 +2356,7 @@ class MainWindow(QMainWindow):
 			legacy_options=self._legacy_export_options(),
 			force_download=bool(self.cb_force_download.isChecked()),
 			tracks_override=active_tracks,
+			m3u_output_dir=self.ed_m3u_out.text().strip() or None,
 			row_indices=queued_rows,
 			parent=self,
 		)
@@ -2985,12 +3038,12 @@ class MainWindow(QMainWindow):
 			self._remove_playlist_file(out_root, playlist_name, ".m3u")
 
 	def _write_playlist_file(self, out_root: pathlib.Path, playlist_name: str, entries: list[tuple[dict, pathlib.Path]], ext: str, suffix: str, encoding: str) -> None:
-		playlist_dir = out_root / sanitize_name(playlist_name)
+		media_dir = out_root / sanitize_name(playlist_name)
+		playlist_dir = pathlib.Path(self.ed_m3u_out.text().strip()) if self.ed_m3u_out.text().strip() else media_dir
 		playlist_dir.mkdir(parents=True, exist_ok=True)
 		file_path = playlist_dir / f"{sanitize_name(playlist_name)}{suffix}"
 		try:
 			lines = ["#EXTM3U", f"#EXTPLAYLIST:{playlist_name}"]
-			root_resolved = playlist_dir.resolve()
 			for track, abs_path in entries:
 				duration = int(round((track.get("duration_ms") or 0) / 1000))
 				artists = track.get("artists", "")
@@ -2998,10 +3051,9 @@ class MainWindow(QMainWindow):
 				lines.append(f"#EXTINF:{duration},{artists} - {title}")
 				abs_path = abs_path.resolve()
 				try:
-					path_obj = abs_path.relative_to(root_resolved)
+					path_str = os.path.relpath(abs_path, playlist_dir.resolve()).replace("\\", "/")
 				except ValueError:
-					path_obj = abs_path
-				path_str = str(path_obj)
+					path_str = abs_path.as_posix()
 				lines.append(path_str)
 			content = "\r\n".join(lines) + "\r\n"
 			with file_path.open("w", encoding=encoding, errors="ignore", newline="") as f:
@@ -3010,7 +3062,8 @@ class MainWindow(QMainWindow):
 			self.lbl_log.setText(f"Failed to update playlists: {exc}")
 
 	def _remove_playlist_file(self, out_root: pathlib.Path, playlist_name: str, suffix: str) -> None:
-		file_path = out_root / sanitize_name(playlist_name) / f"{sanitize_name(playlist_name)}{suffix}"
+		playlist_dir = pathlib.Path(self.ed_m3u_out.text().strip()) if self.ed_m3u_out.text().strip() else out_root / sanitize_name(playlist_name)
+		file_path = playlist_dir / f"{sanitize_name(playlist_name)}{suffix}"
 		if file_path.exists():
 			try:
 				file_path.unlink()

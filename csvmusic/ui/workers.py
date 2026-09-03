@@ -155,6 +155,7 @@ class PipelineWorker(QThread):
 	             force_download: bool = False,
 	             tracks_override: List[Dict] | None = None,
 	             m3u_tracks_override: List[Dict] | None = None,
+	             m3u_output_dir: str | None = None,
 	             row_indices: List[int] | None = None,
 	             parent: QObject | None = None):
 		super().__init__(parent)
@@ -176,6 +177,7 @@ class PipelineWorker(QThread):
 		self.force_download = bool(force_download)
 		self.tracks_override = tracks_override
 		self.m3u_tracks_override = m3u_tracks_override
+		self.m3u_output_dir = pathlib.Path(m3u_output_dir) if m3u_output_dir else None
 		self.row_indices = row_indices or []
 		self._stop = False
 		self._mitigation = YOUTUBE_MITIGATION_NONE
@@ -544,10 +546,10 @@ class PipelineWorker(QThread):
 						by_playlist.setdefault(completed_playlist, []).append(completed_track)
 				for completed_playlist, playlist_tracks in by_playlist.items():
 					if self.write_m3u8:
-						m3u = write_m3u(self.out_dir, completed_playlist, playlist_tracks, ext, suffix=".m3u8", encoding="utf-8")
+						m3u = write_m3u(self.out_dir, completed_playlist, playlist_tracks, ext, suffix=".m3u8", encoding="utf-8", playlist_output_dir=self.m3u_output_dir)
 						self.sig_log.emit(f"[m3u] wrote: {m3u}")
 					if self.write_m3u_plain:
-						m3u_plain = write_m3u(self.out_dir, completed_playlist, playlist_tracks, ext, suffix=".m3u", encoding="utf-8-sig")
+						m3u_plain = write_m3u(self.out_dir, completed_playlist, playlist_tracks, ext, suffix=".m3u", encoding="utf-8-sig", playlist_output_dir=self.m3u_output_dir)
 						self.sig_log.emit(f"[m3u] wrote: {m3u_plain}")
 			msg = "All tasks finished."
 			if self._stop:

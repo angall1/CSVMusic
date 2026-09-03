@@ -252,7 +252,7 @@ def _clear_search_icon() -> QIcon:
 
 
 def _header_button_icon(kind: str) -> QIcon:
-	pixmap = QPixmap(22, 22)
+	pixmap = QPixmap(24, 24)
 	pixmap.fill(Qt.transparent)
 	painter = QPainter(pixmap)
 	painter.setRenderHint(QPainter.Antialiasing)
@@ -266,11 +266,13 @@ def _header_button_icon(kind: str) -> QIcon:
 			painter.drawRoundedRect(QRectF(x - 2.5, knob_y - 2, 5, 4), 1, 1)
 			painter.setBrush(Qt.NoBrush)
 	elif kind == "sync":
-		painter.drawRoundedRect(QRectF(3, 3, 16, 12), 2, 2)
-		painter.drawLine(QPointF(11, 6), QPointF(11, 18))
-		painter.drawLine(QPointF(7, 14), QPointF(11, 18))
-		painter.drawLine(QPointF(15, 14), QPointF(11, 18))
-		painter.drawLine(QPointF(7, 20), QPointF(15, 20))
+		# Two clean chasing arrows remain recognizable at toolbar scale and
+		# avoid the overlapping player/arrow silhouette used previously.
+		painter.drawArc(QRectF(3.5, 3.5, 17, 17), 35 * 16, 125 * 16)
+		painter.drawArc(QRectF(3.5, 3.5, 17, 17), 215 * 16, 125 * 16)
+		painter.setBrush(QColor("#202020"))
+		painter.drawPolygon(QPolygonF([QPointF(20.5, 4), QPointF(20, 10), QPointF(15, 6.5)]))
+		painter.drawPolygon(QPolygonF([QPointF(3.5, 20), QPointF(4, 14), QPointF(9, 17.5)]))
 	elif kind == "settings":
 		painter.drawEllipse(QRectF(5, 5, 12, 12))
 		painter.drawEllipse(QRectF(9, 9, 4, 4))
@@ -287,12 +289,14 @@ def _header_button_icon(kind: str) -> QIcon:
 		painter.setFont(QFont("Times New Roman", 13, QFont.Bold))
 		painter.drawText(pixmap.rect(), Qt.AlignCenter, "i")
 	else:
+		# Open door with a separate exit arrow for Legacy Mode.
 		painter.setBrush(QColor("#f3f3f3"))
-		painter.drawRect(QRectF(3, 3, 13, 16))
-		painter.drawLine(QPointF(6, 7), QPointF(13, 7))
-		painter.drawLine(QPointF(18, 7), QPointF(18, 16))
-		painter.drawLine(QPointF(18, 16), QPointF(14.5, 12.5))
-		painter.drawLine(QPointF(18, 16), QPointF(21, 13))
+		painter.drawRect(QRectF(2.5, 2.5, 12, 19))
+		painter.drawLine(QPointF(6, 6), QPointF(11, 6))
+		painter.drawPoint(QPointF(11.5, 12))
+		painter.drawLine(QPointF(9, 16.5), QPointF(21, 16.5))
+		painter.drawLine(QPointF(17, 12.5), QPointF(21, 16.5))
+		painter.drawLine(QPointF(17, 20.5), QPointF(21, 16.5))
 	painter.end()
 	return QIcon(pixmap)
 
@@ -651,6 +655,19 @@ class LibrarySettingsDialog(QDialog):
 		self.m3u8.setChecked(bool(cfg.get("write_m3u8", True)))
 		for widget in (self.embed_art, self.force, self.m3u8):
 			audio_layout.addWidget(widget)
+		m3u_row = QHBoxLayout()
+		self.m3u_output = QLineEdit(str(cfg.get("m3u_output_dir") or ""))
+		self.m3u_output.setPlaceholderText("Same folder as each playlist's audio (default)")
+		self.m3u_output.setReadOnly(True)
+		m3u_browse = QPushButton("Choose folder...")
+		m3u_browse.clicked.connect(self._choose_m3u_output)
+		m3u_same = QPushButton("Same as audio")
+		m3u_same.clicked.connect(self.m3u_output.clear)
+		m3u_row.addWidget(self.m3u_output, 1)
+		m3u_row.addWidget(m3u_browse)
+		m3u_row.addWidget(m3u_same)
+		audio_layout.addLayout(m3u_row)
+		self.m3u8.clicked.connect(self._m3u_toggled)
 		general_layout.addWidget(audio_section)
 		general_layout.addStretch(1)
 		tabs.addTab(general, "General")
@@ -709,6 +726,18 @@ class LibrarySettingsDialog(QDialog):
 		if path:
 			self.output.setText(path)
 
+	def _choose_m3u_output(self) -> bool:
+		start = self.m3u_output.text().strip() or self.output.text().strip()
+		path = QFileDialog.getExistingDirectory(self, "Choose Playlist File Folder", start)
+		if path:
+			self.m3u_output.setText(path)
+			return True
+		return False
+
+	def _m3u_toggled(self, checked: bool) -> None:
+		if checked and not self.m3u_output.text().strip():
+			self._choose_m3u_output()
+
 	def _update_mp3_quality_label(self, value: int) -> None:
 		if value >= 10:
 			text = "10 = Best quality"
@@ -732,6 +761,7 @@ class LibrarySettingsDialog(QDialog):
 			"embed_art": self.embed_art.isChecked(),
 			"force_download_mode": self.force.isChecked(),
 			"write_m3u8": self.m3u8.isChecked(),
+			"m3u_output_dir": self.m3u_output.text().strip() or None,
 		})
 		self.accept()
 
@@ -2087,6 +2117,23 @@ class LibraryModeDialog(QDialog):
 				new_name,
 				self.library.get("output_dir") or None,
 			)
+			cfg = load_settings()
+			m3u_output = str(cfg.get("m3u_output_dir") or "").strip()
+			if m3u_output:
+				playlist_output_dir = pathlib.Path(m3u_output)
+				playlist_tracks = []
+				for source_track in updated.get("tracks", []):
+					if source_track.get("enabled", True):
+						entry = dict(source_track)
+						entry["playlist"] = updated["name"]
+						playlist_tracks.append(entry)
+				fmt = str(self.library.get("format") or "m4a")
+				for suffix, setting, encoding in ((".m3u8", "write_m3u8", "utf-8"), (".m3u", "write_m3u_plain", "utf-8-sig")):
+					old_file = playlist_output_dir / f"{sanitize_name(old_name)}{suffix}"
+					if old_file.exists():
+						old_file.unlink()
+					if cfg.get(setting, setting == "write_m3u8"):
+						write_m3u(pathlib.Path(self.library.get("output_dir") or ""), updated["name"], playlist_tracks, fmt, suffix=suffix, encoding=encoding, playlist_output_dir=playlist_output_dir)
 			self._save()
 		except Exception as exc:
 			log(f"library playlist rename failed id={playlist_id} old={old_name!r} new={new_name!r} error={exc}")
@@ -2556,9 +2603,9 @@ class LibraryModeDialog(QDialog):
 				playlist_track["playlist"] = playlist.get("name") or "Playlist"
 				playlist_tracks.append(playlist_track)
 			if cfg.get("write_m3u8", True):
-				write_m3u(output_root, playlist.get("name") or "Playlist", playlist_tracks, fmt, suffix=".m3u8", encoding="utf-8")
+				write_m3u(output_root, playlist.get("name") or "Playlist", playlist_tracks, fmt, suffix=".m3u8", encoding="utf-8", playlist_output_dir=cfg.get("m3u_output_dir"))
 			if cfg.get("write_m3u_plain", False):
-				write_m3u(output_root, playlist.get("name") or "Playlist", playlist_tracks, fmt, suffix=".m3u", encoding="utf-8-sig")
+				write_m3u(output_root, playlist.get("name") or "Playlist", playlist_tracks, fmt, suffix=".m3u", encoding="utf-8-sig", playlist_output_dir=cfg.get("m3u_output_dir"))
 			self._save()
 		except Exception as exc:
 			QMessageBox.warning(self, "Edit Failed", str(exc))
@@ -2929,6 +2976,7 @@ class LibraryModeDialog(QDialog):
 			audio_processing=audio, mp3_quality=int(cfg.get("mp3_quality", 0) or 0),
 			legacy_options=legacy, force_download=bool(cfg.get("force_download_mode", False)),
 			tracks_override=tracks, m3u_tracks_override=all_playlist_tracks,
+			m3u_output_dir=cfg.get("m3u_output_dir"),
 			row_indices=list(range(len(tracks))), parent=self,
 		)
 		self.download_worker.sig_total.connect(self._download_total)

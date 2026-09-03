@@ -2,7 +2,7 @@
 
 <table align="center">
   <tr>
-    <td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.0 Library Mode showing playlists and downloaded songs" width="860" /></td>
+	<td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.1 Library Mode showing playlists and downloaded songs" width="860" /></td>
   </tr>
 </table>
 
@@ -22,21 +22,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.7.0
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.1
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.1/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.1/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.1/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.7.0/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.1/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -69,6 +69,17 @@ python -m csvmusic
 ```
 
 Python installations still require a supported graphical desktop environment for the Qt interface. Android, Andronix, and other phone-hosted Linux environments are not currently supported or tested.
+
+---
+
+# What's New In 1.7.1
+
+## Cross-platform presentation and playlist files
+
+- Bundled Comic Neue and applied an explicit high-contrast Qt palette so fonts, controls, selections, and disabled states render consistently on Windows, macOS, and Linux desktop themes.
+- Added a remembered custom output folder for M3U and M3U8 playlist files in Library and Legacy modes, while retaining the existing alongside-audio default.
+- Playlist entries now use paths relative to the M3U file, supporting players that require separate music and playlist folders; cross-drive Windows layouts safely use absolute paths.
+- Refined the Sync and Legacy Mode header icons for clearer rendering at toolbar sizes.
 
 ---
 
