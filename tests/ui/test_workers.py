@@ -109,6 +109,21 @@ def test_track_volume_gain_enables_processing_without_global_equalizer(tmp_path)
 	assert worker._active_audio_processing["volume_gain"] == 4
 
 
+def test_library_artwork_falls_back_to_youtube_thumbnail(monkeypatch):
+	track = {"cover_url": "https://example.invalid/cover.jpg", "library_path": "library.json"}
+	monkeypatch.setattr(workers, "cover_art_url_bytes", lambda _url: None)
+	monkeypatch.setattr(workers, "yt_thumbnail_bytes", lambda video_id: f"thumbnail:{video_id}".encode())
+
+	assert workers._track_cover_bytes(track, "video-123") == b"thumbnail:video-123"
+
+
+def test_source_artwork_is_preferred_over_youtube_thumbnail(monkeypatch):
+	monkeypatch.setattr(workers, "cover_art_url_bytes", lambda _url: b"source-art")
+	monkeypatch.setattr(workers, "yt_thumbnail_bytes", lambda _video_id: b"youtube-art")
+
+	assert workers._track_cover_bytes({"cover_url": "https://example.test/cover.jpg"}, "video-123") == b"source-art"
+
+
 def test_preferred_music_link_records_song_title_instead_of_url(monkeypatch, tmp_path):
 	worker = _pipeline(tmp_path, force_download=False)
 	worker.tracks_override[0]["preferred_video_id"] = "selected-video"

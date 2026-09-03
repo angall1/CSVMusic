@@ -2,7 +2,7 @@
 
 <table align="center">
   <tr>
-	<td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.1 Library Mode showing playlists and downloaded songs" width="860" /></td>
+	<td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.2 Library Mode showing playlists and downloaded songs" width="860" /></td>
   </tr>
 </table>
 
@@ -22,21 +22,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.7.1
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.2
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.7.1/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.2/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.1/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.2/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.1/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.2/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.7.1/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.2/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -69,6 +69,17 @@ python -m csvmusic
 ```
 
 Python installations still require a supported graphical desktop environment for the Qt interface. Android, Andronix, and other phone-hosted Linux environments are not currently supported or tested.
+
+---
+
+# What's New In 1.7.2
+
+## Album artwork reliability
+
+- Fixed Library Mode downloads omitting embedded artwork when the original service artwork URL was unavailable ([#71](https://github.com/angall1/CSVMusic/issues/71)).
+- CSVMusic now prefers the source album cover and reliably falls back to the matched YouTube thumbnail.
+- Confirmed current Linux packaging includes the Qt/XCB cursor dependency associated with [#66](https://github.com/angall1/CSVMusic/issues/66).
+- Confirmed Apple Silicon releases fetch, architecture-check, and execute an ARM64 FFmpeg binary during every build, addressing [#68](https://github.com/angall1/CSVMusic/issues/68).
 
 ---
 

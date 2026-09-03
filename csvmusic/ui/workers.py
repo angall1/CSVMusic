@@ -75,6 +75,14 @@ def _legacy_cover_size(legacy_options: Dict | None, *, embed_art: bool) -> int:
 		return 450
 	return 600
 
+
+def _track_cover_bytes(track: Dict, video_id: str) -> bytes | None:
+	"""Prefer source artwork, but never suppress the YouTube fallback."""
+	cover = cover_art_url_bytes(track.get("cover_url"))
+	if cover:
+		return cover
+	return yt_thumbnail_bytes(video_id)
+
 def _legacy_cbr_bitrate(legacy_options: Dict | None) -> int | None:
 	if not legacy_options or not legacy_options.get("enabled"):
 		return None
@@ -459,9 +467,7 @@ class PipelineWorker(QThread):
 						try:
 							fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
 							self.sig_row_status.emit(row_idx, "Tagging…")
-							cover = cover_art_url_bytes(t.get("cover_url"))
-							if not cover and not t.get("library_path"):
-								cover = yt_thumbnail_bytes(vid)
+							cover = _track_cover_bytes(t, vid)
 							tag_file(fp, t, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
 							payload["match"] = candidate
 							break
@@ -495,9 +501,7 @@ class PipelineWorker(QThread):
 								try:
 									fp = self._download_with_profile(vid, dest_dir, base, self._mitigation)
 									self.sig_row_status.emit(row_idx, "Tagging…")
-									cover = cover_art_url_bytes(t.get("cover_url"))
-									if not cover and not t.get("library_path"):
-										cover = yt_thumbnail_bytes(vid)
+									cover = _track_cover_bytes(t, vid)
 									tag_file(fp, t, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
 									payload["match"] = candidate
 									break
@@ -616,7 +620,7 @@ class SingleDownloadWorker(QThread):
 			else:
 				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options))
 			self.sig_status.emit(self.row_idx, "Tagging…")
-			cover = yt_thumbnail_bytes(vid)
+			cover = _track_cover_bytes(self.track, vid)
 			tag_file(fp, self.track, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
 			self.sig_status.emit(self.row_idx, f"Done → {fp.name}")
 			payload = {
