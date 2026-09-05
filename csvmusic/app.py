@@ -3,7 +3,37 @@ if __package__ in (None, ""):
 	import sys, pathlib
 	sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-import builtins, sys, time, subprocess, pathlib
+import builtins, os, sys, time, subprocess, pathlib
+
+
+def configure_linux_webengine_environment(environment: dict[str, str] | None = None, platform_name: str | None = None) -> None:
+	"""Use Chromium software rendering on Linux desktops with fragile GPU drivers."""
+	env = environment if environment is not None else os.environ
+	platform_value = platform_name if platform_name is not None else sys.platform
+	if not platform_value.startswith("linux"):
+		return
+	flags = str(env.get("QTWEBENGINE_CHROMIUM_FLAGS") or "").split()
+	for flag in ("--disable-gpu", "--disable-gpu-compositing"):
+		if flag not in flags:
+			flags.append(flag)
+	env["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(flags)
+	env.setdefault("QT_OPENGL", "software")
+
+
+def configure_qt_logging(environment: dict[str, str] | None = None) -> None:
+	"""Hide Qt's harmless warnings for malformed image ICC metadata."""
+	env = environment if environment is not None else os.environ
+	rules = [rule.strip() for rule in str(env.get("QT_LOGGING_RULES") or "").split(";") if rule.strip()]
+	icc_rule = "qt.gui.icc.warning=false"
+	if icc_rule not in rules:
+		rules.append(icc_rule)
+	env["QT_LOGGING_RULES"] = ";".join(rules)
+
+
+# These values must be set before importing PySide6/QtWebEngine. The embedded
+# Spotify scanner is the only interface that needs Chromium rendering.
+configure_linux_webengine_environment()
+configure_qt_logging()
 
 # --- Hard block tkinter imports everywhere (some libs import it implicitly) ---
 _orig_import = builtins.__import__

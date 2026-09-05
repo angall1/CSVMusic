@@ -28,12 +28,13 @@ from csvmusic.core.downloader import sanitize_name, tag_file, write_m3u, youtube
 from csvmusic.core.youtube_url import YouTubeVideoUrlError, parse_youtube_video_id
 from csvmusic.ui.spotify_public_scrape import SpotifyPublicScrapeDialog
 from csvmusic.ui.device_sync import DeviceSyncDialog
-from csvmusic.ui.workers import AlternativesFetchWorker, PipelineWorker, SingleDownloadWorker
+from csvmusic.ui.workers import AlternativesFetchWorker, PipelineWorker, SingleDownloadWorker, UpdateCheckWorker
 from csvmusic.core.youtube_music_import import fetch_youtube_music_source
 from csvmusic.core.apple_music_import import fetch_apple_music_source
 from csvmusic.core.spotify_import import fetch_spotify_playlist
 from csvmusic.core.deezer_import import fetch_deezer_source
 from csvmusic.core.amazon_music_import import fetch_amazon_music_source
+from csvmusic.core.update_check import UpdateInfo, should_check_for_updates, update_check_timestamp
 from csvmusic.version import APP_VERSION
 
 
@@ -313,6 +314,16 @@ def _source_placeholder_icon(platform: str) -> QIcon:
 	painter.drawText(pixmap.rect(), Qt.AlignCenter, label)
 	painter.end()
 	return QIcon(pixmap)
+
+
+def _configure_playlist_status_widget(widget: QWidget, *, unscanned: bool) -> None:
+	widget.setFont(QFont("Comic Sans MS", 9))
+	if isinstance(widget, QLabel):
+		widget.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+	elif isinstance(widget, QPushButton):
+		widget.setStyleSheet(widget.styleSheet() + "\nQPushButton { text-align: right; padding-right: 5px; }")
+	widget.setMinimumWidth(100 if unscanned else 112)
+	widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
 
 def _settings_icon() -> QIcon:
@@ -1134,6 +1145,7 @@ class LibraryModeDialog(QDialog):
 		self.direct_worker: DirectLibraryScanWorker | None = None
 		self.download_worker: PipelineWorker | None = None
 		self.single_download_worker: SingleDownloadWorker | None = None
+		self.update_check_worker: UpdateCheckWorker | None = None
 		self.scan_dialog: LibraryScanProgressDialog | None = None
 		self.scan_cancelled = False
 		self.scan_warnings: list[str] = []
@@ -1159,10 +1171,52 @@ class LibraryModeDialog(QDialog):
 		self._refresh()
 		if not bool(load_settings().get("hide_startup_disclaimer", False)):
 			QTimer.singleShot(0, self._show_startup_disclaimer)
+		else:
+			QTimer.singleShot(1500, self._start_update_check)
 
 	def _show_startup_disclaimer(self) -> None:
 		dialog = StartupDisclaimerDialog(self)
 		dialog.exec()
+		QTimer.singleShot(1500, self._start_update_check)
+
+	def _start_update_check(self) -> None:
+		if self.update_check_worker is not None and self.update_check_worker.isRunning():
+			return
+		settings = load_settings()
+		if not should_check_for_updates(settings.get("last_update_check_at")):
+			return
+		save_settings({"last_update_check_at": update_check_timestamp()})
+		self.update_check_worker = UpdateCheckWorker(APP_VERSION, self)
+		self.update_check_worker.sig_done.connect(self._on_update_check_finished)
+		self.update_check_worker.start()
+
+	def _on_update_check_finished(self, update: UpdateInfo | None) -> None:
+		worker = self.update_check_worker
+		self.update_check_worker = None
+		if worker is not None:
+			worker.deleteLater()
+		if update is None:
+			return
+		settings = load_settings()
+		if settings.get("skipped_update_version") == update.version:
+			return
+		message = QMessageBox(self)
+		message.setWindowTitle("Update Available")
+		message.setIcon(QMessageBox.Information)
+		message.setText(f"CSVMusic {update.version} is available.")
+		message.setInformativeText(
+			f"You are currently running CSVMusic {APP_VERSION}. Would you like to open the download page?"
+		)
+		download_button = message.addButton("Download Update", QMessageBox.AcceptRole)
+		message.addButton("Remind Me Later", QMessageBox.RejectRole)
+		skip_button = message.addButton("Skip This Version", QMessageBox.DestructiveRole)
+		message.exec()
+		clicked = message.clickedButton()
+		if clicked is download_button:
+			if not QDesktopServices.openUrl(QUrl(update.url)):
+				QMessageBox.warning(self, "Open Failed", f"Could not open {update.url}")
+		elif clicked is skip_button:
+			save_settings({"skipped_update_version": update.version})
 
 	def _load_or_create(self) -> dict:
 		if self.library_path.exists():
@@ -2268,10 +2322,7 @@ class LibraryModeDialog(QDialog):
 			if error_label:
 				status_labels.append(error_label)
 			for status_label in status_labels:
-				status_label.setFont(QFont("Comic Sans MS", 9))
-				status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-				status_label.setMinimumWidth(100 if unscanned else 112)
-				status_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+				_configure_playlist_status_widget(status_label, unscanned=unscanned)
 			for status_label in status_labels:
 				status_layout.addWidget(status_label)
 			if error_count:
