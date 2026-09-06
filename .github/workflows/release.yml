@@ -292,7 +292,8 @@ jobs:
           lame_stage="$tmp_dir/lame-static"
           mkdir -p "$lame_stage/include/lame" "$lame_stage/lib/pkgconfig"
           cp "$lame_prefix/include/lame/"*.h "$lame_stage/include/lame/"
-          cp "$lame_prefix/lib/libmp3lame.a" "$lame_stage/lib/"
+          libtool -static -o "$lame_stage/lib/libmp3lame.a" \
+            "$lame_prefix/lib/libmp3lame.a" "$lame_prefix/lib/libmpghip.a"
           cat > "$lame_stage/lib/pkgconfig/libmp3lame.pc" <<EOF
           prefix=$lame_stage
           exec_prefix=\${prefix}
