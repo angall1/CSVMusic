@@ -293,13 +293,13 @@ jobs:
           mkdir -p "$lame_stage/include/lame" "$lame_stage/lib/pkgconfig"
           cp "$lame_prefix/include/lame/"*.h "$lame_stage/include/lame/"
           cp "$lame_prefix/lib/libmp3lame.a" "$lame_stage/lib/"
-          cat > "$lame_stage/lib/pkgconfig/lame.pc" <<EOF
+          cat > "$lame_stage/lib/pkgconfig/libmp3lame.pc" <<EOF
           prefix=$lame_stage
           exec_prefix=\${prefix}
           libdir=\${prefix}/lib
           includedir=\${prefix}/include
 
-          Name: lame
+          Name: libmp3lame
           Description: LAME MP3 encoder library
           Version: 3.100
           Libs: -L\${libdir} -lmp3lame
