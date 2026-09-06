@@ -289,19 +289,36 @@ jobs:
             "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
           tar -xf "$tmp_dir/ffmpeg.tar.xz" -C "$tmp_dir"
           lame_prefix="$(brew --prefix lame)"
+          lame_stage="$tmp_dir/lame-static"
+          mkdir -p "$lame_stage/include/lame" "$lame_stage/lib/pkgconfig"
+          cp "$lame_prefix/include/lame/"*.h "$lame_stage/include/lame/"
+          cp "$lame_prefix/lib/libmp3lame.a" "$lame_stage/lib/"
+          cat > "$lame_stage/lib/pkgconfig/lame.pc" <<EOF
+          prefix=$lame_stage
+          exec_prefix=\${prefix}
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: lame
+          Description: LAME MP3 encoder library
+          Version: 3.100
+          Libs: -L\${libdir} -lmp3lame
+          Cflags: -I\${includedir}
+          EOF
           cd "$tmp_dir/ffmpeg-${FFMPEG_VERSION}"
-          PKG_CONFIG_PATH="$lame_prefix/lib/pkgconfig" ./configure \
+          PKG_CONFIG_PATH="$lame_stage/lib/pkgconfig" ./configure \
             --disable-debug \
             --disable-doc \
             --disable-ffplay \
             --disable-ffprobe \
             --disable-network \
+            --disable-autodetect \
             --enable-static \
             --disable-shared \
             --enable-libmp3lame \
             --pkg-config-flags=--static \
-            --extra-cflags="-I$lame_prefix/include" \
-            --extra-ldflags="-L$lame_prefix/lib"
+            --extra-cflags="-I$lame_stage/include" \
+            --extra-ldflags="-L$lame_stage/lib"
           make -j"$(sysctl -n hw.ncpu)" ffmpeg
           cd "$GITHUB_WORKSPACE"
           mkdir -p resources/ffmpeg/darwin
