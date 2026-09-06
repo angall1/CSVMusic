@@ -303,10 +303,16 @@ jobs:
           Description: LAME MP3 encoder library
           Version: 3.100
           Libs: -L\${libdir} -lmp3lame
+          Libs.private: -lm
           Cflags: -I\${includedir}
           EOF
+          printf '#include <lame/lame.h>\nint main(void) { lame_global_flags *g = lame_init(); lame_set_VBR_quality(g, 4.0f); lame_close(g); return 0; }\n' \
+            > "$tmp_dir/lame-check.c"
+          cc "$tmp_dir/lame-check.c" -I"$lame_stage/include" -L"$lame_stage/lib" \
+            -lmp3lame -lm -o "$tmp_dir/lame-check"
+          "$tmp_dir/lame-check"
           cd "$tmp_dir/ffmpeg-${FFMPEG_VERSION}"
-          PKG_CONFIG_PATH="$lame_stage/lib/pkgconfig" ./configure \
+          if ! PKG_CONFIG_PATH="$lame_stage/lib/pkgconfig" ./configure \
             --disable-debug \
             --disable-doc \
             --disable-ffplay \
@@ -318,7 +324,10 @@ jobs:
             --enable-libmp3lame \
             --pkg-config-flags=--static \
             --extra-cflags="-I$lame_stage/include" \
-            --extra-ldflags="-L$lame_stage/lib"
+            --extra-ldflags="-L$lame_stage/lib"; then
+            tail -n 250 ffbuild/config.log
+            exit 1
+          fi
           make -j"$(sysctl -n hw.ncpu)" ffmpeg
           cd "$GITHUB_WORKSPACE"
           mkdir -p resources/ffmpeg/darwin
