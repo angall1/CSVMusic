@@ -2275,7 +2275,12 @@ class MainWindow(QMainWindow):
 			return
 		yt_override = self._yt_dlp_override()
 		ff_override = self._ffmpeg_override()
-		result = run_preflight_checks(yt_override, ff_override, skip_network=False)
+		result = run_preflight_checks(
+			yt_override,
+			ff_override,
+			skip_network=False,
+			require_mp3=self.rb_mp3.isChecked() and not self.cb_opus_output.isChecked(),
+		)
 		if result.errors:
 			lines = "\n - ".join(["Preflight failed due to:"] + result.errors)
 			QMessageBox.critical(self, "Preflight errors", lines)

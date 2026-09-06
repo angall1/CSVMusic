@@ -50,6 +50,24 @@ def _run_ffmpeg_version(path: str) -> subprocess.CompletedProcess[str]:
 	)
 
 
+def ffmpeg_supports_mp3(path: str) -> bool:
+	"""Return whether an FFmpeg executable exposes the LAME MP3 encoder."""
+	try:
+		proc = subprocess.run(
+			[path, "-hide_banner", "-encoders"],
+			stdout=subprocess.PIPE,
+			stderr=subprocess.STDOUT,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			timeout=_ffmpeg_probe_timeout(path),
+			**subprocess_kwargs()
+		)
+		return proc.returncode == 0 and "libmp3lame" in (proc.stdout or "")
+	except Exception:
+		return False
+
+
 def _system_ffmpeg_candidates() -> list[str]:
 	candidates: list[str] = []
 	which = shutil.which("ffmpeg")
@@ -110,7 +128,7 @@ def _check_yt_dlp(errors: List[str], warnings: List[str], details: Dict[str, str
 		warnings.append(f"Failed to query yt-dlp version: {exc}")
 
 
-def _check_ffmpeg(errors: List[str], warnings: List[str], details: Dict[str, str], override: str | None = None) -> None:
+def _check_ffmpeg(errors: List[str], warnings: List[str], details: Dict[str, str], override: str | None = None, *, require_mp3: bool = False) -> None:
 	def try_system_fallback(reason: Exception) -> bool:
 		for sys_ff in _system_ffmpeg_candidates():
 			if sys_ff == details.get("ffmpeg"):
@@ -119,6 +137,9 @@ def _check_ffmpeg(errors: List[str], warnings: List[str], details: Dict[str, str
 				proc = _run_ffmpeg_version(sys_ff)
 				if proc.returncode != 0:
 					warnings.append(f"System ffmpeg returned a non-zero exit code at {sys_ff}.")
+					continue
+				if require_mp3 and not ffmpeg_supports_mp3(sys_ff):
+					warnings.append(f"System ffmpeg does not include the libmp3lame encoder at {sys_ff}.")
 					continue
 				details["ffmpeg"] = sys_ff
 				warnings.append(f"Bundled ffmpeg failed ({reason}); using system ffmpeg at {sys_ff}.")
@@ -140,6 +161,14 @@ def _check_ffmpeg(errors: List[str], warnings: List[str], details: Dict[str, str
 		proc = _run_ffmpeg_version(path)
 		if proc.returncode != 0:
 			errors.append("ffmpeg responded with a non-zero exit code. Verify the bundled binary works.")
+		elif require_mp3 and not ffmpeg_supports_mp3(path):
+			reason = RuntimeError("the libmp3lame encoder is missing")
+			if not override and try_system_fallback(reason):
+				return
+			errors.append(
+				"ffmpeg cannot encode MP3 because the libmp3lame encoder is missing. "
+				"Install the corrected CSVMusic package or select a full FFmpeg build."
+			)
 	except Exception as exc:
 		if not override and try_system_fallback(exc):
 			return
@@ -184,12 +213,12 @@ def _check_js_runtime(errors: List[str], warnings: List[str], details: Dict[str,
 		)
 
 
-def run_preflight_checks(yt_dlp_override: str | None = None, ffmpeg_override: str | None = None, *, skip_network: bool = False) -> PreflightCheckResult:
+def run_preflight_checks(yt_dlp_override: str | None = None, ffmpeg_override: str | None = None, *, skip_network: bool = False, require_mp3: bool = False) -> PreflightCheckResult:
 	errors: List[str] = []
 	warnings: List[str] = []
 	details: Dict[str, str] = {}
 	_check_yt_dlp(errors, warnings, details, yt_dlp_override)
-	_check_ffmpeg(errors, warnings, details, ffmpeg_override)
+	_check_ffmpeg(errors, warnings, details, ffmpeg_override, require_mp3=require_mp3)
 	_check_js_runtime(errors, warnings, details, yt_dlp_override)
 	if not skip_network:
 		_check_network(warnings, details)

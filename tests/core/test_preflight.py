@@ -16,6 +16,7 @@ def test_bad_bundled_ffmpeg_uses_working_system_fallback(monkeypatch):
 		return subprocess.CompletedProcess([path, "-version"], 0, "ffmpeg version", "")
 
 	monkeypatch.setattr(preflight, "_run_ffmpeg_version", probe)
+	monkeypatch.setattr(preflight, "ffmpeg_supports_mp3", lambda _path: True)
 
 	preflight._check_ffmpeg(errors, warnings, details)
 
@@ -35,3 +36,22 @@ def test_invalid_explicit_ffmpeg_does_not_silently_change_tools(monkeypatch):
 
 	assert errors == ["ffmpeg override invalid: /chosen/ffmpeg"]
 	assert warnings == []
+
+
+def test_mp3_preflight_rejects_ffmpeg_without_lame(monkeypatch):
+	errors = []
+	warnings = []
+	details = {}
+	monkeypatch.setattr(preflight, "ffmpeg_path", lambda: "/bundle/ffmpeg")
+	monkeypatch.setattr(preflight, "_system_ffmpeg_candidates", lambda: [])
+	monkeypatch.setattr(
+		preflight,
+		"_run_ffmpeg_version",
+		lambda path: subprocess.CompletedProcess([path, "-version"], 0, "ffmpeg version", ""),
+	)
+	monkeypatch.setattr(preflight, "ffmpeg_supports_mp3", lambda _path: False)
+
+	preflight._check_ffmpeg(errors, warnings, details, require_mp3=True)
+
+	assert len(errors) == 1
+	assert "libmp3lame encoder is missing" in errors[0]

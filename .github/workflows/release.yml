@@ -20,6 +20,7 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
   RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
   DENO_VERSION: "2.9.4"
+  FFMPEG_VERSION: "8.1.2"
   YTDLP_VERSION: "2026.08.19"
 
 jobs:
@@ -278,23 +279,47 @@ jobs:
 
       - name: Fetch FFmpeg (macOS)
         if: ${{ matrix.ffmpeg_platform == 'darwin' }}
-        env:
-          FFMPEG_ARCH: ${{ matrix.ffmpeg_arch }}
         run: |
           set -euo pipefail
-          mkdir -p resources/ffmpeg/darwin
+          brew install lame nasm pkg-config
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
           curl --fail --location --retry 3 \
-            --output resources/ffmpeg/darwin/ffmpeg \
-            "https://github.com/binmgr/ffmpeg/releases/latest/download/ffmpeg-darwin-${FFMPEG_ARCH}"
+            --output "$tmp_dir/ffmpeg.tar.xz" \
+            "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          tar -xf "$tmp_dir/ffmpeg.tar.xz" -C "$tmp_dir"
+          lame_prefix="$(brew --prefix lame)"
+          cd "$tmp_dir/ffmpeg-${FFMPEG_VERSION}"
+          PKG_CONFIG_PATH="$lame_prefix/lib/pkgconfig" ./configure \
+            --disable-debug \
+            --disable-doc \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --disable-network \
+            --enable-static \
+            --disable-shared \
+            --enable-libmp3lame \
+            --pkg-config-flags=--static \
+            --extra-cflags="-I$lame_prefix/include" \
+            --extra-ldflags="-L$lame_prefix/lib"
+          make -j"$(sysctl -n hw.ncpu)" ffmpeg
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p resources/ffmpeg/darwin
+          cp "$tmp_dir/ffmpeg-${FFMPEG_VERSION}/ffmpeg" resources/ffmpeg/darwin/ffmpeg
+          cp "$tmp_dir/ffmpeg-${FFMPEG_VERSION}/COPYING.LGPLv2.1" licenses/FFMPEG-LGPL-2.1.txt
           chmod +x resources/ffmpeg/darwin/ffmpeg
           actual_arch="$(file resources/ffmpeg/darwin/ffmpeg)"
           echo "$actual_arch"
-          if [ "$FFMPEG_ARCH" = "arm64" ]; then
+          if [ "${{ matrix.ffmpeg_arch }}" = "arm64" ]; then
             echo "$actual_arch" | grep -Eq 'arm64|aarch64'
           else
             echo "$actual_arch" | grep -Eq 'x86_64|x86-64'
           fi
           resources/ffmpeg/darwin/ffmpeg -version | head -n 1
+          if otool -L resources/ffmpeg/darwin/ffmpeg | grep -E '/opt/homebrew|/usr/local/(opt|Cellar)'; then
+            echo "FFmpeg unexpectedly depends on a Homebrew library." >&2
+            exit 1
+          fi
 
       - name: Fetch FFmpeg (Windows)
         if: ${{ matrix.ffmpeg_platform == 'win' }}
@@ -329,6 +354,24 @@ jobs:
             Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
             Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
           }
+
+      - name: Verify packaged FFmpeg audio pipeline
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.ffmpeg_platform }}" = "win" ]; then
+            ffmpeg_bin="resources/ffmpeg/windows/ffmpeg.exe"
+          else
+            ffmpeg_bin="resources/ffmpeg/${{ matrix.ffmpeg_platform }}/ffmpeg"
+          fi
+          "$ffmpeg_bin" -hide_banner -encoders 2>&1 | grep -q 'libmp3lame'
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          "$ffmpeg_bin" -hide_banner -loglevel error \
+            -f lavfi -i "sine=frequency=440:duration=0.2" \
+            -af "bass=g=1,treble=g=1,loudnorm=I=-14:TP=-1:LRA=11,volume=-1dB" \
+            -codec:a libmp3lame -q:a 2 "$tmp_dir/test.mp3"
+          test -s "$tmp_dir/test.mp3"
 
       - name: Build source and wheel distributions
         if: ${{ matrix.build_sdist == true }}

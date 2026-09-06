@@ -22,7 +22,8 @@ from csvmusic.core.library import (
 )
 from csvmusic.core.log import log
 from csvmusic.core.settings import load_settings, save_settings, settings_path
-from csvmusic.core.paths import resource_base
+from csvmusic.core.paths import ffmpeg_path, resource_base
+from csvmusic.core.preflight import ffmpeg_supports_mp3
 from csvmusic.core.track_output import expected_track_path
 from csvmusic.core.downloader import sanitize_name, tag_file, write_m3u, youtube_batch_mitigation, youtube_risk_acknowledgement
 from csvmusic.core.youtube_url import YouTubeVideoUrlError, parse_youtube_video_id
@@ -2956,6 +2957,19 @@ class LibraryModeDialog(QDialog):
 		if not output:
 			return
 		fmt = str(self.library.get("format") or "m4a")
+		if fmt == "mp3":
+			try:
+				mp3_ready = ffmpeg_supports_mp3(ffmpeg_path())
+			except Exception:
+				mp3_ready = False
+			if not mp3_ready:
+				QMessageBox.critical(
+					self,
+					"MP3 Encoder Missing",
+					"The selected FFmpeg cannot encode MP3 because its libmp3lame encoder is missing. "
+					"Install the corrected CSVMusic package before retrying.",
+				)
+				return
 		all_playlist_tracks = enabled_tracks(self.library, selected_ids)
 		tracks = list(all_playlist_tracks)
 		output_path = pathlib.Path(output)

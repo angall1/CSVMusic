@@ -85,3 +85,11 @@ def test_release_workflow_builds_portable_ipod_helper() -> None:
 	assert "darwin-arm64" in workflow
 	assert "darwin-x86_64" in workflow
 	assert "dylibbundler" in workflow
+
+
+def test_release_workflow_builds_and_smoke_tests_mp3_encoder() -> None:
+	workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+	assert "--enable-libmp3lame" in workflow
+	assert "Verify packaged FFmpeg audio pipeline" in workflow
+	assert "-codec:a libmp3lame" in workflow
+	assert "test -s \"$tmp_dir/test.mp3\"" in workflow

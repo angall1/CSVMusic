@@ -2,7 +2,7 @@
 
 <table align="center">
   <tr>
-	<td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.3 Library Mode showing playlists and downloaded songs" width="860" /></td>
+	<td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.4 Library Mode showing playlists and downloaded songs" width="860" /></td>
   </tr>
 </table>
 
@@ -22,21 +22,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.7.3
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.4
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.7.3/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.4/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.3/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.4/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.3/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.4/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.7.3/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.4/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -69,6 +69,17 @@ python -m csvmusic
 ```
 
 Python installations still require a supported graphical desktop environment for the Qt interface. Android, Andronix, and other phone-hosted Linux environments are not currently supported or tested.
+
+---
+
+# What's New In 1.7.4
+
+## macOS MP3 hotfix
+
+- Fixed MP3 downloads failing on macOS with `Encoder not found` because the packaged FFmpeg binary lacked the LAME encoder.
+- macOS releases now build FFmpeg natively for Apple Silicon and Intel with a statically linked `libmp3lame` encoder.
+- Every platform release must now complete a real MP3 transcode using CSVMusic's equalizer and normalization filters before its package can be published.
+- Added an early, readable error when an externally selected or damaged FFmpeg binary cannot encode MP3.
 
 ---
 
