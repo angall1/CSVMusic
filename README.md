@@ -2,7 +2,7 @@
 
 <table align="center">
   <tr>
-	<td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.4 Library Mode showing playlists and downloaded songs" width="860" /></td>
+	<td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.5 Library Mode showing playlists and downloaded songs" width="860" /></td>
   </tr>
 </table>
 
@@ -22,21 +22,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.7.4
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.5
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.7.4/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.5/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.4/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.5/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.4/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.5/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.7.4/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.5/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -72,7 +72,7 @@ Python installations still require a supported graphical desktop environment for
 
 ---
 
-# What's New In 1.7.4
+# What's New In 1.7.5
 
 ## macOS MP3 hotfix
 
