@@ -18,6 +18,7 @@ tmp_ytdlp_test/
 
 # Test and local agent caches
 .pytest_cache/
+.test-runtime*/
 .agents/
 
 # PyInstaller outputs

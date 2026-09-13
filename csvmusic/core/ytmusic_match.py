@@ -81,6 +81,16 @@ def _overlap_ratio(needle: set, haystack: set) -> float:
 	return len(needle & haystack) / max(1, len(needle))
 
 
+def _contains_non_latin_letters(value: str) -> bool:
+	for char in value or "":
+		if not char.isalpha():
+			continue
+		name = unicodedata.name(char, "")
+		if "LATIN" not in name:
+			return True
+	return False
+
+
 def _version_markers(value: str) -> Set[str]:
 	text = _norm_text(value)
 	return {marker for marker, pattern in _VERSION_PATTERNS.items() if re.search(pattern, text, flags=re.I)}
@@ -178,6 +188,21 @@ def _score(track: Dict, cand: Dict) -> float:
 		p_pen += 0.25
 	version_boost = 0.14 if requested_versions and requested_versions == candidate_versions else 0.0
 	total = max(0.0, d_score * 0.35 + title_overlap * 0.35 + artist_overlap * 0.25 + ch_boost + version_boost - p_pen)
+	# YouTube Music frequently returns an official translated title for Japanese
+	# and other non-Latin catalog entries. Exact duration, a catalog-song result,
+	# and compatible version markers are stronger evidence than token overlap in
+	# that case, because the two titles may legitimately share no characters.
+	translated_catalog_match = (
+		_contains_non_latin_letters(track.get("title") or "")
+		and cand.get("source") == "music"
+		and sp_s > 0
+		and yt_s > 0
+		and abs(sp_s - yt_s) <= 3
+		and requested_versions == candidate_versions
+		and not any(term in titleblob for term in _PENALTY_TERMS)
+	)
+	if translated_catalog_match:
+		total = max(total, 0.68)
 	return min(total, 0.99)
 
 def _clean_title_artist(title: str, artists: str) -> str:

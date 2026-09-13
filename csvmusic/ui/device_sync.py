@@ -1,4 +1,6 @@
 # tabs only
+import pathlib
+
 from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -8,9 +10,10 @@ from PySide6.QtWidgets import (
 
 from csvmusic.core.device_sync import (
 	PortableDevice, SyncResult, delete_device_playlist, discover_devices, eject_device, ipod_sync_available,
-	list_device_playlists, sync_device,
+	device_playlist_state, list_device_playlists, sync_device,
 )
 from csvmusic.core.log import log
+from csvmusic.core.library import library_track_path
 from csvmusic.core.settings import load_settings, save_settings
 
 
@@ -127,7 +130,7 @@ class DeviceSyncDialog(QDialog):
 		selection_label = QLabel("Library playlists to sync")
 		selection_label.setFont(QFont("Comic Sans MS", 12, QFont.Bold))
 		self.select_all = QCheckBox("Select All")
-		self.select_all.setChecked(True)
+		self.select_all.setChecked(False)
 		self.select_all.toggled.connect(self._toggle_all_playlists)
 		selection_heading.addWidget(selection_label)
 		selection_heading.addStretch(1)
@@ -144,50 +147,7 @@ class DeviceSyncDialog(QDialog):
 			QTreeWidget { background: #ffffff; border: 2px inset #ffffff; }
 			QTreeWidget::item { padding: 0; margin: 0; }
 		""")
-		indexed_playlists = sorted(
-			enumerate(self.library.get("playlists", [])),
-			key=lambda pair: str(pair[1].get("name") or "Playlist").casefold(),
-		)
-		for index, playlist in indexed_playlists:
-			tracks = [track for track in playlist.get("tracks", []) if track.get("enabled", True)]
-			queued = sum(1 for track in tracks if track.get("force_redownload"))
-			item = QTreeWidgetItem([""])
-			item.setData(0, Qt.UserRole, index)
-			item.setSizeHint(0, QSize(0, 46))
-			self.library_playlist_list.addTopLevelItem(item)
-			card = QFrame()
-			card.setObjectName("syncLibraryPlaylistCard")
-			color = "#fff0a8" if queued else "#c8ddc8"
-			card.setStyleSheet(
-				f"QFrame#syncLibraryPlaylistCard {{ background: {color}; border-top: 2px solid #ffffff; "
-				"border-left: 2px solid #ffffff; border-right: 2px solid #404040; border-bottom: 2px solid #404040; }"
-			)
-			card_layout = QHBoxLayout(card)
-			card_layout.setContentsMargins(7, 3, 8, 3)
-			card_layout.setSpacing(7)
-			checkbox = QCheckBox()
-			checkbox.setChecked(True)
-			checkbox.setToolTip(f"Sync {playlist.get('name') or 'Playlist'}")
-			checkbox.toggled.connect(self._playlist_selection_changed)
-			icon = QLabel("♫")
-			icon.setAlignment(Qt.AlignCenter)
-			icon.setFixedSize(32, 32)
-			icon.setFont(QFont("Comic Sans MS", 14, QFont.Bold))
-			icon.setStyleSheet("background: #606060; color: white; border: 1px inset #404040;")
-			name_label = QLabel(str(playlist.get("name") or "Playlist"))
-			name_label.setFont(QFont("Comic Sans MS", 10, QFont.Bold))
-			name_label.setWordWrap(True)
-			name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-			count_text = f"{len(tracks)} tracks" + (f"\n{queued} awaiting download" if queued else "")
-			count_label = QLabel(count_text)
-			count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-			card_layout.addWidget(checkbox)
-			card_layout.addWidget(icon)
-			card_layout.addWidget(name_label, 1)
-			card_layout.addWidget(count_label)
-			if queued:
-				card.setToolTip("This playlist will be skipped until its queued replacements are downloaded.")
-			self.library_playlist_list.setItemWidget(item, 0, card)
+		self._populate_library_playlists(None)
 		choose_layout.addWidget(self.library_playlist_list, 1)
 		self.playlist_tabs.addTab(choose_page, "✓  Choose Playlists")
 		on_device_page = QWidget()
@@ -212,6 +172,7 @@ class DeviceSyncDialog(QDialog):
 		layout.addWidget(self.auto_eject)
 		buttons = QHBoxLayout()
 		self.sync_button = QPushButton("↧  Sync Selected Playlists")
+		self.sync_button.setEnabled(False)
 		self.sync_button.setStyleSheet("""
 			QPushButton { background: #008000; color: white; font-weight: bold; }
 			QPushButton:disabled { background: #8c8c8c; color: #d8d8d8; border: 2px inset #b0b0b0; }
@@ -228,6 +189,75 @@ class DeviceSyncDialog(QDialog):
 		buttons.addStretch(1)
 		buttons.addWidget(self.close_button)
 		layout.addLayout(buttons)
+
+	def _populate_library_playlists(self, device_playlists: dict[str, object] | None) -> None:
+		self.library_playlist_list.clear()
+		rows = []
+		for index, playlist in enumerate(self.library.get("playlists", [])):
+			name = str(playlist.get("name") or "Playlist")
+			tracks = [track for track in playlist.get("tracks", []) if track.get("enabled", True)]
+			output_root = pathlib.Path(self.library.get("output_dir") or "")
+			fmt = str(self.library.get("format") or "mp3")
+			local_tracks = []
+			for source_track in tracks:
+				track = dict(source_track)
+				track["playlist"] = name
+				local_tracks.append(track)
+			incomplete = not local_tracks or any(
+				track.get("force_redownload") or not library_track_path(track, output_root, fmt).is_file()
+				for track in local_tracks
+			)
+			device_playlist = None if device_playlists is None else device_playlists.get(name.casefold())
+			device_count = getattr(device_playlist, "track_count", None)
+			if device_playlists is None:
+				state = "CHECKING"
+			elif incomplete:
+				state = "NOT DOWNLOADED"
+			else:
+				state = device_playlist_state(playlist, device_playlist)
+			rows.append((0 if state in ("NEW", "CHANGED", "NOT DOWNLOADED") else 1, name.casefold(), index, playlist, tracks, state, device_count))
+		for _priority, _sort_name, index, playlist, tracks, state, device_count in sorted(rows):
+			queued = sum(1 for track in tracks if track.get("force_redownload"))
+			item = QTreeWidgetItem([""])
+			item.setData(0, Qt.UserRole, index)
+			item.setSizeHint(0, QSize(0, 52))
+			self.library_playlist_list.addTopLevelItem(item)
+			card = QFrame()
+			card.setObjectName("syncLibraryPlaylistCard")
+			color = "#e7b6b6" if state == "NOT DOWNLOADED" else "#fff0a8" if state in ("NEW", "CHANGED") else "#c8ddc8"
+			card.setStyleSheet(
+				f"QFrame#syncLibraryPlaylistCard {{ background: {color}; border-top: 2px solid #ffffff; "
+				"border-left: 2px solid #ffffff; border-right: 2px solid #404040; border-bottom: 2px solid #404040; }"
+			)
+			card_layout = QHBoxLayout(card)
+			card_layout.setContentsMargins(7, 3, 8, 3)
+			card_layout.setSpacing(7)
+			checkbox = QCheckBox()
+			checkbox.setChecked(state in ("NEW", "CHANGED"))
+			checkbox.setToolTip(f"Sync {playlist.get('name') or 'Playlist'}")
+			checkbox.toggled.connect(self._playlist_selection_changed)
+			icon = QLabel("♫")
+			icon.setAlignment(Qt.AlignCenter)
+			icon.setFixedSize(32, 32)
+			icon.setFont(QFont("Comic Sans MS", 14, QFont.Bold))
+			icon.setStyleSheet("background: #606060; color: white; border: 1px inset #404040;")
+			name_label = QLabel(str(playlist.get("name") or "Playlist"))
+			name_label.setFont(QFont("Comic Sans MS", 10, QFont.Bold))
+			name_label.setWordWrap(True)
+			name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+			device_text = "" if device_count is None else f" / device {device_count}"
+			count_label = QLabel(f"{len(tracks)} tracks{device_text}\n{state}" + (f" • {queued} awaiting download" if queued else ""))
+			count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+			count_label.setStyleSheet("font-weight: bold; color: #805000;" if state in ("NEW", "CHANGED", "NOT DOWNLOADED") else "color: #303030;")
+			card_layout.addWidget(checkbox)
+			card_layout.addWidget(icon)
+			card_layout.addWidget(name_label, 1)
+			card_layout.addWidget(count_label)
+			if queued:
+				card.setToolTip("This playlist will be skipped until its queued replacements are downloaded.")
+			self.library_playlist_list.setItemWidget(item, 0, card)
+		if hasattr(self, "sync_button"):
+			self._playlist_selection_changed(False)
 
 	def _selected_playlist_indexes(self) -> set[int]:
 		selected: set[int] = set()
@@ -330,6 +360,8 @@ class DeviceSyncDialog(QDialog):
 		self.playlist_worker.start()
 
 	def _device_playlists_loaded(self, playlists: list) -> None:
+		device_playlists = {playlist.name.casefold(): playlist for playlist in playlists}
+		self._populate_library_playlists(device_playlists)
 		for playlist in sorted(playlists, key=lambda entry: entry.name.casefold()):
 			item = QTreeWidgetItem([playlist.name])
 			item.setData(0, Qt.UserRole, playlist.name)

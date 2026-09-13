@@ -21,6 +21,7 @@ from csvmusic.core.downloader import (
 from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp, INTERNAL_YTDLP
 from csvmusic.core.subprocess_env import subprocess_kwargs
 from csvmusic.core.update_check import UpdateInfo, fetch_available_update
+from csvmusic.core.track_output import expected_track_path, track_filename_base
 
 _FORCE_FALLBACK_MIN_SCORE = 0.45
 
@@ -453,7 +454,7 @@ class PipelineWorker(QThread):
 				fallback_attempts_enabled = self.force_download and len(candidate_sequence) > 1
 
 				try:
-					base = f"{artists} - {title}"
+					base = track_filename_base(t)
 					last_err = None
 					fp = None
 					cover = None
@@ -541,11 +542,7 @@ class PipelineWorker(QThread):
 				manifest_tracks = self.m3u_tracks_override if self.m3u_tracks_override is not None else done_tracks
 				for completed_track in manifest_tracks:
 					completed_playlist = self.playlist or completed_track.get("playlist") or playlist_name
-					completed_base = f"{completed_track.get('artists', '')} - {completed_track.get('title', '')}"
-					expected_file = (
-						self.out_dir / (sanitize_name(completed_playlist) or "Playlist") /
-						f"{sanitize_name(completed_base)}.{ext}"
-					)
+					expected_file = expected_track_path(completed_track, self.out_dir, ext)
 					if expected_file.exists():
 						by_playlist.setdefault(completed_playlist, []).append(completed_track)
 				for completed_playlist, playlist_tracks in by_playlist.items():
@@ -604,7 +601,7 @@ class SingleDownloadWorker(QThread):
 			dest_dir = self.out_dir / safe_playlist
 			dest_dir.mkdir(parents=True, exist_ok=True)
 
-			base = f"{self.track.get('artists','')} - {self.track.get('title','')}"
+			base = track_filename_base(self.track)
 			vid = self.match.get("videoId")
 			self.sig_status.emit(self.row_idx, f"Downloading ({self.fmt})…")
 			if self.cookies_file:

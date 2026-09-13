@@ -1,6 +1,6 @@
 import pathlib
 
-from csvmusic.core.device_sync import PortableDevice, _ipod_helper_path, _ipod_platform_bundle, _ipod_tool_paths, _ipod_track_identity, _ready_playlists, _run_ipod_helper, delete_device_playlist, list_device_playlists, sync_mass_storage
+from csvmusic.core.device_sync import DevicePlaylist, PortableDevice, _ipod_helper_path, _ipod_platform_bundle, _ipod_tool_paths, _ipod_track_identity, _ready_playlists, _run_ipod_helper, delete_device_playlist, device_playlist_state, ipod_sync_available, list_device_playlists, sync_mass_storage
 
 
 def test_mass_storage_sync_copies_ready_playlists_and_skips_incomplete(tmp_path: pathlib.Path) -> None:
@@ -103,9 +103,41 @@ def test_ipod_identity_only_marks_explicit_alternatives_for_replacement() -> Non
 	assert _ipod_track_identity({
 		"youtube_video_id": "source", "preferred_video_id": "replacement",
 	}) == "selected:replacement"
+
+
+def test_device_playlist_state_detects_new_count_and_order_changes() -> None:
+	playlist = {
+		"name": "Mix",
+		"tracks": [
+			{"title": "One", "artists": "Artist", "downloaded_video_id": "one"},
+			{"title": "Two", "artists": "Artist", "downloaded_video_id": "two"},
+		],
+	}
+	assert device_playlist_state(playlist, None) == "NEW"
+	assert device_playlist_state(playlist, DevicePlaylist("Mix", 1)) == "CHANGED"
+	assert device_playlist_state(playlist, DevicePlaylist("Mix", 2, ("auto:one", "auto:two"))) == "CURRENT"
+	assert device_playlist_state(playlist, DevicePlaylist("Mix", 2, ("auto:two", "auto:one"))) == "CHANGED"
+	assert device_playlist_state(
+		playlist,
+		DevicePlaylist("Mix", 2, ("text:Artist|One", "text:Artist|Two")),
+	) == "CURRENT"
 	assert _ipod_track_identity({
 		"preferred_video_id": "replacement", "preferred_selection_locked": True,
 	}) == "selected:replacement"
+
+
+def test_legacy_text_identity_does_not_accept_an_unverified_alternative() -> None:
+	playlist = {
+		"name": "Mix",
+		"tracks": [{
+			"title": "Song", "artists": "Artist", "preferred_video_id": "replacement",
+			"preferred_selection_locked": True,
+		}],
+	}
+
+	assert device_playlist_state(
+		playlist, DevicePlaylist("Mix", 1, ("text:Artist|Song",)),
+	) == "CHANGED"
 
 
 def test_ipod_tool_paths_prefer_bundled_release_helper(monkeypatch, tmp_path: pathlib.Path) -> None:
@@ -129,6 +161,18 @@ def test_ipod_bundle_matches_native_platform(monkeypatch) -> None:
 	assert _ipod_platform_bundle() == "darwin-x86_64"
 	monkeypatch.setattr("csvmusic.core.device_sync.sys.platform", "linux")
 	assert _ipod_platform_bundle() == "linux-x86_64"
+
+
+def test_missing_windows_helper_uses_windows_facing_message(monkeypatch, tmp_path: pathlib.Path) -> None:
+	monkeypatch.setattr("csvmusic.core.device_sync.sys.platform", "win32")
+	monkeypatch.setattr("csvmusic.core.device_sync.shutil.which", lambda _name: "C:/Windows/System32/wsl.exe")
+	monkeypatch.setattr("csvmusic.core.device_sync._ipod_tool_paths", lambda: (tmp_path / "missing", tmp_path / "lib"))
+
+	available, reason = ipod_sync_available()
+
+	assert available is False
+	assert "official Windows package" in reason
+	assert "linux-x86_64" not in reason
 
 
 def test_native_ipod_helper_uses_posix_paths_and_library_environment(monkeypatch, tmp_path: pathlib.Path) -> None:

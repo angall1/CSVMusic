@@ -2,7 +2,7 @@
 
 <table align="center">
   <tr>
-	<td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.6 Library Mode showing playlists and downloaded songs" width="860" /></td>
+	<td colspan="2"><img src="resources/readme-library-mode.png" alt="CSVMusic 1.7.7 Library Mode showing playlists and downloaded songs" width="860" /></td>
   </tr>
 </table>
 
@@ -22,21 +22,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.7.6
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.7
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.7.6/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.7/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.6/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.7/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.6/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.7/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.7.6/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.7/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -69,6 +69,22 @@ python -m csvmusic
 ```
 
 Python installations still require a supported graphical desktop environment for the Qt interface. Android, Andronix, and other phone-hosted Linux environments are not currently supported or tested.
+
+---
+
+# What's New In 1.7.7
+
+## Library downloads, matching, and portable-player sync
+
+- Added an optional numbered filename prefix (`01-`, `02-`, and so on), disabled by default, with matching M3U/M3U8 paths.
+- Added **Download All**, which processes only missing tracks across the library and clearly identifies the playlists contributing work.
+- Existing downloads are reprocessed when enabled equalizer settings change, while replacing a selected alternative removes the superseded local file.
+- Improved YouTube Music matching for official translated titles with compatible durations and version markers.
+- Fixed low-contrast alternative results on Linux and macOS desktop themes.
+- Portable-player sync now checks playlist counts, order, and stable track identities; new or changed playlists are prioritized and selected by default.
+- Fixed older iPod syncs falsely marking every playlist as changed, while preserving verification for explicitly selected alternatives.
+- Reused iPod tracks now receive stable CSV Music identity metadata, playlist order is preserved, and helper processes remain hidden on Windows.
+- Improved sync progress, selection locking, missing-helper guidance, and the download activity layout.
 
 ---
 

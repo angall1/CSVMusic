@@ -90,6 +90,15 @@ static int inspect_ipod(const char *mountpoint)
 	for (GList *node = db->playlists; node; node = node->next) {
 		Itdb_Playlist *playlist = node->data;
 		printf("PLAYLIST\t%s\t%u\n", playlist->name ? playlist->name : "", g_list_length(playlist->members));
+		for (GList *member_node = playlist->members; member_node; member_node = member_node->next) {
+			Itdb_Track *track = member_node->data;
+			if (track->comment && g_str_has_prefix(track->comment, "CSVMusic:")) {
+				printf("PLAYLIST_TRACK\t%s\t%s\n", playlist->name ? playlist->name : "", track->comment + 9);
+			} else {
+				printf("PLAYLIST_TRACK\t%s\ttext:%s|%s\n", playlist->name ? playlist->name : "",
+					track->artist ? track->artist : "", track->title ? track->title : "");
+			}
+		}
 	}
 	itdb_free(db);
 	return 0;
@@ -217,7 +226,9 @@ static int sync_playlist(const char *mountpoint, const char *playlist_name)
 				added++;
 				printf("REPLACED\t%s\t%s\n", track->artist, track->title);
 			} else {
-				g_free(identity);
+				g_free(track->comment);
+				track->comment = identity;
+				track->time_modified = time(NULL);
 				reused++;
 			}
 		} else {

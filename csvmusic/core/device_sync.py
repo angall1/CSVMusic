@@ -21,6 +21,7 @@ from csvmusic.core.log import log
 from csvmusic.core.library import library_track_path
 from csvmusic.core.paths import resource_base
 from csvmusic.core.settings import settings_path
+from csvmusic.core.subprocess_env import hidden_subprocess_kwargs
 
 
 ProgressCallback = Callable[[int, int, str], None]
@@ -51,6 +52,7 @@ class SyncResult:
 class DevicePlaylist:
 	name: str
 	track_count: int
+	track_identities: tuple[str, ...] = ()
 
 
 def _device_kind(root: pathlib.Path) -> tuple[str, str]:
@@ -100,7 +102,7 @@ def _unix_devices() -> list[PortableDevice]:
 
 def _mac_volume_is_portable(root: pathlib.Path) -> bool:
 	try:
-		result = subprocess.run(["diskutil", "info", "-plist", str(root)], capture_output=True, timeout=3)
+		result = subprocess.run(["diskutil", "info", "-plist", str(root)], capture_output=True, timeout=3, **hidden_subprocess_kwargs())
 		if result.returncode:
 			return False
 		info = plistlib.loads(result.stdout)
@@ -208,6 +210,11 @@ def ipod_sync_available() -> tuple[bool, str]:
 		return False, "Windows Subsystem for Linux is required for experimental classic-iPod sync."
 	helper, libraries = _ipod_tool_paths()
 	if not helper.is_file() or not libraries.is_dir():
+		if sys.platform.startswith("win"):
+			return False, (
+				"The classic-iPod sync helper is missing. The official Windows package includes this helper for WSL; "
+				"reinstall CSVMusic or rebuild the helper when running from source."
+			)
 		return False, f"This installation does not include the {_ipod_platform_bundle()} classic-iPod helper. Reinstall CSVMusic."
 	return True, ""
 
@@ -249,6 +256,41 @@ def _ipod_track_identity(track: dict) -> str:
 	return f"{'selected' if selected else 'auto'}:{identity}"
 
 
+def _ipod_text_identity(track: dict) -> str:
+	return f"text:{track.get('artists', '')}|{track.get('title', '')}"
+
+
+def _device_identity_matches(track: dict, device_identity: str) -> bool:
+	expected = _ipod_track_identity(track)
+	if expected == device_identity:
+		return True
+	# Older CSVMusic syncs reused existing iPod rows without writing the stable
+	# identity marker. Artist/title is safe as a compatibility fallback only for
+	# automatic matches; explicit alternatives must be synced once to verify them.
+	return (
+		expected.startswith("auto:")
+		and device_identity.casefold() == _ipod_text_identity(track).casefold()
+	)
+
+
+def device_playlist_state(playlist: dict, device_playlist: DevicePlaylist | None) -> str:
+	"""Classify a library playlist against an inspected device playlist."""
+	tracks = [track for track in playlist.get("tracks", []) if track.get("enabled", True)]
+	if device_playlist is None:
+		return "NEW"
+	if device_playlist.track_count != len(tracks):
+		return "CHANGED"
+	if device_playlist.track_identities:
+		if len(device_playlist.track_identities) != len(tracks):
+			return "CHANGED"
+		if not all(
+			_device_identity_matches(track, identity)
+			for track, identity in zip(tracks, device_playlist.track_identities)
+		):
+			return "CHANGED"
+	return "CURRENT"
+
+
 def _run_ipod_helper(arguments: list[str], *, input_data: bytes | None = None) -> str:
 	helper, libraries = _ipod_tool_paths()
 	if sys.platform.startswith("win"):
@@ -264,7 +306,7 @@ def _run_ipod_helper(arguments: list[str], *, input_data: bytes | None = None) -
 		environment = os.environ.copy()
 		variable = "DYLD_LIBRARY_PATH" if sys.platform.startswith("darwin") else "LD_LIBRARY_PATH"
 		environment[variable] = os.pathsep.join(filter(None, (str(libraries), environment.get(variable, ""))))
-	result = subprocess.run(invocation, input=input_data, capture_output=True, env=environment)
+	result = subprocess.run(invocation, input=input_data, capture_output=True, env=environment, **hidden_subprocess_kwargs())
 	if result.returncode:
 		raise RuntimeError(result.stderr.decode("utf-8", errors="replace").strip() or "The iPod helper failed.")
 	return result.stdout.decode("utf-8", errors="replace")
@@ -302,10 +344,17 @@ def list_device_playlists(device: PortableDevice, status: StatusCallback | None 
 		status("Parsing the staged iPod database and counting playlist songs...")
 	output = _run_ipod_helper(["inspect", _ipod_helper_path(stage)])
 	playlists: list[DevicePlaylist] = []
+	identity_rows: dict[str, list[str]] = {}
 	for line in output.splitlines():
 		parts = line.split("\t")
 		if len(parts) == 3 and parts[0] == "PLAYLIST":
 			playlists.append(DevicePlaylist(parts[1], int(parts[2])))
+		elif len(parts) == 3 and parts[0] == "PLAYLIST_TRACK":
+			identity_rows.setdefault(parts[1], []).append(parts[2])
+	playlists = [
+		DevicePlaylist(playlist.name, playlist.track_count, tuple(identity_rows.get(playlist.name, [])))
+		for playlist in playlists
+	]
 	result = playlists[1:] if playlists else []
 	if status:
 		status(f"Finished reading {len(result)} iPod playlists.")
@@ -484,7 +533,7 @@ def eject_device(device: PortableDevice) -> None:
 				"$v=$d.Verbs()|Where-Object{($_.Name-replace '&','').Trim()-eq 'Eject'}|Select-Object -First 1;"
 				"if(-not $v){exit 2};$v.DoIt()"
 			)
-			result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True)
+			result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True, **hidden_subprocess_kwargs())
 			if result.returncode:
 				raise RuntimeError(f"Windows could not safely eject this device. {direct_error}") from direct_error
 		for _attempt in range(60):
@@ -494,7 +543,7 @@ def eject_device(device: PortableDevice) -> None:
 		detail = f" The volume lock failed with: {direct_error}" if direct_error else ""
 		raise RuntimeError(f"Windows could not release {drive}; another program may still be using it.{detail}")
 	if sys.platform.startswith("darwin"):
-		subprocess.run(["diskutil", "eject", str(device.root)], check=True, capture_output=True)
+		subprocess.run(["diskutil", "eject", str(device.root)], check=True, capture_output=True, **hidden_subprocess_kwargs())
 		return
 	findmnt = subprocess.run(
 		["findmnt", "--noheadings", "--output", "SOURCE", "--target", str(device.root)],

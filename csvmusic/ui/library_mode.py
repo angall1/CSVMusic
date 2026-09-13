@@ -39,6 +39,54 @@ from csvmusic.core.update_check import UpdateInfo, should_check_for_updates, upd
 from csvmusic.version import APP_VERSION
 
 
+def _audio_processing_settings(cfg: dict) -> dict:
+	if not cfg.get("eq_enabled"):
+		return {}
+	return {
+		"enabled": True,
+		"normalize": bool(cfg.get("eq_normalize", False)),
+		"volume_gain": int(cfg.get("eq_volume_gain", 0) or 0),
+		"bass_gain": int(cfg.get("eq_bass_gain", 0) or 0),
+		"treble_gain": int(cfg.get("eq_treble_gain", 0) or 0),
+	}
+
+
+def _audio_processing_signature(audio: dict) -> str:
+	if not audio:
+		return "off"
+	return "|".join((
+		f"normalize={int(bool(audio.get('normalize')))}",
+		f"volume={int(audio.get('volume_gain', 0) or 0)}",
+		f"bass={int(audio.get('bass_gain', 0) or 0)}",
+		f"treble={int(audio.get('treble_gain', 0) or 0)}",
+	))
+
+
+def _pending_download_tracks(
+	tracks: list[dict], output_path: pathlib.Path, fmt: str, *, audio_signature: str,
+	audio_enabled: bool, prefix_numbers: bool, missing_only: bool = False,
+) -> list[dict]:
+	"""Return rows needing work; Download All deliberately means missing files only."""
+	if missing_only:
+		return [track for track in tracks if not library_track_path(track, output_path, fmt).exists()]
+	return [
+		track for track in tracks
+		if track.get("force_redownload")
+		or not library_track_path(track, output_path, fmt).exists()
+		or (audio_enabled and track.get("_previous_audio_processing_signature") != audio_signature)
+		or bool(track.get("_previous_prefix_numbered")) != prefix_numbers
+	]
+
+
+def _playlists_contributing_tracks(playlists: list[dict], tracks: list[dict]) -> list[dict]:
+	"""Keep only selected playlists represented by at least one queued track."""
+	queued_ids = {str(track.get("library_playlist_id") or "") for track in tracks}
+	return [
+		playlist for playlist in playlists
+		if f"{playlist.get('platform') or 'spotify'}:{playlist.get('id')}" in queued_ids
+	]
+
+
 class DirectLibraryScanWorker(QThread):
 	finished_scan = Signal(object)
 
@@ -663,9 +711,11 @@ class LibrarySettingsDialog(QDialog):
 		self.embed_art.setChecked(bool(cfg.get("embed_art", True)))
 		self.force = QCheckBox("Force-download low-confidence matches")
 		self.force.setChecked(bool(cfg.get("force_download_mode", False)))
+		self.prefix_numbers = QCheckBox("Prefix filenames with playlist numbers (01-, 02-, etc.)")
+		self.prefix_numbers.setChecked(bool(cfg.get("prefix_track_numbers", False)))
 		self.m3u8 = QCheckBox("Write M3U8 playlists")
 		self.m3u8.setChecked(bool(cfg.get("write_m3u8", True)))
-		for widget in (self.embed_art, self.force, self.m3u8):
+		for widget in (self.embed_art, self.force, self.prefix_numbers, self.m3u8):
 			audio_layout.addWidget(widget)
 		m3u_row = QHBoxLayout()
 		self.m3u_output = QLineEdit(str(cfg.get("m3u_output_dir") or ""))
@@ -772,6 +822,7 @@ class LibrarySettingsDialog(QDialog):
 			"mp3_quality": 10 - self.mp3_quality.value(),
 			"embed_art": self.embed_art.isChecked(),
 			"force_download_mode": self.force.isChecked(),
+			"prefix_track_numbers": self.prefix_numbers.isChecked(),
 			"write_m3u8": self.m3u8.isChecked(),
 			"m3u_output_dir": self.m3u_output.text().strip() or None,
 		})
@@ -794,8 +845,8 @@ class TrackAlternativesDialog(QDialog):
 			QFrame#songSettingsSection { background: #c0c0c0; border: 2px outset #ffffff; }
 			QPushButton { background: #c0c0c0; border: 2px outset #ffffff; padding: 4px 9px; min-height: 20px; }
 			QPushButton:pressed { border: 2px inset #ffffff; }
-			QLineEdit, QListWidget { background: white; border: 2px inset #ffffff; padding: 3px; }
-			QListWidget::item { padding: 6px; }
+			QLineEdit, QListWidget { background: #ffffff; color: #101010; border: 2px inset #ffffff; padding: 3px; }
+			QListWidget::item { background: #ffffff; color: #101010; padding: 6px; }
 			QListWidget::item:selected { background: #000080; color: #ffffff; }
 			QTabWidget::pane { border: 2px inset #ffffff; background: #c0c0c0; }
 			QTabBar::tab { background: #a8a8a8; border: 2px outset #ffffff; padding: 6px 16px; }
@@ -1463,20 +1514,37 @@ class LibraryModeDialog(QDialog):
 		download_title = QLabel("Download activity")
 		download_title.setFont(header_font)
 		download_layout.addWidget(download_title)
+		download_identity = QHBoxLayout()
+		self.download_cover = QLabel("♫")
+		self.download_cover.setAlignment(Qt.AlignCenter)
+		self.download_cover.setFixedSize(58, 58)
+		self.download_cover.setFont(QFont("Comic Sans MS", 20, QFont.Bold))
+		self.download_cover.setStyleSheet("background: #606060; color: white; border: 2px inset #ffffff;")
+		download_identity.addWidget(self.download_cover, 0, Qt.AlignTop)
+		download_identity_text = QVBoxLayout()
 		self.download_target = QLabel("Target playlist: None selected")
-		self.download_target.setStyleSheet("font-weight: bold; color: #303030;")
+		self.download_target.setStyleSheet("font-size: 13px; font-weight: bold; color: #101010;")
 		self.download_target.setWordWrap(True)
-		download_layout.addWidget(self.download_target)
+		self.download_target.setMinimumWidth(0)
+		self.download_target.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+		download_identity_text.addWidget(self.download_target)
 		self.download_progress = QProgressBar()
 		self.download_progress.setRange(0, 100)
 		self.download_progress.setValue(0)
 		self.download_progress.setFormat("No download running")
-		download_layout.addWidget(self.download_progress)
+		download_identity_text.addWidget(self.download_progress)
+		download_identity.addLayout(download_identity_text, 1)
+		download_layout.addLayout(download_identity)
 		self.download_activity = QLabel("Ready")
 		self.download_activity.setStyleSheet("font-weight: bold; color: #000080;")
+		self.download_activity.setWordWrap(True)
+		self.download_activity.setMinimumWidth(0)
+		self.download_activity.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 		download_layout.addWidget(self.download_activity)
 		self.download_detail = QLabel("yt-dlp and FFmpeg activity, current track, and errors will appear here.")
 		self.download_detail.setWordWrap(True)
+		self.download_detail.setMinimumWidth(0)
+		self.download_detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 		self.download_detail.setStyleSheet("color: #404040; font-size: 11px;")
 		download_layout.addWidget(self.download_detail)
 		download_buttons = QHBoxLayout()
@@ -1521,6 +1589,12 @@ class LibraryModeDialog(QDialog):
 		playlist_actions_layout = QHBoxLayout(playlist_actions)
 		playlist_actions_layout.setContentsMargins(0, 0, 0, 0)
 		playlist_actions_layout.setSpacing(6)
+		download_all = QPushButton("Download All")
+		download_all.setIcon(_download_icon())
+		download_all.setIconSize(QSize(24, 24))
+		download_all.setStyleSheet("QPushButton { background: #008000; color: white; font-weight: bold; padding: 4px 9px; }")
+		download_all.clicked.connect(self._download_all_playlists)
+		playlist_actions_layout.addWidget(download_all)
 		rescan_all = QPushButton("Rescan All")
 		rescan_all.setIcon(_rescan_all_icon())
 		rescan_all.setIconSize(QSize(34, 26))
@@ -1890,15 +1964,30 @@ class LibraryModeDialog(QDialog):
 		playlists = self._selected_playlists()
 		if not playlists:
 			self.download_target.setText("Target playlist: None selected")
+			self.download_cover.clear()
+			self.download_cover.setText("♫")
 			self.download_button.setText("Download")
 			self.download_button.setEnabled(False)
 			return
 		names = [str(playlist.get("name") or "Unscanned Playlist") for playlist in playlists]
 		label = names[0] if len(names) == 1 else f"{len(names)} playlists: " + ", ".join(names)
-		self.download_target.setText(f"Target playlist: {label}")
+		self.download_target.setText(f"SELECTED PLAYLIST\n{label}" if len(names) == 1 else f"SELECTED PLAYLISTS\n{label}")
+		self.download_cover.clear()
+		self.download_cover.setText("♫")
+		if len(playlists) == 1:
+			self._request_image(str(playlists[0].get("cover_url") or ""), self.download_cover, priority=True)
 		self.download_button.setText("Download")
 		if not (self.download_worker and self.download_worker.isRunning()):
 			self.download_button.setEnabled(True)
+
+	def _download_all_playlists(self) -> None:
+		if self.download_worker and self.download_worker.isRunning():
+			return
+		self.playlist_tree.selectAll()
+		if not self._selected_ids():
+			QMessageBox.information(self, "No Playlists", "Add and scan at least one playlist first.")
+			return
+		self._start_download(missing_only=True)
 
 	def _rescan_all(self) -> None:
 		self._begin_scan(list(self.library.get("playlists", [])))
@@ -2735,15 +2824,14 @@ class LibraryModeDialog(QDialog):
 			clean_title = str(track.get("title") or "Selected alternative")
 		match = {"videoId": video_id, "title": clean_title, "author": track.get("artists") or ""}
 		cfg = load_settings()
-		audio = {}
-		if cfg.get("eq_enabled"):
-			audio = {
-				"enabled": True,
-				"normalize": bool(cfg.get("eq_normalize", False)),
-				"volume_gain": int(cfg.get("eq_volume_gain", 0) or 0),
-				"bass_gain": int(cfg.get("eq_bass_gain", 0) or 0),
-				"treble_gain": int(cfg.get("eq_treble_gain", 0) or 0),
-			}
+		audio = _audio_processing_settings(cfg)
+		track["audio_processing_signature"] = _audio_processing_signature(audio)
+		if cfg.get("prefix_track_numbers", False):
+			track["filename_prefix_number"] = index + 1
+			track["filename_prefix_width"] = max(2, len(str(max(1, len(playlist.get("tracks", []))))))
+		else:
+			track["filename_prefix_number"] = None
+			track["filename_prefix_width"] = None
 		track_gain = int(track.get("audio_volume_gain", 0) or 0)
 		if track_gain:
 			audio["enabled"] = True
@@ -2940,7 +3028,7 @@ class LibraryModeDialog(QDialog):
 			export_csv(path, self.library, self._selected_ids() or None)
 			self.status.setText(f"Exported enabled tracks to {path}")
 
-	def _start_download(self) -> None:
+	def _start_download(self, *, missing_only: bool = False) -> None:
 		if (self.download_worker and self.download_worker.isRunning()) or (self.single_download_worker and self.single_download_worker.isRunning()):
 			return
 		if not self._selected_ids():
@@ -2970,16 +3058,38 @@ class LibraryModeDialog(QDialog):
 					"Install the corrected CSVMusic package before retrying.",
 				)
 				return
+		cfg = load_settings()
+		audio = _audio_processing_settings(cfg)
+		audio_signature = _audio_processing_signature(audio)
+		prefix_numbers = bool(cfg.get("prefix_track_numbers", False))
 		all_playlist_tracks = enabled_tracks(self.library, selected_ids)
+		playlist_sizes = {
+			str(playlist.get("id")): len([track for track in playlist.get("tracks", []) if track.get("enabled", True)])
+			for playlist in selected_playlists
+		}
+		for track in all_playlist_tracks:
+			track["_previous_audio_processing_signature"] = str(track.get("audio_processing_signature") or "")
+			track["_previous_prefix_numbered"] = bool(track.get("filename_prefix_number"))
+			position = int(track.get("library_track_index", 0)) + 1
+			playlist_id = str(track.get("library_playlist_id") or "").split(":", 1)[-1]
+			track["filename_prefix_number"] = position if prefix_numbers else None
+			track["filename_prefix_width"] = max(2, len(str(max(1, playlist_sizes.get(playlist_id, position))))) if prefix_numbers else None
+			track["audio_processing_signature"] = audio_signature
 		tracks = list(all_playlist_tracks)
 		output_path = pathlib.Path(output)
-		tracks = [track for track in tracks if track.get("force_redownload") or not library_track_path(track, output_path, fmt).exists()]
+		tracks = _pending_download_tracks(
+			tracks, output_path, fmt, audio_signature=audio_signature,
+			audio_enabled=bool(audio), prefix_numbers=prefix_numbers, missing_only=missing_only,
+		)
 		if not tracks:
-			QMessageBox.information(self, "Playlist Current", "All enabled tracks in the selected playlist are already downloaded.")
+			message = (
+				"There are no missing tracks in the library."
+				if missing_only else "All enabled tracks in the selected playlist are already downloaded."
+			)
+			QMessageBox.information(self, "Library Current" if missing_only else "Playlist Current", message)
 			return
 		for track in tracks:
 			track["library_path"] = str(self.library_path)
-		cfg = load_settings()
 		use_cookies = bool(cfg.get("use_cookies", False))
 		batch_policy = youtube_batch_mitigation(
 			len(tracks),
@@ -3002,22 +3112,18 @@ class LibraryModeDialog(QDialog):
 			self.download_detail.setText(
 				f"YouTube protection active: randomized waits and reduced request rate ({batch_policy.label})."
 			)
-		audio = {}
-		if cfg.get("eq_enabled"):
-			audio = {
-				"enabled": True,
-				"normalize": bool(cfg.get("eq_normalize", False)),
-				"volume_gain": int(cfg.get("eq_volume_gain", 0) or 0),
-				"bass_gain": int(cfg.get("eq_bass_gain", 0) or 0),
-				"treble_gain": int(cfg.get("eq_treble_gain", 0) or 0),
-			}
 		legacy = {
 			"enabled": bool(cfg.get("legacy_ipod_mode", False)),
 			"mp3_mode": cfg.get("legacy_mp3_mode") or "vbr",
 			"cover_art_mode": cfg.get("legacy_cover_art_mode") or "standard",
 		}
-		target_names = [str(playlist.get("name") or "Unscanned Playlist") for playlist in selected_playlists]
+		active_playlists = _playlists_contributing_tracks(selected_playlists, tracks)
+		target_names = [str(playlist.get("name") or "Unscanned Playlist") for playlist in active_playlists]
 		target_text = target_names[0] if len(target_names) == 1 else f"{len(target_names)} playlists: " + ", ".join(target_names)
+		self.download_cover.clear()
+		self.download_cover.setText("♫")
+		if len(active_playlists) == 1:
+			self._request_image(str(active_playlists[0].get("cover_url") or ""), self.download_cover, priority=True)
 		self.download_row_targets = {
 			row: (str(track.get("library_playlist_id") or ""), int(track.get("library_track_index", -1)))
 			for row, track in enumerate(tracks)

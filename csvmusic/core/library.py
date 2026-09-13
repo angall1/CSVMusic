@@ -400,6 +400,9 @@ def record_library_download_result(
 			)
 			stored["low_confidence_review"] = bool(low_confidence)
 			stored["download_confidence"] = confidence
+			stored["filename_prefix_number"] = track.get("filename_prefix_number") or None
+			stored["filename_prefix_width"] = track.get("filename_prefix_width") or None
+			stored["audio_processing_signature"] = track.get("audio_processing_signature") or None
 			probe = dict(track)
 			probe["playlist"] = playlist.get("name") or "Playlist"
 			downloaded_file = expected_track_path(
@@ -407,7 +410,7 @@ def record_library_download_result(
 			)
 			if downloaded_file.is_file():
 				old_downloaded = str(stored.get("downloaded_path") or "").strip()
-				if old_downloaded and stored.get("preferred_selection_locked"):
+				if old_downloaded:
 					old_path = pathlib.Path(old_downloaded)
 					output_root = pathlib.Path(library.get("output_dir") or "").resolve()
 					try:

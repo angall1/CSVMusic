@@ -60,3 +60,11 @@ def test_output_plan_queues_forced_redownload_when_file_exists(tmp_path: pathlib
 
 	assert plan.existing_rows == ()
 	assert plan.queued_rows == (0,)
+
+
+def test_expected_track_path_supports_optional_number_prefix(tmp_path: pathlib.Path) -> None:
+	track = _track("Opening Song")
+	track["filename_prefix_number"] = 1
+	track["filename_prefix_width"] = 2
+
+	assert expected_track_path(track, tmp_path, "mp3").name == "01- Artist - Opening Song.mp3"

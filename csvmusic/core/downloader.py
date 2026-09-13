@@ -902,7 +902,11 @@ def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict]
 		f.write(f"#EXTPLAYLIST:{playlist_name}\n")
 		for t in tracks_done:
 			title = t["title"]; artists = t["artists"]; album = t["album"]
-			media_path = media_dir / f"{_safe(artists)} - {_safe(title)}.{ext}"
+			base = f"{artists} - {title}"
+			if t.get("filename_prefix_number"):
+				width = max(2, int(t.get("filename_prefix_width") or 2))
+				base = f"{int(t['filename_prefix_number']):0{width}d}- {base}"
+			media_path = media_dir / f"{_safe(base)}.{ext}"
 			try:
 				rel = pathlib.Path(os.path.relpath(media_path.resolve(), playlist_dir.resolve()))
 			except ValueError:

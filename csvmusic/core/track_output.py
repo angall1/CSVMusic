@@ -5,9 +5,23 @@ from dataclasses import dataclass
 from csvmusic.core.downloader import sanitize_name
 
 
+def track_filename_base(track: dict) -> str:
+	"""Return the stable output stem, including an optional playlist-position prefix."""
+	base = f"{track.get('artists', '')} - {track.get('title', '')}"
+	prefix = track.get("filename_prefix_number")
+	if prefix not in (None, "", 0, False):
+		try:
+			position = max(1, int(prefix))
+		except (TypeError, ValueError):
+			position = 1
+		width = max(2, int(track.get("filename_prefix_width") or 2))
+		return f"{position:0{width}d}- {base}"
+	return base
+
+
 def expected_track_path(track: dict, out_root: pathlib.Path, fmt: str) -> pathlib.Path:
 	playlist_name = track.get("playlist") or "Playlist"
-	base = f"{track.get('artists', '')} - {track.get('title', '')}"
+	base = track_filename_base(track)
 	return out_root / sanitize_name(playlist_name) / f"{sanitize_name(base)}.{fmt}"
 
 

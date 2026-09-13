@@ -159,3 +159,23 @@ def test_requested_single_version_does_not_choose_extended_version():
 	single = {"title": "Hocus Pocus (U.S. Single Version)", "author": "Focus", "duration_seconds": 240}
 	extended = {"title": "Hocus Pocus (Extended Version)", "author": "Focus", "duration_seconds": 240}
 	assert ytmusic_match._score(track, single) > ytmusic_match._score(track, extended)
+
+
+def test_translated_catalog_title_uses_exact_duration_as_confidence_evidence():
+	track = {"title": "上を向いて歩こう", "artists": "坂本九", "duration_ms": 185000}
+	candidate = {
+		"title": "Sukiyaki", "author": "Kyu Sakamoto", "duration_seconds": 185,
+		"source": "music",
+	}
+
+	assert ytmusic_match._score(track, candidate) >= ytmusic_match.CONFIDENCE_MIN
+
+
+def test_translated_title_floor_rejects_duration_mismatch():
+	track = {"title": "上を向いて歩こう", "artists": "坂本九", "duration_ms": 185000}
+	candidate = {
+		"title": "Unrelated Song", "author": "Other Artist", "duration_seconds": 210,
+		"source": "music",
+	}
+
+	assert ytmusic_match._score(track, candidate) < ytmusic_match.CONFIDENCE_MIN

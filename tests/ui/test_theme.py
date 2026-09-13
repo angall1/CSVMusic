@@ -1,7 +1,10 @@
 # tabs only
+import inspect
+
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QApplication
 
+from csvmusic.ui.library_mode import TrackAlternativesDialog
 from csvmusic.ui.theme import BASE, HIGHLIGHT, HIGHLIGHT_TEXT, TEXT, apply_retro_theme
 
 
@@ -29,3 +32,11 @@ def test_retro_theme_uses_bundled_font_and_high_contrast_palette() -> None:
 	assert palette.color(QPalette.HighlightedText) == HIGHLIGHT_TEXT
 	assert _contrast(TEXT, BASE) >= 7.0
 	assert _contrast(HIGHLIGHT_TEXT, HIGHLIGHT) >= 7.0
+
+
+def test_alternatives_list_forces_readable_cross_platform_colors() -> None:
+	source = inspect.getsource(TrackAlternativesDialog.__init__)
+
+	assert "QListWidget { background: #ffffff; color: #101010;" in source
+	assert "QListWidget::item { background: #ffffff; color: #101010;" in source
+	assert "QListWidget::item:selected { background: #000080; color: #ffffff;" in source
