@@ -45,6 +45,22 @@ def test_library_round_trip_and_add_urls(tmp_path):
 	assert load_library(path)["playlists"][0]["id"] == "611N3KSs459UD5IVPH1ES4"
 
 
+def test_rescan_preserves_download_processing_and_numbering():
+	library = new_library()
+	add_playlist_urls(library, [URL])
+	playlist_id = "spotify:611N3KSs459UD5IVPH1ES4"
+	merge_playlist_scan(library, playlist_id, "Playlist", [_track()])
+	stored = library["playlists"][0]["tracks"][0]
+	metadata = {
+		"audio_processing_signature": "normalize=0|volume=4|bass=0|treble=0",
+		"filename_prefix_number": 1, "filename_prefix_width": 3,
+	}
+	stored.update(metadata)
+	merge_playlist_scan(library, playlist_id, "Playlist", [_track("two"), _track()])
+	rescanned = library["playlists"][0]["tracks"][1]
+	assert {key: rescanned[key] for key in metadata} == metadata
+
+
 def test_spotify_album_is_added_as_album_source():
 	library = new_library()
 	added, errors = add_playlist_urls(library, [SPOTIFY_ALBUM_URL])

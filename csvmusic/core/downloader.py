@@ -543,6 +543,15 @@ def cover_art_url_bytes(url: str | None) -> Optional[bytes]:
 	"""Fetch and normalize trusted HTTP(S) artwork, with a conservative size cap."""
 	if not url or not str(url).lower().startswith(("https://", "http://")):
 		return None
+	from csvmusic.core.artwork import artwork_download_urls
+	for candidate in artwork_download_urls(str(url)):
+		cover = _fetch_cover_art_url_bytes(candidate)
+		if cover:
+			return cover
+	return None
+
+
+def _fetch_cover_art_url_bytes(url: str) -> Optional[bytes]:
 	try:
 		r = requests.get(str(url), timeout=12, stream=True)
 		if r.status_code != 200 or not str(r.headers.get("content-type") or "").lower().startswith("image/"):

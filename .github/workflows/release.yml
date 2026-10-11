@@ -1,6 +1,8 @@
 name: Release Builds
 
 on:
+  push:
+    tags: ["v*"]
   release:
     types: [published]
   workflow_dispatch:
@@ -416,6 +418,8 @@ jobs:
           fi
 
       - name: Build PyInstaller bundle
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
         run: pyinstaller CSVMusic.spec
 
       - name: Package PyInstaller bundle
@@ -517,6 +521,13 @@ jobs:
                   ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app_dir), str(zip_path)],
                   check=True,
               )
+              # Test what users actually extract, not just the build folder.
+              import tempfile
+              with tempfile.TemporaryDirectory() as check_dir:
+                  subprocess.run(["ditto", "-x", "-k", str(zip_path), check_dir], check=True)
+                  extracted = pathlib.Path(check_dir) / "CSVMusic.app"
+                  subprocess.run(["codesign", "--verify", "--deep", "--strict", str(extracted)], check=True)
+                  subprocess.run([str(extracted / "Contents/MacOS/CSVMusic"), "--smoke-test"], check=True, timeout=45)
               raise SystemExit(0)
           with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
               zf.write(app_dir, app_dir.name + "/")
@@ -563,6 +574,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          body: |
+            Library fixes and improvements:
+            - Preserve numbered filenames and equalization metadata across rescans; recover unambiguous existing numbered files.
+            - Avoid redownloading existing tracks just because older audio-processing metadata is missing.
+            - Follow Apple Music catalog pagination beyond the first page of tracks.
+            - Use full-size Spotify album artwork, with the original image as a fallback.
+            - Add Scan Unscanned and optional browser/cookies.txt settings in Library Mode.
+            - Use installed Comic Sans, with Comic Neue as the cross-platform fallback.
+
+            macOS builds use native architecture and Qt 6.8.3, with final-ZIP signature and Qt/WebEngine startup checks.
+            Monterey hardware and experimental iPod syncing on Monterey remain unverified; the older ARM startup report still needs affected-user confirmation.
+            Existing downloaded files are not automatically retagged with new artwork. Cookies do not guarantee protection from YouTube rate limits.
           files: |
             release/*.whl
             release/*.tar.gz

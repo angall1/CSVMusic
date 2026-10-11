@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 import sys
+import platform
 from PyInstaller.utils.hooks import collect_all
 
 ROOT = Path.cwd()
@@ -60,7 +61,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch=platform.machine() if sys.platform == 'darwin' else None,
     codesign_identity=None,
     entitlements_file=None,
     icon=[str(APP_ICON)] if APP_ICON.exists() else None,
@@ -83,4 +84,5 @@ if sys.platform.startswith('darwin'):
         name='CSVMusic.app',
         icon=str(MAC_ICON) if MAC_ICON.exists() else None,
         bundle_identifier='com.angall1.csvmusic',
+        info_plist={'LSMinimumSystemVersion': '12.0'},
     )

@@ -129,6 +129,19 @@ def show_qt_splash(app: QApplication) -> QSplashScreen | None:
 
 def main() -> int:
 	app = QApplication(sys.argv)
+	if "--smoke-test" in sys.argv:
+		# Exercise the packaged Qt plugins and WebEngine without loading the
+		# user's library, showing disclaimers, or starting network requests.
+		from PySide6.QtWebEngineCore import QWebEnginePage
+		from PySide6.QtWidgets import QLabel
+		apply_retro_theme(app)
+		label = QLabel("CSVMusic startup check")
+		label.show()
+		page = QWebEnginePage()
+		page.loadFinished.connect(lambda ok: app.exit(0 if ok else 1))
+		QTimer.singleShot(15000, lambda: app.exit(2))
+		page.setHtml("<html><body>CSVMusic startup check</body></html>")
+		return app.exec()
 	apply_retro_theme(app)
 	if _WINDOWS:
 		try:

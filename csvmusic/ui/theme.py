@@ -20,6 +20,12 @@ VISITED_LINK = QColor("#551a8b")
 
 
 def _load_body_font() -> str:
+	# Honor the original face when installed, including controls inheriting
+	# QApplication's font. Bundle Comic Neue only as a portable fallback.
+	if "Comic Sans MS" in QFontDatabase.families():
+		QFont.removeSubstitutions("Comic Sans MS")
+		log("Application body font loaded: Comic Sans MS")
+		return "Comic Sans MS"
 	families: list[str] = []
 	for name in ("ComicNeue-Regular.ttf", "ComicNeue-Bold.ttf"):
 		path = resource_base() / "fonts" / name
@@ -30,9 +36,7 @@ def _load_body_font() -> str:
 			families.extend(QFontDatabase.applicationFontFamilies(font_id))
 	if families:
 		family = families[0]
-		# Existing dialogs intentionally request Comic Sans MS. Substitution
-		# preserves that design while resolving to the same bundled font on
-		# Windows, macOS, and Linux.
+		# Keep dialogs readable on systems without Microsoft's font.
 		QFont.insertSubstitution("Comic Sans MS", family)
 		QFont.insertSubstitution("Comic Sans", family)
 		log(f"Application body font loaded: {family}")

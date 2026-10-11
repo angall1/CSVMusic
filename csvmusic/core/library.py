@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import pathlib
+import re
 import tempfile
 from typing import Any
 from urllib.parse import urlparse
@@ -283,6 +284,9 @@ def merge_playlist_scan(
 		track["preferred_video_label"] = old.get("preferred_video_label") or track.get("preferred_video_label") or None
 		track["preferred_selection_locked"] = bool(old.get("preferred_selection_locked", False))
 		track["audio_volume_gain"] = int(old.get("audio_volume_gain", track.get("audio_volume_gain", 0)) or 0)
+		# These describe the downloaded file, not the latest scraped metadata.
+		for field in ("audio_processing_signature", "filename_prefix_number", "filename_prefix_width"):
+			track[field] = old.get(field)
 		track["force_redownload"] = bool(old.get("force_redownload", False))
 		track["last_error"] = old.get("last_error") or None
 		track["last_error_at"] = old.get("last_error_at") or None
@@ -294,7 +298,7 @@ def merge_playlist_scan(
 		if not old_downloaded_path and old:
 			old_probe = dict(old)
 			old_probe["playlist"] = str(playlist.get("name") or effective_name or "Playlist")
-			candidate = expected_track_path(old_probe, pathlib.Path(library.get("output_dir") or ""), str(library.get("format") or "mp3"))
+			candidate = library_track_path(old_probe, pathlib.Path(library.get("output_dir") or ""), str(library.get("format") or "mp3"))
 			if candidate.is_file():
 				old_downloaded_path = str(candidate)
 		track["downloaded_path"] = old_downloaded_path or None
@@ -517,7 +521,21 @@ def library_track_path(track: dict, output_dir: str | pathlib.Path, fmt: str) ->
 		stored_path = pathlib.Path(stored)
 		if stored_path.is_file():
 			return stored_path
-	return expected_track_path(track, pathlib.Path(output_dir), fmt)
+	expected = expected_track_path(track, pathlib.Path(output_dir), fmt)
+	if expected.is_file():
+		return expected
+	# Older rescans discarded prefix metadata. Recover only an unambiguous
+	# exact filename suffix, never a fuzzy title match or another format.
+	unprefixed = dict(track, filename_prefix_number=None)
+	plain = expected_track_path(unprefixed, pathlib.Path(output_dir), fmt)
+	try:
+		matches = [
+			path for path in expected.parent.iterdir()
+			if path.is_file() and re.sub(r"^\d+- ", "", path.name) == plain.name
+		]
+	except OSError:
+		matches = []
+	return matches[0] if len(matches) == 1 else expected
 
 
 def _track_key(track: dict) -> str:

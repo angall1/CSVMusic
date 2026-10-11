@@ -1,7 +1,7 @@
 # tabs only
 import inspect
 
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QPalette, QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from csvmusic.ui.library_mode import TrackAlternativesDialog
@@ -25,13 +25,21 @@ def test_retro_theme_uses_bundled_font_and_high_contrast_palette() -> None:
 	family = apply_retro_theme(app)
 	palette = app.palette()
 
-	assert family.casefold() == "comic neue"
+	assert family == ("Comic Sans MS" if "Comic Sans MS" in QFontDatabase.families() else "Comic Neue")
 	assert palette.color(QPalette.WindowText) == TEXT
 	assert palette.color(QPalette.Base) == BASE
 	assert palette.color(QPalette.Highlight) == HIGHLIGHT
 	assert palette.color(QPalette.HighlightedText) == HIGHLIGHT_TEXT
 	assert _contrast(TEXT, BASE) >= 7.0
 	assert _contrast(HIGHLIGHT_TEXT, HIGHLIGHT) >= 7.0
+
+
+def test_bundled_comic_font_remains_available_without_comic_sans(monkeypatch):
+	from csvmusic.ui.theme import _load_body_font
+	app = QApplication.instance() or QApplication([])
+	monkeypatch.setattr(QFontDatabase, "families", lambda: [])
+	assert _load_body_font() == "Comic Neue"
+	assert app is not None
 
 
 def test_alternatives_list_forces_readable_cross_platform_colors() -> None:

@@ -22,21 +22,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.7.7
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.8
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.7.7/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.8/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.7/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.8/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.7/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.8/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.7.7/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.8/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -71,6 +71,16 @@ python -m csvmusic
 Python installations still require a supported graphical desktop environment for the Qt interface. Android, Andronix, and other phone-hosted Linux environments are not currently supported or tested.
 
 ---
+
+# What's New In 1.7.8
+
+- #77: Apple Music imports now follow the public catalog's pagination when the page stops at 300 tracks. If pagination fails, the partial-import warning remains. No account login is required.
+- #78: Rescans preserve filename numbering and audio-processing metadata. Older numbered files can be recovered when the filename match is unambiguous.
+- #80: Downloads request full-size Spotify album artwork instead of embedding the tiny playlist-row thumbnail; the original URL remains a fallback. Existing audio files are not automatically retagged.
+- #81: **Scan Unscanned** scans only playlists without a completed scan timestamp.
+- #83: Settings → Advanced now exposes optional browser cookies and Netscape cookies files directly in Library Mode. Cookies are off by default, can contain account credentials, and do not guarantee protection from rate limits.
+- Restored installed Comic Sans as the default body font, with bundled Comic Neue as the fallback on systems without it.
+- #76/#82: macOS builds use an explicit native architecture and Monterey-compatible Qt 6.8.3. Release checks now extract the final ZIP, verify its signature, and exercise Qt/WebEngine startup. These changes still need native Apple Silicon/Intel build verification and a Monterey test; the ARM startup report is not yet confirmed resolved. The bundled media tools and experimental iPod helper also require verification on Monterey.
 
 # What's New In 1.7.7
 

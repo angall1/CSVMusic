@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import requests
 
@@ -47,7 +47,67 @@ def fetch_apple_music_source(value: str, *, timeout: int = 20, session: requests
 		raise AppleMusicImportError("Could not find Apple Music playlist or album. Is it public?")
 	if resp.status_code >= 400:
 		raise AppleMusicImportError(f"Apple Music returned HTTP {resp.status_code}. Try again later.")
-	return parse_apple_music_page(resp.content.decode("utf-8", errors="replace"), url)
+	page = resp.content.decode("utf-8", errors="replace")
+	source = parse_apple_music_page(page, url)
+	if len(source.tracks) >= 300 or (source.total_count and len(source.tracks) < source.total_count):
+		try:
+			tracks = _fetch_catalog_tracks(client, page, url, source.name, timeout)
+			if len(tracks) >= len(source.tracks):
+				source.tracks = tracks
+				source.total_count = max(source.total_count or 0, len(tracks))
+				source.warning = incomplete_import_warning("Apple Music", len(tracks), source.total_count) if len(tracks) < source.total_count else None
+			else:
+				raise AppleMusicImportError("Apple Music catalog returned fewer tracks than the page.")
+		except (requests.RequestException, ValueError, KeyError, TypeError, AppleMusicImportError):
+			# Never turn a partial page into a falsely successful full scan.
+			source.warning = source.warning or "Apple Music pagination was unavailable. This scan may be incomplete; import a CSV to include all tracks."
+	return source
+
+
+def _fetch_catalog_tracks(client: requests.Session, page: str, url: str, name: str, timeout: int) -> list[dict]:
+	"""Follow the public web player's catalog pagination, without account cookies."""
+	tokens = []
+	for script in re.findall(r'<script[^>]+src=["\']([^"\']+)', page, re.I):
+		script_url = urljoin(url, script)
+		parsed = urlparse(script_url)
+		if parsed.scheme != "https" or parsed.netloc != "music.apple.com" or not parsed.path.startswith("/assets/index"):
+			continue
+		response = client.get(script_url, timeout=timeout)
+		response.raise_for_status()
+		tokens = list(dict.fromkeys(re.findall(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", response.text)))
+		break
+	kind, source_id, _ = parse_apple_music_source_url(url)
+	storefront = urlparse(url).path.split("/")[1]
+	base = "https://amp-api.music.apple.com"
+	first = f"/v1/catalog/{storefront}/{kind}s/{source_id}/tracks?limit=100"
+	for token in tokens[:3]:
+		headers = {"Authorization": f"Bearer {token}", "Origin": "https://music.apple.com"}
+		response = client.get(base + first, headers=headers, timeout=timeout)
+		if response.status_code in (401, 403):
+			continue
+		tracks = []
+		visited = {base + first}
+		while True:
+			response.raise_for_status()
+			payload = response.json()
+			for item in payload["data"]:
+				attrs = item.get("attributes") or {}
+				if item.get("type") != "songs" or not attrs.get("name") or not attrs.get("artistName"):
+					raise AppleMusicImportError("Apple Music returned an unavailable track.")
+				track = _track_dict(attrs["name"], attrs["artistName"], attrs.get("albumName", ""), name,
+					_safe_int(attrs.get("durationInMillis")) or 0, _artwork_url(attrs.get("artwork")), len(tracks) + 1, item.get("id"))
+				track["isrc"] = attrs.get("isrc")
+				tracks.append(track)
+			next_page = payload.get("next")
+			if not next_page:
+				return tracks
+			next_url = urljoin(base, next_page)
+			parsed = urlparse(next_url)
+			if parsed.scheme != "https" or parsed.netloc != "amp-api.music.apple.com" or parsed.path != urlparse(base + first).path or next_url in visited or len(visited) >= 1000:
+				raise AppleMusicImportError("Apple Music returned invalid pagination.")
+			visited.add(next_url)
+			response = client.get(next_url, headers=headers, timeout=timeout)
+	raise AppleMusicImportError("Apple Music public catalog authentication was unavailable.")
 
 
 def parse_apple_music_source_url(value: str) -> tuple[str, str, str]:

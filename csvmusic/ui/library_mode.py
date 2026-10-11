@@ -1,6 +1,7 @@
 # tabs only
 import pathlib
 import random
+import re
 import shutil
 import datetime
 import html
@@ -73,7 +74,11 @@ def _pending_download_tracks(
 		track for track in tracks
 		if track.get("force_redownload")
 		or not library_track_path(track, output_path, fmt).exists()
-		or (audio_enabled and track.get("_previous_audio_processing_signature") != audio_signature)
+		or (
+			audio_enabled
+			and bool(track.get("_previous_audio_processing_signature"))
+			and track["_previous_audio_processing_signature"] != audio_signature
+		)
 		or bool(track.get("_previous_prefix_numbered")) != prefix_numbers
 	]
 
@@ -747,6 +752,29 @@ class LibrarySettingsDialog(QDialog):
 		self._add_tool_path(tools_layout, "yt-dlp executable", self.ytdlp)
 		self._add_tool_path(tools_layout, "FFmpeg executable", self.ffmpeg)
 		advanced_layout.addWidget(tools_section)
+		cookies_section = self._section("YouTube cookies — optional")
+		cookies_layout = cookies_section.layout()
+		self.use_cookies = QCheckBox("Use my browser login for yt-dlp downloads")
+		self.use_cookies.setChecked(bool(cfg.get("use_cookies", False)))
+		cookies_layout.addWidget(self.use_cookies)
+		self.cookies_browser = QComboBox()
+		self.cookies_browser.addItems(["firefox", "chrome", "edge", "chromium", "brave", "safari", "opera", "vivaldi"])
+		self.cookies_browser.setEditable(True)
+		self.cookies_browser.setCurrentText(str(cfg.get("cookies_browser") or "firefox"))
+		cookies_layout.addWidget(QLabel("Browser (optional profile: browser:profile)"))
+		cookies_layout.addWidget(self.cookies_browser)
+		self.cookies_file = QLineEdit(str(cfg.get("cookies_file") or ""))
+		cookies_layout.addWidget(QLabel("Or Netscape cookies.txt (takes priority over browser)"))
+		cookies_row = QHBoxLayout()
+		cookies_row.addWidget(self.cookies_file, 1)
+		cookies_browse = QPushButton("Browse…")
+		cookies_browse.clicked.connect(self._browse_cookies)
+		cookies_row.addWidget(cookies_browse)
+		cookies_layout.addLayout(cookies_row)
+		cookie_note = QLabel("Sign into YouTube in that browser first. Cookies can help with login checks but do not prevent rate limits. Never share your cookies file or profile. Leave disabled unless needed.")
+		cookie_note.setWordWrap(True)
+		cookies_layout.addWidget(cookie_note)
+		advanced_layout.addWidget(cookies_section)
 		advanced_layout.addStretch(1)
 		tabs.addTab(advanced, "Advanced")
 		buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -782,6 +810,11 @@ class LibrarySettingsDialog(QDialog):
 		path, _ = QFileDialog.getOpenFileName(self, "Choose executable", field.text())
 		if path:
 			field.setText(path)
+
+	def _browse_cookies(self) -> None:
+		path, _ = QFileDialog.getOpenFileName(self, "Choose Netscape cookies file", "", "Text files (*.txt);;All files (*)")
+		if path:
+			self.cookies_file.setText(path)
 
 	def _browse(self) -> None:
 		path = QFileDialog.getExistingDirectory(self, "Choose Library Output", self.output.text())
@@ -825,6 +858,9 @@ class LibrarySettingsDialog(QDialog):
 			"prefix_track_numbers": self.prefix_numbers.isChecked(),
 			"write_m3u8": self.m3u8.isChecked(),
 			"m3u_output_dir": self.m3u_output.text().strip() or None,
+			"use_cookies": self.use_cookies.isChecked(),
+			"cookies_browser": self.cookies_browser.currentText().strip() or None,
+			"cookies_file": self.cookies_file.text().strip() or None,
 		})
 		self.accept()
 
@@ -1601,6 +1637,10 @@ class LibraryModeDialog(QDialog):
 		rescan_all.setStyleSheet("QPushButton { background: #008000; color: white; font-weight: bold; padding: 4px 10px; }")
 		rescan_all.clicked.connect(self._rescan_all)
 		playlist_actions_layout.addWidget(rescan_all)
+		scan_unscanned = QPushButton("Scan Unscanned")
+		scan_unscanned.setToolTip("Scan only playlists that have never completed a scan")
+		scan_unscanned.clicked.connect(self._scan_unscanned)
+		playlist_heading.addWidget(scan_unscanned, 1, 0, 1, 3, Qt.AlignRight)
 		open_output = QToolButton()
 		open_output.setIcon(_folder_icon())
 		open_output.setIconSize(QSize(28, 24))
@@ -1991,6 +2031,13 @@ class LibraryModeDialog(QDialog):
 
 	def _rescan_all(self) -> None:
 		self._begin_scan(list(self.library.get("playlists", [])))
+
+	def _scan_unscanned(self) -> None:
+		playlists = [item for item in self.library.get("playlists", []) if not item.get("last_scanned_at")]
+		if not playlists:
+			QMessageBox.information(self, "All Scanned", "All playlists have already been scanned.")
+			return
+		self._begin_scan(playlists)
 
 	def _rescan_playlist(self, playlist_id: str) -> None:
 		playlist = playlist_by_id(self.library, playlist_id)
@@ -3068,8 +3115,11 @@ class LibraryModeDialog(QDialog):
 			for playlist in selected_playlists
 		}
 		for track in all_playlist_tracks:
+			existing_file = library_track_path(track, pathlib.Path(output), fmt)
+			if existing_file.is_file():
+				track["downloaded_path"] = str(existing_file)
 			track["_previous_audio_processing_signature"] = str(track.get("audio_processing_signature") or "")
-			track["_previous_prefix_numbered"] = bool(track.get("filename_prefix_number"))
+			track["_previous_prefix_numbered"] = bool(track.get("filename_prefix_number")) or bool(existing_file.is_file() and re.match(r"^\d+- ", existing_file.name))
 			position = int(track.get("library_track_index", 0)) + 1
 			playlist_id = str(track.get("library_playlist_id") or "").split(":", 1)[-1]
 			track["filename_prefix_number"] = position if prefix_numbers else None

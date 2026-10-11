@@ -2,6 +2,8 @@ import html
 import json
 
 from csvmusic.core.apple_music_import import parse_apple_music_page, parse_apple_music_source_url
+from csvmusic.core.apple_music_import import _fetch_catalog_tracks, AppleMusicImportError
+import pytest
 
 
 def test_parse_apple_music_playlist_url():
@@ -91,3 +93,77 @@ def test_parse_apple_music_warns_when_partial():
 
 	assert "Apple Music only let CSVMusic load 1 of 2 playlist tracks from this link" in source.warning
 	assert "Export the playlist as a CSV file" in source.warning
+
+
+class _Response:
+	status_code = 200
+	text = "eyJpublic.test.signature"
+
+	def __init__(self, data=None):
+		self.data = data
+
+	def raise_for_status(self):
+		pass
+
+	def json(self):
+		return self.data
+
+
+def test_catalog_pagination_keeps_all_tracks_and_repeated_songs():
+	class Client:
+		def __init__(self):
+			self.calls = []
+
+		def get(self, url, **kwargs):
+			self.calls.append(url)
+			if "/assets/" in url:
+				return _Response()
+			offset = 300 if "offset=300" in url else 0
+			data = {"data": [{"id": "same-song", "type": "songs", "attributes": {
+				"name": f"Song {i}", "artistName": "Artist", "durationInMillis": 1000,
+			}} for i in range(offset, offset + (25 if offset else 300))]}
+			if not offset:
+				data["next"] = "/v1/catalog/us/playlists/pl.example/tracks?offset=300"
+			return _Response(data)
+
+	client = Client()
+	tracks = _fetch_catalog_tracks(client, '<script src="/assets/index~test.js"></script>',
+		"https://music.apple.com/us/playlist/test/pl.example", "Test", 20)
+	assert len(tracks) == 325
+	assert tracks[-1]["track_no"] == 325
+	assert tracks[-1]["title"] == "Song 324"
+	assert len(client.calls) == 3
+
+
+@pytest.mark.parametrize("next_page", ["https://example.com/steal", "/v1/catalog/us/playlists/pl.example/tracks?limit=100"])
+def test_catalog_rejects_external_or_looping_pagination(next_page):
+	class Client:
+		def get(self, url, **kwargs):
+			return _Response() if "/assets/" in url else _Response({"data": [], "next": next_page})
+
+	with pytest.raises(AppleMusicImportError):
+		_fetch_catalog_tracks(Client(), '<script src="/assets/index~test.js"></script>',
+			"https://music.apple.com/us/playlist/test/pl.example", "Test", 20)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_fetch_attempts_pagination_and_keeps_partial_warning_on_failure(monkeypatch, failure):
+	from csvmusic.core import apple_music_import as module
+	url = "https://music.apple.com/us/playlist/test/pl.example"
+	source = module.AppleMusicSource("pl.example", "Test", [{}] * 300, total_count=325, warning="Partial")
+	monkeypatch.setattr(module, "parse_apple_music_page", lambda *args: source)
+
+	def fetch(*args):
+		if failure:
+			raise module.AppleMusicImportError("Unavailable")
+		return [{}] * 325
+
+	monkeypatch.setattr(module, "_fetch_catalog_tracks", fetch)
+	class Client:
+		def get(self, *args, **kwargs):
+			from types import SimpleNamespace
+			return SimpleNamespace(status_code=200, content=b"<html></html>")
+
+	result = module.fetch_apple_music_source(url, session=Client())
+	assert len(result.tracks) == (300 if failure else 325)
+	assert bool(result.warning) is failure
