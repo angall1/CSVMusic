@@ -12,7 +12,7 @@ def test_library_recovers_canonically_equivalent_accented_filename(tmp_path, pre
 	folder.mkdir()
 	path = folder / unicodedata.normalize("NFD", f"{prefix}Björk & Zoë - Jóga.mp3")
 	path.write_bytes(b"audio")
-	assert library_track_path(track, tmp_path, "mp3") == path
+	assert library_track_path(track, tmp_path, "mp3").samefile(path)
 	assert not library_track_path(track, tmp_path, "m4a").exists()
 
 
