@@ -108,4 +108,5 @@ def ytdlp_js_runtime_args(yt_dlp_bin: str | None = None) -> list[str]:
 	]
 	if not enabled:
 		return []
-	return ["--js-runtimes", ",".join(enabled)]
+	# This is a repeatable option, not a comma-separated list of paths.
+	return [argument for runtime in enabled for argument in ("--js-runtimes", runtime)]

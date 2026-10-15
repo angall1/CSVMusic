@@ -22,6 +22,7 @@ from csvmusic.core.library import (
 	rename_library_playlist, save_library,
 )
 from csvmusic.core.log import log
+from csvmusic.core.audio_quality import audio_quality
 from csvmusic.core.settings import load_settings, save_settings, settings_path
 from csvmusic.core.paths import ffmpeg_path, resource_base
 from csvmusic.core.preflight import ffmpeg_supports_mp3
@@ -464,6 +465,30 @@ def _song_status_icon(kind: str) -> QIcon:
 	return QIcon(pixmap)
 
 
+class RescanSummaryDialog(QDialog):
+	"""Keep batch summaries within the display regardless of playlist count."""
+	def __init__(self, results: list[dict], details: str, parent=None):
+		super().__init__(parent)
+		self.setWindowTitle("Rescan Summary")
+		layout = QVBoxLayout(self)
+		failed = sum(bool(result.get("error")) for result in results)
+		warnings = sum(bool(result.get("warning")) for result in results)
+		heading = QLabel(f"{len(results)} playlists scanned · {failed} failed · {warnings} warnings")
+		heading.setWordWrap(True)
+		layout.addWidget(heading)
+		self.details = QPlainTextEdit()
+		self.details.setReadOnly(True)
+		self.details.setPlainText(details)
+		self.details.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+		layout.addWidget(self.details, 1)
+		buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+		buttons.accepted.connect(self.accept)
+		layout.addWidget(buttons)
+		available = self.screen().availableGeometry()
+		self.setMaximumSize(max(200, available.width() - 40), max(180, available.height() - 80))
+		self.resize(min(620, self.maximumWidth()), min(360, self.maximumHeight()))
+
+
 class LibraryScanProgressDialog(QDialog):
 	canceled = Signal()
 
@@ -712,6 +737,18 @@ class LibrarySettingsDialog(QDialog):
 		self.mp3_quality.valueChanged.connect(self._update_mp3_quality_label)
 		audio_layout.addWidget(self.mp3_quality_value)
 		self._update_mp3_quality_label(self.mp3_quality.value())
+		self.legacy_ipod = QCheckBox("Legacy iPod compatibility (overrides MP3 quality)")
+		self.legacy_ipod.setChecked(bool(cfg.get("legacy_ipod_mode", False)))
+		audio_layout.addWidget(self.legacy_ipod)
+		self.legacy_mp3 = QComboBox()
+		for label, mode in (("Use quality slider (VBR)", "vbr"), ("Constant bitrate: 192 kbps", "cbr_192"), ("Constant bitrate: 256 kbps", "cbr_256"), ("Constant bitrate: 320 kbps", "cbr_320")):
+			self.legacy_mp3.addItem(label, mode)
+		self.legacy_mp3.setCurrentIndex(max(0, self.legacy_mp3.findData(cfg.get("legacy_mp3_mode") or "vbr")))
+		audio_layout.addWidget(self.legacy_mp3)
+		self.legacy_ipod.toggled.connect(self._update_mp3_encoding)
+		self.legacy_mp3.currentIndexChanged.connect(self._update_mp3_encoding)
+		self.format.currentTextChanged.connect(self._update_mp3_encoding)
+		self._update_mp3_encoding()
 		self.embed_art = QCheckBox("Embed album artwork")
 		self.embed_art.setChecked(bool(cfg.get("embed_art", True)))
 		self.force = QCheckBox("Force-download low-confidence matches")
@@ -752,11 +789,40 @@ class LibrarySettingsDialog(QDialog):
 		self._add_tool_path(tools_layout, "yt-dlp executable", self.ytdlp)
 		self._add_tool_path(tools_layout, "FFmpeg executable", self.ffmpeg)
 		advanced_layout.addWidget(tools_section)
-		cookies_section = self._section("YouTube cookies — optional")
+		account = QWidget()
+		account_layout = QVBoxLayout(account)
+		account_tabs = QTabWidget()
+		account_layout.addWidget(account_tabs)
+		connection_page = QWidget()
+		connection_layout = QVBoxLayout(connection_page)
+		cookies_section = self._section("Connect your YouTube account — optional")
 		cookies_layout = cookies_section.layout()
-		self.use_cookies = QCheckBox("Use my browser login for yt-dlp downloads")
+		explanation = QLabel("Most public songs work without signing in. For content that requires an account, CSVMusic can pass your signed-in YouTube session to yt-dlp. Cookies are the session tokens YouTube issues after login; CSVMusic does not collect your Google password.\n\nSign in below, finish Google's verification, and the popup will close when the session is recognized. A connection test runs automatically after import. Press Save to apply your choice.")
+		explanation.setWordWrap(True)
+		cookies_layout.addWidget(explanation)
+		self.account_confirmed = QLabel("YouTube account — not checked")
+		self.account_confirmed.setFont(QFont("Comic Sans MS", 13, QFont.Bold))
+		self.account_confirmed.setWordWrap(True)
+		cookies_layout.addWidget(self.account_confirmed)
+		self.connect_youtube = QPushButton("Sign in to YouTube…")
+		self.connect_youtube.clicked.connect(self._account_action)
+		cookies_layout.addWidget(self.connect_youtube)
+		self._account_verified = False
+		self.use_cookies = QCheckBox("Use this YouTube session for downloads")
 		self.use_cookies.setChecked(bool(cfg.get("use_cookies", False)))
 		cookies_layout.addWidget(self.use_cookies)
+		self.session_test = QPushButton("Test YouTube connection")
+		self.session_test.clicked.connect(self._test_youtube_connection)
+		cookies_layout.addWidget(self.session_test)
+		self.session_status = QLabel("Not tested in this window. A saved cookie file does not guarantee a valid login.")
+		self.session_status.setWordWrap(True)
+		cookies_layout.addWidget(self.session_status)
+		self._session_worker = None
+		connection_layout.addWidget(cookies_section)
+		connection_layout.addStretch(1)
+		account_tabs.addTab(connection_page, "Account")
+		fallback = self._section("Other connection methods / cookie file")
+		cookies_layout = fallback.layout()
 		self.cookies_browser = QComboBox()
 		self.cookies_browser.addItems(["firefox", "chrome", "edge", "chromium", "brave", "safari", "opera", "vivaldi"])
 		self.cookies_browser.setEditable(True)
@@ -764,6 +830,7 @@ class LibrarySettingsDialog(QDialog):
 		cookies_layout.addWidget(QLabel("Browser (optional profile: browser:profile)"))
 		cookies_layout.addWidget(self.cookies_browser)
 		self.cookies_file = QLineEdit(str(cfg.get("cookies_file") or ""))
+		self.cookies_file.editingFinished.connect(self._test_youtube_connection)
 		cookies_layout.addWidget(QLabel("Or Netscape cookies.txt (takes priority over browser)"))
 		cookies_row = QHBoxLayout()
 		cookies_row.addWidget(self.cookies_file, 1)
@@ -771,10 +838,29 @@ class LibrarySettingsDialog(QDialog):
 		cookies_browse.clicked.connect(self._browse_cookies)
 		cookies_row.addWidget(cookies_browse)
 		cookies_layout.addLayout(cookies_row)
-		cookie_note = QLabel("Sign into YouTube in that browser first. Cookies can help with login checks but do not prevent rate limits. Never share your cookies file or profile. Leave disabled unless needed.")
+		cookie_actions = QHBoxLayout()
+		browser_fallback = QPushButton("External Firefox sign-in (fallback)…")
+		browser_fallback.clicked.connect(self._connect_youtube_firefox)
+		cookies_layout.addWidget(browser_fallback)
+		setup_cookies = QPushButton("Manual export instructions…")
+		setup_cookies.clicked.connect(self._cookie_setup)
+		cookie_actions.addWidget(setup_cookies)
+		validate_cookies = QPushButton("Check exported cookies")
+		validate_cookies.clicked.connect(self._validate_cookies)
+		cookie_actions.addWidget(validate_cookies)
+		cookies_layout.addLayout(cookie_actions)
+		cookie_note = QLabel("Cookies are account credentials: keep them private and never attach them to reports. YouTube may expire sessions or restrict accounts. Signing in does not bypass age verification or prevent rate limits, and Premium quality is not guaranteed. The connection test checks the selected cookie file; browser-only extraction is checked when downloading.")
 		cookie_note.setWordWrap(True)
 		cookies_layout.addWidget(cookie_note)
-		advanced_layout.addWidget(cookies_section)
+		advanced_account = QWidget()
+		advanced_account_layout = QVBoxLayout(advanced_account)
+		advanced_account_layout.addWidget(fallback)
+		advanced_account_layout.addStretch(1)
+		account_tabs.addTab(advanced_account, "Advanced")
+		account_scroll = QScrollArea()
+		account_scroll.setWidgetResizable(True)
+		account_scroll.setWidget(account)
+		tabs.addTab(account_scroll, "YouTube Account")
 		advanced_layout.addStretch(1)
 		tabs.addTab(advanced, "Advanced")
 		buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -783,6 +869,8 @@ class LibrarySettingsDialog(QDialog):
 		buttons.accepted.connect(self._save)
 		buttons.rejected.connect(self.reject)
 		layout.addWidget(buttons)
+		if self.cookies_file.text().strip() and self.use_cookies.isChecked():
+			QTimer.singleShot(0, self._test_youtube_connection)
 
 	def _section(self, title: str) -> QFrame:
 		section = QFrame()
@@ -815,6 +903,108 @@ class LibrarySettingsDialog(QDialog):
 		path, _ = QFileDialog.getOpenFileName(self, "Choose Netscape cookies file", "", "Text files (*.txt);;All files (*)")
 		if path:
 			self.cookies_file.setText(path)
+			self._test_youtube_connection()
+
+	def _test_youtube_connection(self) -> None:
+		from csvmusic.ui.workers import YouTubeSessionTestWorker
+		if self._session_worker is not None:
+			return
+		path = self.cookies_file.text().strip()
+		if not path:
+			self.session_status.setText("Sign in or select a cookie file first. This test does not read your normal browser profile.")
+			return
+		self.session_test.setEnabled(False)
+		self.session_status.setText("TESTING — Checking the cookie file and asking YouTube to confirm the session…")
+		# Application ownership lets a bounded check finish safely if Settings closes.
+		worker = YouTubeSessionTestWorker(path, QApplication.instance())
+		self._session_worker = worker
+		worker.sig_done.connect(self._youtube_test_result)
+		worker.finished.connect(self._youtube_test_finished)
+		worker.finished.connect(worker.deleteLater)
+		worker.start()
+
+	def _youtube_test_result(self, ok: bool, message: str) -> None:
+		worker = self.sender()
+		if worker.path != self.cookies_file.text().strip():
+			self.session_status.setText("Cookie selection changed during the check. Test the newly selected file.")
+			return
+		self.session_status.setText(message)
+		self._account_verified = ok
+		self.account_confirmed.setText("✓ YouTube account confirmed" if ok else "YouTube account — not verified")
+		self.account_confirmed.setStyleSheet("color: #006000;" if ok else "color: #800000;")
+		self.connect_youtube.setText("Sign out" if ok else "Sign in to YouTube…")
+		if ok:
+			self.account_confirmed.setToolTip("YouTube confirmed this session is signed in. The verification response does not provide a reliable account name.")
+
+	def _account_action(self) -> None:
+		if not self._account_verified:
+			self._connect_youtube()
+			return
+		answer = QMessageBox.question(self, "Sign out of CSVMusic?", "Disconnect this YouTube session from CSVMusic? This takes effect immediately, even if you cancel Settings. It does not sign you out of Google in other browsers or stop downloads already running.")
+		if answer != QMessageBox.Yes:
+			return
+		# Forget the reference rather than deleting an externally supplied cookie file.
+		save_settings({"use_cookies": False, "cookies_file": None, "cookies_browser": None, "cookies_test_ok": False})
+		self.cookies_file.clear()
+		self.cookies_browser.setCurrentText("")
+		self.use_cookies.setChecked(False)
+		self._account_verified = False
+		self.connect_youtube.setText("Sign in to YouTube…")
+		self.account_confirmed.setText("Signed out of CSVMusic")
+		self.account_confirmed.setStyleSheet("color: #000000;")
+		self.session_status.setText("Session disconnected. Sign in to connect a different account. Existing cookie files were not deleted; this does not revoke the Google session.")
+
+	def _youtube_test_finished(self) -> None:
+		self._session_worker = None
+		self.session_test.setEnabled(True)
+
+	def _validate_cookies(self) -> None:
+		from csvmusic.core.youtube_session import validate_cookie_file
+		ok, message = validate_cookie_file(self.cookies_file.text().strip())
+		if ok:
+			self.use_cookies.setChecked(True)
+		QMessageBox.information(self, "YouTube cookie file check", message)
+
+	def _connect_youtube(self) -> None:
+		from csvmusic.ui.youtube_popup import YouTubePopupDialog
+		dialog = YouTubePopupDialog(self)
+		if dialog.exec() == QDialog.Accepted and dialog.cookie_path:
+			self.cookies_file.setText(dialog.cookie_path)
+			self.use_cookies.setChecked(True)
+			self._test_youtube_connection()
+		dialog.deleteLater()
+
+	def _connect_youtube_firefox(self) -> None:
+		from csvmusic.ui.youtube_login import YouTubeLoginDialog
+		dialog = YouTubeLoginDialog(self)
+		if dialog.exec() == QDialog.Accepted and dialog.cookie_path:
+			self.cookies_file.setText(dialog.cookie_path)
+			self.use_cookies.setChecked(True)
+			self._test_youtube_connection()
+
+	def _cookie_setup(self) -> None:
+		dialog = QDialog(self)
+		dialog.setWindowTitle("YouTube signed-in session")
+		dialog.resize(560, 420)
+		layout = QVBoxLayout(dialog)
+		instructions = QLabel(
+			"CSVMusic does not collect your Google password. yt-dlp requires browser session cookies, not Google OAuth credentials.\n\n"
+			"1. Open a new private/incognito browser window and sign into YouTube on Google's own page. Complete any verification there.\n"
+			"2. In that same tab, open https://www.youtube.com/robots.txt. Keep only this private tab open.\n"
+			"3. Export youtube.com cookies in Netscape format using a trusted extension from the yt-dlp guide below. Close the private window and do not reuse that session.\n"
+			"4. Choose the exported file in Settings, check it, and save. The file takes priority over browser extraction, avoiding browser database locks and decryption errors.\n\n"
+			"Cookies grant access to your account: keep the file private, never upload it or include it in reports. Account use can trigger restrictions.\n\n"
+			"An eligible account may access age-restricted content; cookies do not bypass age verification. Premium formats depend on YouTube and yt-dlp availability. Downloads will not silently retry without your cookies."
+		)
+		instructions.setWordWrap(True)
+		layout.addWidget(instructions)
+		guide = QPushButton("Open official yt-dlp cookie export guide")
+		guide.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies")))
+		layout.addWidget(guide)
+		close = QDialogButtonBox(QDialogButtonBox.Close)
+		close.rejected.connect(dialog.reject)
+		layout.addWidget(close)
+		dialog.exec()
 
 	def _browse(self) -> None:
 		path = QFileDialog.getExistingDirectory(self, "Choose Library Output", self.output.text())
@@ -842,6 +1032,20 @@ class LibrarySettingsDialog(QDialog):
 			text = f"Quality {value} / 10"
 		self.mp3_quality_value.setText(text)
 
+	def _update_mp3_encoding(self, *_args) -> None:
+		is_mp3 = self.format.currentText() == "mp3"
+		mode = str(self.legacy_mp3.currentData() or "vbr")
+		fixed = self.legacy_ipod.isChecked() and mode.startswith("cbr_")
+		self.legacy_mp3.setEnabled(is_mp3 and self.legacy_ipod.isChecked())
+		self.legacy_mp3.setVisible(is_mp3 and self.legacy_ipod.isChecked())
+		self.mp3_quality.setEnabled(is_mp3 and not fixed)
+		if not is_mp3:
+			self.mp3_quality_value.setText("MP3 settings do not apply to this format")
+		elif fixed:
+			self.mp3_quality_value.setText(f"Active output: MP3 {mode.removeprefix('cbr_')} kbps CBR — slider overridden")
+		else:
+			self._update_mp3_quality_label(self.mp3_quality.value())
+
 	def _save(self) -> None:
 		if not self.output.text().strip():
 			QMessageBox.warning(self, "Missing Output", "Choose an output folder.")
@@ -853,6 +1057,8 @@ class LibrarySettingsDialog(QDialog):
 			"ffmpeg_path": self.ffmpeg.text().strip() or None,
 			# FFmpeg/libmp3lame uses the inverse scale: 0 is its best quality.
 			"mp3_quality": 10 - self.mp3_quality.value(),
+			"legacy_ipod_mode": self.legacy_ipod.isChecked(),
+			"legacy_mp3_mode": self.legacy_mp3.currentData(),
 			"embed_art": self.embed_art.isChecked(),
 			"force_download_mode": self.force.isChecked(),
 			"prefix_track_numbers": self.prefix_numbers.isChecked(),
@@ -1234,6 +1440,7 @@ class LibraryModeDialog(QDialog):
 		self.download_worker: PipelineWorker | None = None
 		self.single_download_worker: SingleDownloadWorker | None = None
 		self.update_check_worker: UpdateCheckWorker | None = None
+		self.youtube_startup_worker = None
 		self.scan_dialog: LibraryScanProgressDialog | None = None
 		self.scan_cancelled = False
 		self.scan_warnings: list[str] = []
@@ -1257,10 +1464,36 @@ class LibraryModeDialog(QDialog):
 		self.header_font_family = self._load_header_font()
 		self._build_ui()
 		self._refresh()
+		QTimer.singleShot(1000, self._check_youtube_at_startup)
 		if not bool(load_settings().get("hide_startup_disclaimer", False)):
 			QTimer.singleShot(0, self._show_startup_disclaimer)
 		else:
 			QTimer.singleShot(1500, self._start_update_check)
+
+	def _check_youtube_at_startup(self) -> None:
+		from csvmusic.ui.workers import YouTubeSessionTestWorker
+		cfg = load_settings()
+		path = str(cfg.get("cookies_file") or "")
+		if not cfg.get("use_cookies") or not path:
+			return
+		self.youtube_account_status.setText("YouTube account: checking saved session…")
+		worker = YouTubeSessionTestWorker(path, self)
+		self.youtube_startup_worker = worker
+		worker.sig_done.connect(self._startup_youtube_result)
+		worker.finished.connect(self._startup_youtube_finished)
+		worker.finished.connect(worker.deleteLater)
+		worker.start()
+
+	def _startup_youtube_result(self, ok: bool, message: str) -> None:
+		cfg = load_settings()
+		if not cfg.get("use_cookies") or cfg.get("cookies_file") != self.sender().path:
+			self.youtube_account_status.setText("")
+			return
+		self.youtube_account_status.setText("YouTube account: ✓ confirmed at startup" if ok else "YouTube account: not verified — check Settings → YouTube Account")
+		self.youtube_account_status.setToolTip(message)
+
+	def _startup_youtube_finished(self) -> None:
+		self.youtube_startup_worker = None
 
 	def _show_startup_disclaimer(self) -> None:
 		dialog = StartupDisclaimerDialog(self)
@@ -1696,7 +1929,19 @@ class LibraryModeDialog(QDialog):
 		self.load_more_tracks_button = QPushButton("Load More Songs")
 		self.load_more_tracks_button.setVisible(False)
 		self.load_more_tracks_button.clicked.connect(self._load_more_tracks)
-		right_actions.addWidget(self.load_more_tracks_button, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
+		song_actions = QHBoxLayout()
+		song_actions.addStretch(1)
+		song_actions.addWidget(self.load_more_tracks_button)
+		self.playlist_folder_button = QToolButton()
+		self.playlist_folder_button.setIcon(_folder_icon())
+		self.playlist_folder_button.setIconSize(QSize(24, 24))
+		self.playlist_folder_button.setFixedSize(40, 32)
+		self.playlist_folder_button.setAccessibleName("Open selected playlist folder")
+		self.playlist_folder_button.setToolTip("Select one playlist to open its download folder")
+		self.playlist_folder_button.setEnabled(False)
+		self.playlist_folder_button.clicked.connect(self._open_playlist_folder)
+		song_actions.addWidget(self.playlist_folder_button)
+		right_actions.addLayout(song_actions, 0, 2)
 		right_layout.addLayout(right_actions)
 		self.track_tree = QTreeWidget()
 		self.track_tree.setHeaderLabels(["Songs"])
@@ -1717,6 +1962,8 @@ class LibraryModeDialog(QDialog):
 		splitter.setSizes([512, 768])
 		layout.addWidget(splitter, 1)
 		self.status = QLabel()
+		self.youtube_account_status = QLabel()
+		layout.addWidget(self.youtube_account_status)
 		self.status.setWordWrap(True)
 		layout.addWidget(self.status)
 		body_font = QFont("Comic Sans MS", 9)
@@ -2002,6 +2249,11 @@ class LibraryModeDialog(QDialog):
 
 	def _update_download_target(self) -> None:
 		playlists = self._selected_playlists()
+		self.playlist_folder_button.setEnabled(len(playlists) == 1)
+		self.playlist_folder_button.setToolTip(
+			f"Open download folder for {playlists[0].get('name') or 'Playlist'}" if len(playlists) == 1
+			else "Select one playlist to open its download folder"
+		)
 		if not playlists:
 			self.download_target.setText("Target playlist: None selected")
 			self.download_cover.clear()
@@ -2091,7 +2343,9 @@ class LibraryModeDialog(QDialog):
 						f"  Downloaded: {result.get('downloaded', 0)}  •  Missing: {result.get('missing', 0)}"
 						+ (f"\n  Warning: {result['warning']}" if result.get("warning") else "")
 					)
-				QMessageBox.information(self, "Rescan Summary", "\n\n".join(lines))
+				summary = RescanSummaryDialog(self.scan_results, "\n\n".join(lines), self)
+				summary.exec()
+				summary.deleteLater()
 			return
 		playlist = self.scan_queue.pop(0)
 		self.current_scan_name = str(playlist.get("name") or playlist.get("id") or "Playlist")
@@ -2272,6 +2526,25 @@ class LibraryModeDialog(QDialog):
 		self._save()
 		self._refresh()
 		self.status.setText(f"Deleted '{name}', its library metadata, and its downloaded media.")
+
+	def _open_playlist_folder(self) -> None:
+		playlists = self._selected_playlists()
+		if len(playlists) != 1:
+			return
+		output = str(self.library.get("output_dir") or "").strip()
+		if not output:
+			QMessageBox.information(self, "No Output Folder", "Choose an output folder in Settings first.")
+			return
+		try:
+			root = pathlib.Path(output).expanduser().resolve()
+			folder = (root / (sanitize_name(str(playlists[0].get("name") or "Playlist")) or "Playlist")).resolve()
+			if folder == root or not folder.is_relative_to(root):
+				raise ValueError("Playlist folder is outside the library output directory.")
+			folder.mkdir(parents=True, exist_ok=True)
+			if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+				raise OSError("The system could not open this folder.")
+		except (OSError, ValueError, RuntimeError) as exc:
+			QMessageBox.warning(self, "Open Playlist Folder Failed", str(exc))
 
 	def _open_output_folder(self) -> None:
 		output = str(self.library.get("output_dir") or "").strip()
@@ -2563,7 +2836,9 @@ class LibraryModeDialog(QDialog):
 				candidate["playlist"] = playlist.get("name") or "Playlist"
 				has_error = bool(track.get("download_error") or track.get("last_error") or track.get("error"))
 				needs_review = bool(track.get("low_confidence_review"))
-				file_exists = library_track_path(candidate, output, fmt).exists()
+				audio_path = library_track_path(candidate, output, fmt)
+				file_exists = audio_path.exists()
+				quality = audio_quality(audio_path) if file_exists else None
 				if needs_review:
 					state = "Review"
 				elif has_error:
@@ -2600,7 +2875,7 @@ class LibraryModeDialog(QDialog):
 					state = runtime_state
 				if runtime_state in ("Matching", "Downloading", "Tagging"):
 					shade = "#fff0a8"
-				elif needs_review:
+				elif needs_review or (quality and quality["low"]):
 					shade = "#fff0a8"
 				elif state == "Error":
 					shade = "#dda0a0"
@@ -2682,7 +2957,18 @@ class LibraryModeDialog(QDialog):
 					state_label.setAlignment(Qt.AlignCenter)
 					state_label.setStyleSheet("font-weight: 600; color: #303030;")
 				state_label.setMinimumWidth(72)
-				card_layout.addWidget(state_label)
+				status_column = QVBoxLayout()
+				status_column.setSpacing(2)
+				status_column.setAlignment(Qt.AlignVCenter)
+				status_column.addWidget(state_label)
+				quality_label = QLabel(quality["label"] if quality else "Quality —")
+				quality_label.setObjectName("songQuality")
+				quality_label.setAlignment(Qt.AlignCenter)
+				quality_label.setFont(QFont("Comic Sans MS", 8))
+				quality_label.setStyleSheet("color: #704000; font-weight: bold;" if quality and quality["low"] else "color: #303030;")
+				quality_label.setToolTip(quality["tooltip"] if quality else "Available after the audio file is downloaded.")
+				status_column.addWidget(quality_label)
+				card_layout.addLayout(status_column)
 				self.track_state_labels[target_key] = state_label
 				self.track_cards[target_key] = card
 				if needs_review:
@@ -3334,6 +3620,11 @@ class LibraryModeDialog(QDialog):
 		if self.download_worker and self.download_worker.isRunning():
 			self.download_worker.stop()
 			self.status.setText("Stopping the current download before closing...")
+			event.ignore()
+			return
+		if self.youtube_startup_worker and self.youtube_startup_worker.isRunning():
+			self.status.setText("Finishing the YouTube session check before closing…")
+			self.youtube_startup_worker.finished.connect(self.close)
 			event.ignore()
 			return
 		if self.direct_worker and self.direct_worker.isRunning():

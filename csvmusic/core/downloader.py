@@ -12,6 +12,7 @@ from csvmusic.core.paths import ffmpeg_path, ytdlp_path, INTERNAL_YTDLP
 from csvmusic.core.log import log
 from csvmusic.core.js_runtime import ytdlp_js_runtime_args
 from csvmusic.core.subprocess_env import subprocess_kwargs
+from csvmusic.core.source_quality import capture_source, store_source
 
 YTM_URL = "https://music.youtube.com/watch?v={vid}"
 YT_URL = "https://www.youtube.com/watch?v={vid}"
@@ -261,96 +262,29 @@ def _cmd_uses_cookies(cmd: list[str]) -> bool:
 	)
 
 def _run_ytdlp(cmd: list[str]) -> int:
-	"""
-	Run yt-dlp command. If it fails specifically due to browser cookie copy
-	issues (common when Chrome/Edge is running or profiles are locked), retry
-	once without the cookies flag so public videos can still be fetched.
-	"""
-	if cmd and cmd[0] == INTERNAL_YTDLP:
-		rc, stdout, stderr = _run_ytdlp_module(cmd[1:])
-	else:
-		proc = subprocess.run(
-			cmd,
-			stdout=subprocess.PIPE,
-			stderr=subprocess.PIPE,
-			text=True,
-			encoding="utf-8",
-			errors="replace",
-			**subprocess_kwargs()
-		)
-		rc = proc.returncode
-		stdout = proc.stdout or ""
-		stderr = proc.stderr or ""
-	if rc == 0:
-		return 0
-	log(f"yt-dlp command failed rc={rc} cmd={' '.join(cmd)} stderr={stderr[:500]} stdout={stdout[:200]}")
-	# If cookie-backed extraction fails, retry once without cookies so
-	# public videos are not blocked by a bad auth/session state.
-	if _cmd_uses_cookies(cmd):
-		lower_err = stderr.lower()
-		if (
-			("could not copy" in lower_err and "cookie" in lower_err)
-			or ("locked" in lower_err and "cookie" in lower_err)
-			or _should_retry_without_cookies(stderr, stdout)
-		):
-			no_cookie_cmd = _strip_cookie_args(cmd)
-			log("yt-dlp retrying without cookies after cookie/session-specific extraction failure")
-			if no_cookie_cmd and no_cookie_cmd[0] == INTERNAL_YTDLP:
-				rc2, stdout2, stderr2 = _run_ytdlp_module(no_cookie_cmd[1:])
-			else:
-				proc2 = subprocess.run(
-					no_cookie_cmd,
-					stdout=subprocess.PIPE,
-					stderr=subprocess.PIPE,
-					text=True,
-					encoding="utf-8",
-					errors="replace",
-					**subprocess_kwargs()
-				)
-				rc2 = proc2.returncode
-				stdout2 = proc2.stdout or ""
-				stderr2 = proc2.stderr or ""
-			if rc2 != 0:
-				log(f"yt-dlp retry (no-cookies) failed rc={rc2} cmd={' '.join(no_cookie_cmd)} stderr={stderr2[:500]} stdout={stdout2[:200]}")
-				return rc2
-			return 0
-	return rc
+	return _run_ytdlp_detail(cmd)[0]
+
 
 def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
+	capture_source("")
+	cmd = cmd[:1] + ["--no-simulate", "--print", "after_move:%(.{id,format_id,acodec,vcodec,abr,tbr})j"] + cmd[1:]
+	# Never silently discard an explicitly selected authenticated session.
 	if cmd and cmd[0] == INTERNAL_YTDLP:
 		rc, stdout, stderr = _run_ytdlp_module(cmd[1:])
 	else:
 		proc = _run_capture(cmd)
-		rc = proc.returncode
-		stdout = proc.stdout or ""
-		stderr = proc.stderr or ""
+		rc, stdout, stderr = proc.returncode, proc.stdout or "", proc.stderr or ""
 	if rc == 0:
+		capture_source(stdout)
 		return 0, ""
-	uses_cookies = _cmd_uses_cookies(cmd)
-	detail = _summarize_tool_output(stderr, stdout, using_cookies=uses_cookies)
-	log(f"yt-dlp detail rc={rc} cmd={' '.join(cmd)} detail={detail}")
-	if uses_cookies:
-		lower_err = stderr.lower()
-		if (
-			("could not copy" in lower_err and "cookie" in lower_err)
-			or ("locked" in lower_err and "cookie" in lower_err)
-			or _should_retry_without_cookies(stderr, stdout)
-		):
-			no_cookie_cmd = _strip_cookie_args(cmd)
-			log("yt-dlp retrying without cookies after cookie/session-specific extraction failure")
-			if no_cookie_cmd and no_cookie_cmd[0] == INTERNAL_YTDLP:
-				rc2, stdout2, stderr2 = _run_ytdlp_module(no_cookie_cmd[1:])
-			else:
-				proc2 = _run_capture(no_cookie_cmd)
-				rc2 = proc2.returncode
-				stdout2 = proc2.stdout or ""
-				stderr2 = proc2.stderr or ""
-			if rc2 == 0:
-				return 0, ""
-			detail2 = _summarize_tool_output(stderr2, stdout2)
-			log(f"yt-dlp retry detail rc={rc2} cmd={' '.join(no_cookie_cmd)} detail={detail2}")
-			return rc2, detail2
+	detail = _summarize_tool_output(stderr, stdout, using_cookies=_cmd_uses_cookies(cmd))
+	log(f"yt-dlp failed rc={rc}: {detail}")
 	return rc, detail
+
+
+def _youtube_clients(cookie_args: list[str]) -> list[str | None]:
+	# Let yt-dlp choose cookie-compatible clients and Premium formats.
+	return [None] if _cmd_uses_cookies(cookie_args) else YOUTUBE_CLIENTS
 
 _FILENAME_CHAR_MAP = str.maketrans({
 	"\\": "＼",
@@ -720,7 +654,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	success = False
 	last_detail = "no yt-dlp attempts recorded"
 	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
-		for client in YOUTUBE_CLIENTS:
+		for client in _youtube_clients(cookies_args):
 			extractor_args = _extractor_args(client)
 			cmd_primary = primary_base + extractor_args + js_runtime_args + cookies_args + ["-o", out_tpl, base_url]
 			rc, detail = _run_ytdlp_detail(cmd_primary)
@@ -742,7 +676,7 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 			break
 	if not success:
 		search_url = f"ytsearch1:{base_name}"
-		for client in YOUTUBE_CLIENTS:
+		for client in _youtube_clients(cookies_args):
 			extractor_args = _extractor_args(client)
 			cmd_search = primary_base + extractor_args + js_runtime_args + cookies_args + ["-o", out_tpl, search_url]
 			rc, detail = _run_ytdlp_detail(cmd_search)
@@ -764,7 +698,9 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 	src = cands[0]
 	dst = dst_dir / (safe_base + ".m4a")
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
-	return _normalize_to_m4a(src, dst, ffmpeg_bin, video_id, audio_processing)
+	result = _normalize_to_m4a(src, dst, ffmpeg_bin, video_id, audio_processing)
+	store_source(result)
+	return result
 
 def download_opus(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
 	"""Download native Opus audio and remux it into an Ogg Opus container without re-encoding."""
@@ -787,7 +723,7 @@ def download_opus(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dl
 	success = False
 	last_detail = "no yt-dlp attempts recorded"
 	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
-		for client in YOUTUBE_CLIENTS:
+		for client in _youtube_clients(cookies_args):
 			cmd = cmd_base + _extractor_args(client) + js_runtime_args + cookies_args + ["-o", out_tpl, base_url]
 			rc, detail = _run_ytdlp_detail(cmd)
 			if rc == 0:
@@ -805,6 +741,7 @@ def download_opus(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dl
 	src = candidates[0]
 	dst = dst_dir / f"{safe_base}.opus"
 	if src == dst:
+		store_source(dst)
 		return dst
 	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
 	proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-map", "0:a:0", "-c:a", "copy", str(dst)])
@@ -815,6 +752,7 @@ def download_opus(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dl
 		src.unlink()
 	except OSError:
 		pass
+	store_source(dst)
 	return dst
 
 def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None, mp3_quality: int = 0, cbr_bitrate_kbps: int | None = None) -> pathlib.Path:
@@ -840,7 +778,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	success = False
 	last_detail = "no yt-dlp attempts recorded"
 	for base_url in (YTM_URL.format(vid=video_id), YT_URL.format(vid=video_id)):
-		for client in YOUTUBE_CLIENTS:
+		for client in _youtube_clients(cookies_args):
 			extractor_args = _extractor_args(client)
 			cmd = cmd_base + extractor_args + js_runtime_args + cookies_args + ["-o", str(tmp), base_url]
 			rc, detail = _run_ytdlp_detail(cmd)
@@ -854,7 +792,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 			break
 	if not success:
 		search_url = f"ytsearch1:{base_name}"
-		for client in YOUTUBE_CLIENTS:
+		for client in _youtube_clients(cookies_args):
 			extractor_args = _extractor_args(client)
 			cmd = cmd_base + extractor_args + js_runtime_args + cookies_args + ["-o", str(tmp), search_url]
 			rc, detail = _run_ytdlp_detail(cmd)
@@ -898,6 +836,7 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 	if rc != 0 or not dst.exists():
 		log(f"download_mp3: ffmpeg transcode failed video_id={video_id} dst='{dst.name}' rc={rc}")
 		raise DownloadError(f"ffmpeg mp3 transcode failed: {detail}")
+	store_source(dst)
 	return dst
 
 def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict], ext: str, *, suffix: str = ".m3u8", encoding: str = "utf-8", playlist_output_dir: pathlib.Path | None = None) -> pathlib.Path:

@@ -4,6 +4,20 @@ from csvmusic.core import js_runtime
 from csvmusic.core.js_runtime import JsRuntimeInfo, ytdlp_js_runtime_args
 
 
+def test_multiple_runtime_paths_parse_separately():
+	import yt_dlp
+	runtimes = (
+		JsRuntimeInfo("Deno", "deno", "C:/Tools/deno.exe", "2.7.14", True),
+		JsRuntimeInfo("Node", "node", "C:/Program Files/nodejs/node.exe", "24.16.0", True),
+	)
+	with patch("csvmusic.core.js_runtime.ytdlp_supports_js_runtimes", return_value=True), \
+			patch("csvmusic.core.js_runtime.detect_js_runtimes", return_value=runtimes):
+		args = ytdlp_js_runtime_args("yt-dlp")
+	parsed = yt_dlp.parse_options(args).ydl_opts["js_runtimes"]
+	assert parsed["deno"]["path"] == runtimes[0].path
+	assert parsed["node"]["path"] == runtimes[1].path
+
+
 def test_current_date_version_supports_js_runtimes():
 	js_runtime.ytdlp_supports_js_runtimes.cache_clear()
 	with patch("csvmusic.core.js_runtime._yt_dlp_version", return_value="2026.08.19"):

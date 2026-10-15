@@ -532,6 +532,12 @@ class PipelineWorker(QThread):
 					payload["downloaded"] = True
 					payload["file_path"] = str(fp)
 					payload["cover_bytes"] = cover
+					from csvmusic.core.audio_quality import audio_quality
+					quality = audio_quality(fp)
+					payload["audio_quality"] = quality
+					if quality["low"]:
+						self.sig_log.emit(f"[warn] Low YouTube source bitrate: {title} — {quality['codec']} ~{quality['kbps']} kbps")
+						self.sig_row_status.emit(row_idx, "Downloaded — low quality")
 				self.sig_track_result.emit(row_idx, payload)
 				if not self._stop and idx < total - 1:
 					time.sleep(self._track_pause_s())
@@ -620,7 +626,12 @@ class SingleDownloadWorker(QThread):
 			cover = _track_cover_bytes(self.track, vid)
 			tag_file(fp, self.track, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))
 			self.sig_status.emit(self.row_idx, f"Done → {fp.name}")
+			from csvmusic.core.audio_quality import audio_quality
+			quality = audio_quality(fp)
+			if quality["low"]:
+				self.sig_status.emit(self.row_idx, f"Downloaded — low quality ({quality['kbps']} kbps)")
 			payload = {
+				"audio_quality": quality,
 				"track": self.track,
 				"match": self.match,
 				"file_path": str(fp),
@@ -663,6 +674,29 @@ class AlternativesFetchWorker(QThread):
 			self.sig_done.emit(self.row_idx, [], str(exc))
 
 
+class YouTubeSessionTestWorker(QThread):
+	"""Bounded network check; never returns cookie contents or private account data."""
+	sig_done = Signal(bool, str)
+
+	def __init__(self, path: str, parent=None):
+		super().__init__(parent)
+		self.path = path
+
+	def run(self) -> None:
+		from csvmusic.core.youtube_session import validate_cookie_file, verify_youtube_session
+		try:
+			ok, message = validate_cookie_file(self.path)
+			if not ok:
+				self.sig_done.emit(False, message)
+				return
+			if verify_youtube_session(self.path):
+				self.sig_done.emit(True, "PASS — YouTube recognizes this signed-in session. Save settings to use it. This checks login only, not age eligibility, download formats, or Premium quality.")
+			else:
+				self.sig_done.emit(False, "NOT VERIFIED — YouTube did not confirm the login. Reconnect your account; the session may have expired or been revoked.")
+		except Exception:
+			self.sig_done.emit(False, "CHECK FAILED — Could not verify with YouTube. Check your connection and try again; this does not necessarily mean the cookies are invalid.")
+
+
 class CookiesCheckWorker(QThread):
 	# Emits (ok, message)
 	sig_done = Signal(bool, str)
@@ -675,6 +709,10 @@ class CookiesCheckWorker(QThread):
 
 	def run(self):
 		try:
+			if self.cookies_file:
+				from csvmusic.core.youtube_session import validate_cookie_file
+				self.sig_done.emit(*validate_cookie_file(self.cookies_file))
+				return
 			yt = self.yt_dlp_path or _resolve_ytdlp()
 			# Firefox profile pre-check: if a concrete profile path is provided, verify cookies DB exists
 			ff_signed_in_hint = None
@@ -735,30 +773,7 @@ class CookiesCheckWorker(QThread):
 									break
 					except Exception:
 						pass
-					# Try to extract account hint via yt-dlp JSON of feed/you
-					probe = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/feed/you"]
-					proc_acc = _run_yt_dlp_command(probe, timeout=12)
-					if proc_acc.returncode == 0 and proc_acc.stdout:
-						try:
-							obj = json.loads(proc_acc.stdout)
-							account_hint = self._extract_account_hint(obj)
-						except Exception:
-							pass
-						if not account_hint:
-							account_hint = self._extract_account_hint_text(proc_acc.stdout)
-					# Fallback: probe homepage for hints
-					if not account_hint:
-						try:
-							probe2 = [yt, "--cookies", self.cookies_file, "-J", "https://www.youtube.com/"]
-							proc_home = _run_yt_dlp_command(probe2, timeout=12)
-							if proc_home.returncode == 0 and proc_home.stdout:
-								try:
-									obj2 = json.loads(proc_home.stdout)
-									account_hint = self._extract_account_hint(obj2) or self._extract_account_hint_text(proc_home.stdout)
-								except Exception:
-									account_hint = self._extract_account_hint_text(proc_home.stdout)
-						except Exception:
-							pass
+
 				else:
 					# For Firefox, prefer the DB hint result; otherwise do a lightweight probe
 					if ff_signed_in_hint is not None:
@@ -766,7 +781,7 @@ class CookiesCheckWorker(QThread):
 					else:
 						signed_in = "found youtube account cookies" in low_all
 				msg = "Signed-in cookies detected" if signed_in else "Guest session (no account cookies)"
-				self.sig_done.emit(True, msg)
+				self.sig_done.emit(signed_in, msg)
 				return
 			stderr = (proc.stderr or "")
 			low = stderr.lower()
