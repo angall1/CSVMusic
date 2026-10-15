@@ -34,6 +34,32 @@ _YOUTUBE_EXTREME_BATCH_THRESHOLD = 500
 class DownloadError(Exception): pass
 
 
+class AgeRestrictedError(DownloadError):
+	"""The selected video needs an eligible authenticated YouTube session."""
+
+
+def is_age_restriction_error(message: str) -> bool:
+	text = message.lower()
+	return any(marker in text for marker in (
+		"sign in to confirm your age", "this video may be inappropriate for some users",
+		"age-restricted", "age restricted", "age_restricted", "confirm your age",
+	))
+
+
+def age_restriction_message(*, using_cookies: bool) -> str:
+	if using_cookies:
+		return (
+			"Age-restricted video. Cookies were used, but YouTube still rejected this result. "
+			"Open Settings > YouTube Account, reconnect or refresh your cookies, and test the connection. "
+			"Check that this account can play the video on YouTube, then retry or choose another result."
+		)
+	return (
+		"Age-restricted video. Enable cookies in Settings > YouTube Account. "
+		"Sign in, enable 'Use this YouTube session for downloads', press Save, then retry. "
+		"Cookies can allow access when your account is eligible to watch the video on YouTube."
+	)
+
+
 @dataclass(frozen=True)
 class YouTubeMitigationProfile:
 	label: str
@@ -139,14 +165,8 @@ def _summarize_tool_output(stderr: str, stdout: str, *, using_cookies: bool = Fa
 		return "no diagnostic output"
 	full_text = " | ".join(lines)
 	lower_full = full_text.lower()
-	if "sign in to confirm your age" in lower_full or "this video may be inappropriate for some users" in lower_full:
-		if using_cookies:
-			return "Age-restricted video. Cookies were used, but YouTube still rejected this result. Re-test cookies, export fresh cookies, or choose another result."
-		return "Age-restricted video. Sign into YouTube with Firefox cookies or choose another result."
-	if "login_required" in lower_full and "age-restricted" in lower_full:
-		if using_cookies:
-			return "Age-restricted video. Cookies were used, but YouTube still rejected this result. Re-test cookies, export fresh cookies, or choose another result."
-		return "Age-restricted video. Sign into YouTube with Firefox cookies or choose another result."
+	if is_age_restriction_error(full_text):
+		return age_restriction_message(using_cookies=using_cookies)
 	if "sign in to confirm you're not a bot" in lower_full or "sign in to confirm you’re not a bot" in lower_full:
 		if using_cookies:
 			return "YouTube asked for bot verification even with cookies enabled. Re-test cookies, wait and retry, or choose another result."
@@ -279,6 +299,10 @@ def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
 		return 0, ""
 	detail = _summarize_tool_output(stderr, stdout, using_cookies=_cmd_uses_cookies(cmd))
 	log(f"yt-dlp failed rc={rc}: {detail}")
+	if is_age_restriction_error(detail):
+		# Preserve the actionable error instead of masking it with later client,
+		# format, or search failures (or downloading a different video).
+		raise AgeRestrictedError(detail)
 	return rc, detail
 
 

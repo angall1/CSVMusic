@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import pathlib
+import unicodedata
 import re
 import tempfile
 from typing import Any
@@ -531,7 +532,7 @@ def library_track_path(track: dict, output_dir: str | pathlib.Path, fmt: str) ->
 	try:
 		matches = [
 			path for path in expected.parent.iterdir()
-			if path.is_file() and re.sub(r"^\d+- ", "", path.name) == plain.name
+			if path.is_file() and unicodedata.normalize("NFC", re.sub(r"^\d+- ", "", path.name)) == plain.name
 		]
 	except OSError:
 		matches = []

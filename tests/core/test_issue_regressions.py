@@ -1,6 +1,19 @@
 # tabs only
 from csvmusic.core.artwork import artwork_download_urls
 from csvmusic.core.library import library_track_path
+import unicodedata
+import pytest
+
+
+@pytest.mark.parametrize("prefix", ["", "023- "])
+def test_library_recovers_canonically_equivalent_accented_filename(tmp_path, prefix):
+	track = {"playlist": "List", "artists": "Björk & Zoë", "title": "Jóga"}
+	folder = tmp_path / "List"
+	folder.mkdir()
+	path = folder / unicodedata.normalize("NFD", f"{prefix}Björk & Zoë - Jóga.mp3")
+	path.write_bytes(b"audio")
+	assert library_track_path(track, tmp_path, "mp3") == path
+	assert not library_track_path(track, tmp_path, "m4a").exists()
 
 
 def test_recovers_numbered_file_after_old_rescan(tmp_path):

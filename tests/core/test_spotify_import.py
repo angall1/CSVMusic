@@ -35,6 +35,14 @@ def test_parse_spotify_source_from_album_url():
 	assert source.id == "584Igcr5ixQUeE4rHIPN9c"
 
 
+@pytest.mark.parametrize("source_type", ["album", "playlist"])
+@pytest.mark.parametrize("locale", ["intl-es", "intl-de", "intl-pt"])
+def test_parse_localized_spotify_link(source_type, locale):
+	source = parse_spotify_source(f"https://open.spotify.com/{locale}/{source_type}/584Igcr5ixQUeE4rHIPN9c?si=abc")
+	assert source.type == source_type
+	assert source.id == "584Igcr5ixQUeE4rHIPN9c"
+
+
 def test_parse_spotify_playlist_page_tracks():
 	state = {
 		"entities": {

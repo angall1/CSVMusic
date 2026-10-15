@@ -22,21 +22,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.7.8
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.9
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.7.8/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.9/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.8/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.9/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.8/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.9/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.7.8/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.9/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -72,7 +72,18 @@ Python installations still require a supported graphical desktop environment for
 
 ---
 
-# What's New In 1.7.8
+# What's New In 1.7.9
+
+- Fixed localized Spotify album and playlist links, including `/intl-es/` URLs (#86).
+- Prevented unrelated recommendations and numeric song titles from being captured as playlist rows (#85).
+- Recognize existing accented filenames across equivalent Unicode encodings during library rescans. This addresses a reproduced missing-file case related to #84; the original download failure remains unconfirmed.
+- Age-restricted downloads now explain how to enable cookies in **Settings → YouTube Account**, save, and retry. If cookies are already enabled, the error suggests reconnecting and checking account eligibility. The batch continues with the next song.
+- Added optional YouTube account sign-in, connection checks, and browser/manual-cookie fallbacks. Selected sessions remain enabled throughout downloads.
+- Added YouTube source-quality indicators, clearer legacy iPod MP3 encoding controls, a playlist-folder shortcut, and a scrollable rescan summary.
+- Corrected JavaScript runtime arguments passed to yt-dlp.
+
+<details>
+<summary>What's New In 1.7.8</summary>
 
 - #77: Apple Music imports now follow the public catalog's pagination when the page stops at 300 tracks. If pagination fails, the partial-import warning remains. No account login is required.
 - #78: Rescans preserve filename numbering and audio-processing metadata. Older numbered files can be recovered when the filename match is unambiguous.
@@ -82,7 +93,10 @@ Python installations still require a supported graphical desktop environment for
 - Restored installed Comic Sans as the default body font, with bundled Comic Neue as the fallback on systems without it.
 - #76/#82: macOS builds use an explicit native architecture and Monterey-compatible Qt 6.8.3. Release checks now extract the final ZIP, verify its signature, and exercise Qt/WebEngine startup. These changes still need native Apple Silicon/Intel build verification and a Monterey test; the ARM startup report is not yet confirmed resolved. The bundled media tools and experimental iPod helper also require verification on Monterey.
 
-# What's New In 1.7.7
+</details>
+
+<details>
+<summary>What's New In 1.7.7</summary>
 
 ## Library downloads, matching, and portable-player sync
 
@@ -96,114 +110,9 @@ Python installations still require a supported graphical desktop environment for
 - Reused iPod tracks now receive stable CSV Music identity metadata, playlist order is preserved, and helper processes remain hidden on Windows.
 - Improved sync progress, selection locking, missing-helper guidance, and the download activity layout.
 
----
+</details>
 
-# What's New In 1.7.6
-
-## macOS MP3 hotfix
-
-- Fixed MP3 downloads failing on macOS with `Encoder not found` because the packaged FFmpeg binary lacked the LAME encoder.
-- macOS releases now build FFmpeg natively for Apple Silicon and Intel with a statically linked `libmp3lame` encoder.
-- Every platform release must now complete a real MP3 transcode using CSVMusic's equalizer and normalization filters before its package can be published.
-- Added an early, readable error when an externally selected or damaged FFmpeg binary cannot encode MP3.
-
----
-
-# What's New In 1.7.3
-
-## Amazon Music, Linux, and startup reliability
-
-- Added support for current Amazon Music shared playlist links (`/user-playlists/...`) across regional Amazon Music domains, including metadata, artwork, duration, and playlist order.
-- Added software-rendering safeguards for Qt WebEngine on Linux to prevent Spotify playlist scans from closing the app on affected Mint and Fedora systems.
-- Fixed Library Mode startup with playlists containing saved download errors ([#72](https://github.com/angall1/CSVMusic/issues/72)).
-- Added update notifications directly to the default Library Mode, with download, remind-later, and skip-version choices.
-- Suppressed Qt's harmless malformed-image ICC warning while retaining other Qt warnings and errors.
-
----
-
-# What's New In 1.7.2
-
-## Album artwork reliability
-
-- Fixed Library Mode downloads omitting embedded artwork when the original service artwork URL was unavailable ([#71](https://github.com/angall1/CSVMusic/issues/71)).
-- CSVMusic now prefers the source album cover and reliably falls back to the matched YouTube thumbnail.
-- Confirmed current Linux packaging includes the Qt/XCB cursor dependency associated with [#66](https://github.com/angall1/CSVMusic/issues/66).
-- Confirmed Apple Silicon releases fetch, architecture-check, and execute an ARM64 FFmpeg binary during every build, addressing [#68](https://github.com/angall1/CSVMusic/issues/68).
-
----
-
-# What's New In 1.7.1
-
-## Cross-platform presentation and playlist files
-
-- Bundled Comic Neue and applied an explicit high-contrast Qt palette so fonts, controls, selections, and disabled states render consistently on Windows, macOS, and Linux desktop themes.
-- Added a remembered custom output folder for M3U and M3U8 playlist files in Library and Legacy modes, while retaining the existing alongside-audio default.
-- Playlist entries now use paths relative to the M3U file, supporting players that require separate music and playlist folders; cross-drive Windows layouts safely use absolute paths.
-- Refined the Sync and Legacy Mode header icons for clearer rendering at toolbar sizes.
-
----
-
-# What's New In 1.7.0
-
-## Library-first workflow
-
-- Made Library Mode the default interface while retaining Legacy Mode from the header.
-- Added persistent multi-playlist management, live scan progress, playlist and song search, per-song metadata editing, alternative-source selection, and low-confidence review.
-- Added direct public playlist and album imports for Spotify, YouTube Music, YouTube, Apple Music, Deezer, and Amazon Music, alongside standalone TuneMyMusic/Exportify-compatible CSV imports.
-- Improved large-playlist scanning, incomplete-scan reporting, duplicate/repeated-track handling, removed-track reconciliation, and download-time UI responsiveness.
-
-## Download matching and output
-
-- Prefer YouTube Music candidates and expose each alternative's source and album metadata.
-- Penalize unintended live, acoustic, remix, edit, and mismatched versions while preserving explicitly requested versions.
-- Queue alternative selections for batch download, remove superseded local versions after successful replacement, and rebuild complete M3U playlists.
-- Added per-song volume adjustment, themed equalizer/settings interfaces, a searchable song list, live download states, and a detailed process/error log.
-
-## Portable-player sync
-
-- Added selective portable-player synchronization, Select All, progress reporting, device playlist inspection/deletion, optional automatic eject, and safer Windows eject handling.
-- Added experimental classic iPod database synchronization on Windows, Linux, and macOS with playlist replacement, selected-alternative identity tracking, verified writes, backups, and alphabetical playlist ordering.
-- Release ZIPs include a native libgpod helper for Linux and each macOS architecture. Windows includes the Linux helper and requires Windows Subsystem for Linux to be enabled.
-- Added folder/M3U8 synchronization for compatible USB mass-storage music players.
-
-## Safety and presentation
-
-- Added the first-run safety/support notice, large-playlist and YouTube-throttling guidance, updated tutorial/info pages, and direct support links.
-- Refined the retro skeuomorphic interface, card states, icons, scrollbars, spacing, long-title handling, and startup behavior.
-
----
-
-# What's New In 1.6.6 (Since 1.6.0)
-
-## Updates and MP3 reliability
-
-- Added a lightweight startup update check that prompts when a newer stable CSVMusic release is available, with options to download, be reminded later, or skip that version.
-- Fixed intermittent MP3 failures when YouTube exposes only a combined audio/video stream. CSVMusic still prefers audio-only downloads and now safely falls back to extracting audio from the best available combined stream.
-
-## YouTube reliability
-
-- Fixed preflight incorrectly reporting the bundled yt-dlp as too old when antivirus scanning or slower storage made its version probe take more than three seconds.
-- Added yt-dlp's automatic YouTube client selection as an early fallback, allowing current upstream clients such as `visionos` to recover when a forced client temporarily exposes no playable formats.
-- Updated and pinned yt-dlp to `2026.08.19`, fixing widespread HTTP 403 failures with current YouTube `web_embedded` downloads and preventing release builds from silently changing downloader versions.
-- Fixed current YouTube player-challenge failures by packaging Deno and `yt-dlp-ejs`, passing the runtime explicitly, and validating both before downloads begin.
-- Updated YouTube client fallbacks and diagnostics for current yt-dlp behavior, including clearer HTTP 403, throttling, and JavaScript-runtime messages.
-- Added adaptive pacing when YouTube starts throttling or blocking a playlist download.
-- Improved force-download handling for low-confidence matches and added candidate fallbacks.
-
-## Playlist imports and workflow
-
-- Added first-class **Exportify CSV** support for `Track URI`, `Album Name`, `Artist Name(s)`, release dates, and CSVs without a playlist column.
-- Renamed **Load Playlist** to **Resume Playlist** and replaced its folder/file fork with one chooser that accepts a folder or `.m3u`/`.m3u8` file.
-- Added a compact **Paste URL…** action to Alternatives for downloading a specific YouTube or YouTube Music video.
-- Improved playlist accounting so existing files, queued tracks, duplicate entries, skipped matches, and failures reconcile with the requested track total.
-
-## Audio and Windows packaging
-
-- Shortened exceptionally long track filenames with a stable uniqueness suffix, preventing Windows output-path failures from being misreported as YouTube throttling.
-- Added optional native **Opus** output under Settings. Opus streams are remuxed without lossy re-encoding and support metadata and artwork.
-- Prevented FFmpeg failures caused by selecting Apple Music or iTunes auto-import folders.
-- Fixed Windows release builds by accepting Deno's PowerShell-formatted SHA256 metadata while retaining archive integrity verification on every platform.
-- Forced UTF-8 for packaged downloader and FFmpeg subprocesses so Unicode song titles and sanitized punctuation work reliably on Windows.
+[Older updates and downloads](https://github.com/angall1/CSVMusic/releases)
 
 ---
 

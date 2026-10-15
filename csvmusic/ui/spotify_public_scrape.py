@@ -30,7 +30,8 @@ def jittered_scroll_delay_ms(base_ms: int) -> int:
 _CAPTURE_SCRIPT = r"""
 (() => {
 	const tracks = [];
-	const trackLinks = [...document.querySelectorAll('a[href*="/track/"]')];
+	const tracklist = document.querySelector('main [data-testid="playlist-tracklist"], main [data-testid="tracklist"], main [role="grid"]');
+	const trackLinks = tracklist ? [...tracklist.querySelectorAll('a[href*="/track/"]')] : [];
 	for (const trackLink of trackLinks) {
 		const precedingHeadings = [...document.querySelectorAll('h1, h2, h3')]
 			.filter(heading => heading.compareDocumentPosition(trackLink) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -41,16 +42,16 @@ _CAPTURE_SCRIPT = r"""
 		const href = trackLink.href || '';
 		const match = href.match(/\/track\/([A-Za-z0-9]+)/);
 		if (!match) continue;
-		const row = trackLink.closest('[role="row"], [data-testid*="tracklist-row"]')
-			|| trackLink.parentElement?.parentElement?.parentElement || trackLink.parentElement;
+		const row = trackLink.closest('[role="row"], [data-testid*="tracklist-row"]');
 		if (!row) continue;
 		const artistLinks = [...row.querySelectorAll('a[href*="/artist/"]')];
 		const albumLink = row.querySelector('a[href*="/album/"]');
 		const artwork = row.querySelector('img');
 		const lines = (row.innerText || '').split('\n').map(x => x.trim()).filter(Boolean);
 		const title = (trackLink.innerText || trackLink.textContent || lines[0] || '').trim();
-		const positionText = lines.find(line => /^\d{1,5}$/.test(line)) || '';
-		const position = positionText ? parseInt(positionText, 10) : null;
+		const positionCell = row.querySelector('[aria-colindex="1"]');
+		const positionText = (positionCell?.innerText || '').trim();
+		const position = /^\d{1,5}$/.test(positionText) ? parseInt(positionText, 10) : null;
 		tracks.push({
 			id: match[1],
 			position,
