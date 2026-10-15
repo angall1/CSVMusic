@@ -3,6 +3,8 @@ name: Release Builds
 on:
   push:
     tags: ["v*"]
+    branches: ["main"]
+    paths: ["csvmusic/version.py"]
   release:
     types: [published]
   workflow_dispatch:
@@ -20,7 +22,7 @@ defaults:
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-  RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+  RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.sha }}
   DENO_VERSION: "2.9.4"
   FFMPEG_VERSION: "8.1.2"
   YTDLP_VERSION: "2026.08.19"
@@ -564,6 +566,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check out release metadata
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_REF }}
+
+      - name: Resolve release version
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, runpy
+          version = runpy.run_path("csvmusic/version.py")["APP_VERSION"]
+          tag = "v" + version
+          if os.environ["GITHUB_EVENT_NAME"] != "push" or os.environ["GITHUB_REF_TYPE"] != "branch":
+              assert os.environ["RELEASE_TAG"] == tag, "Release tag and app version differ"
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"RELEASE_TAG={tag}\n")
+          readme = pathlib.Path("README.md").read_text(encoding="utf-8")
+          notes = readme.split(f"# What's New In {version}\n", 1)[1].split("<details>", 1)[0].strip()
+          pathlib.Path("release-notes.md").write_text(notes + "\n", encoding="utf-8")
+          PY
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -575,18 +597,8 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
-          body: |
-            Library fixes and improvements:
-            - Preserve numbered filenames and equalization metadata across rescans; recover unambiguous existing numbered files.
-            - Avoid redownloading existing tracks just because older audio-processing metadata is missing.
-            - Follow Apple Music catalog pagination beyond the first page of tracks.
-            - Use full-size Spotify album artwork, with the original image as a fallback.
-            - Add Scan Unscanned and optional browser/cookies.txt settings in Library Mode.
-            - Use installed Comic Sans, with Comic Neue as the cross-platform fallback.
-
-            macOS builds use native architecture and Qt 6.8.3, with final-ZIP signature and Qt/WebEngine startup checks.
-            Monterey hardware and experimental iPod syncing on Monterey remain unverified; the older ARM startup report still needs affected-user confirmation.
-            Existing downloaded files are not automatically retagged with new artwork. Cookies do not guarantee protection from YouTube rate limits.
+          target_commitish: ${{ github.sha }}
+          body_path: release-notes.md
           files: |
             release/*.whl
             release/*.tar.gz
