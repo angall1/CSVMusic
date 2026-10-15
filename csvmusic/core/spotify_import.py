@@ -65,6 +65,8 @@ def parse_spotify_source(value: str, *, expected_type: str | None = None) -> Spo
 		parts = [part for part in parsed.path.split("/") if part]
 		if host not in ("open.spotify.com", "play.spotify.com"):
 			raise SpotifyImportError("Paste a Spotify playlist or album link from open.spotify.com.")
+		if parts and re.fullmatch(r"intl-[a-z]{2}(?:-[a-z]{2})?", parts[0], re.I):
+			parts = parts[1:]
 		if len(parts) < 2 or parts[0].lower() not in ("playlist", "album"):
 			raise SpotifyImportError("This Spotify link is not a playlist or album link.")
 		source_type = parts[0].lower()
