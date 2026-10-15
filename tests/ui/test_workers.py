@@ -3,6 +3,29 @@ import pathlib
 from csvmusic.ui import workers
 
 
+def test_pipeline_preserves_age_error_and_continues_next_track(monkeypatch, tmp_path):
+	from csvmusic.core.downloader import AgeRestrictedError, age_restriction_message
+	worker = _pipeline(tmp_path, force_download=True)
+	worker.tracks_override.append(dict(worker.tracks_override[0], title="Next song"))
+	worker.row_indices = [0, 1]
+	results = []
+	calls = []
+	worker.sig_track_result.connect(lambda row, payload: results.append(payload))
+	monkeypatch.setattr(workers, "YTMusic", lambda: object())
+	monkeypatch.setattr(workers, "find_best", lambda _yt, _track: _low_confidence_result())
+	monkeypatch.setattr(workers.time, "sleep", lambda _seconds: None)
+	monkeypatch.setattr(worker, "_ordered_force_candidates", lambda *args: [{"videoId": "restricted"}, {"videoId": "other"}])
+	message = age_restriction_message(using_cookies=False)
+	def fail(video_id, *args):
+		calls.append(video_id)
+		raise AgeRestrictedError(message)
+	monkeypatch.setattr(worker, "_download_with_profile", fail)
+	worker.run()
+	assert calls == ["restricted", "restricted"]
+	assert len(results) == 2
+	assert all(result["downloaded"] is False and result["error"] == message for result in results)
+
+
 def _pipeline(tmp_path: pathlib.Path, *, force_download: bool) -> workers.PipelineWorker:
 	return workers.PipelineWorker(
 		csv_path="",
