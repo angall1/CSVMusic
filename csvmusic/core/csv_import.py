@@ -1,5 +1,5 @@
 # tabs only
-import pathlib
+import csv, pathlib
 from typing import Union, List, Dict, Optional
 import pandas as pd
 
@@ -203,3 +203,31 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 			"disc_no": disc_no or 1,
 		})
 	return out
+
+
+SKIPPED_CSV_FIELDS = ["Playlist name", "Track name", "Artist name", "Album", "ISRC", "Spotify - id", "Duration (ms)", "Release date", "Cover URL", "Reason"]
+
+def write_skipped_csv(path: Union[str, pathlib.Path], skipped: List[Dict]) -> pathlib.Path:
+	"""
+	Write tracks that were not downloaded as a CSV that load_csv() can read back,
+	so a later run can retry just those rows. Each entry is {"track": dict, "reason": str}.
+	"""
+	path = pathlib.Path(path)
+	with path.open("w", encoding="utf-8-sig", newline="") as handle:
+		writer = csv.DictWriter(handle, fieldnames=SKIPPED_CSV_FIELDS)
+		writer.writeheader()
+		for entry in skipped:
+			track = entry.get("track") or {}
+			writer.writerow({
+				"Playlist name": track.get("playlist") or "",
+				"Track name": track.get("title") or "",
+				"Artist name": track.get("artists") or "",
+				"Album": track.get("album") or "",
+				"ISRC": track.get("isrc") or "",
+				"Spotify - id": track.get("sp_id") or "",
+				"Duration (ms)": track.get("duration_ms") or 0,
+				"Release date": track.get("year") or "",
+				"Cover URL": track.get("cover_url") or "",
+				"Reason": entry.get("reason") or "",
+			})
+	return path

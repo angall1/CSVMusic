@@ -1,11 +1,14 @@
 # tabs only
 import sys, pathlib, time, argparse, traceback
 from typing import Optional
-from csvmusic.core.csv_import import load_csv, tracks_from_csv
+from csvmusic.core.csv_import import load_csv, tracks_from_csv, write_skipped_csv
 from csvmusic.core.ytmusic_match import batch_match
 from csvmusic.core.downloader import (
-	download_m4a, download_mp3, tag_file, yt_thumbnail_bytes, write_m3u, sanitize_name
+	download_m4a, download_mp3, tag_file, track_cover_bytes, write_m3u, sanitize_name
 )
+from csvmusic.core.log import log
+
+SKIPPED_CSV_NAME = "skipped.csv"
 
 def main(argv: list[str]) -> int:
 	parser = argparse.ArgumentParser(
@@ -18,6 +21,7 @@ def main(argv: list[str]) -> int:
 	parser.add_argument("--format", choices=["m4a","mp3"], default="m4a", help="Output format")
 	parser.add_argument("--cbr320", action="store_true", help="MP3 320 kbps CBR (default is V0)")
 	parser.add_argument("--no-m3u", action="store_true", help="Do not write an .m3u8 file")
+	parser.add_argument("--no-skipped-csv", action="store_true", help=f"Do not write {SKIPPED_CSV_NAME} for unmatched or failed tracks")
 	parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
 	args = parser.parse_args(argv[1:])
 
@@ -67,12 +71,14 @@ def main(argv: list[str]) -> int:
 	dest_dir.mkdir(parents=True, exist_ok=True)
 
 	done_tracks = []
+	not_downloaded = []
 	for r in results:
 		t = r["track"]
 		title = t["title"]; artists = t["artists"]
 		base = f"{artists} - {title}"
 		if r.get("skipped"):
 			print(f"[SKIP] {artists} — {title}")
+			not_downloaded.append({"track": t, "reason": f"match error: {r['error']}" if r.get("error") else "no confident match"})
 			continue
 		vid = r["match"]["videoId"]
 		try:
@@ -82,7 +88,7 @@ def main(argv: list[str]) -> int:
 				fp = download_m4a(vid, dest_dir, base)
 			else:
 				fp = download_mp3(vid, dest_dir, base, cbr_320=args.cbr320)
-			cover = yt_thumbnail_bytes(vid)  # best-effort cover
+			cover = track_cover_bytes(t, vid)  # CSV "Cover URL" first, then YouTube thumbnail
 			tag_file(fp, t, cover)
 			print(f"[OK] {artists} — {title}  ->  {fp.name}")
 			done_tracks.append(t)
@@ -90,6 +96,8 @@ def main(argv: list[str]) -> int:
 			if args.verbose:
 				traceback.print_exc()
 			print(f"[FAIL] {artists} — {title}: {str(e)[:140]}")
+			log(f"cli download failure: video_id={vid} error={e}")
+			not_downloaded.append({"track": t, "reason": f"download failed: {str(e)[:140]}"})
 		time.sleep(0.05)
 
 	# M3U
@@ -97,6 +105,16 @@ def main(argv: list[str]) -> int:
 		ext = "m4a" if fmt == "m4a" else "mp3"
 		m3u = write_m3u(out_root, playlist_name, done_tracks, ext)
 		print(f"Wrote {m3u}")
+
+	# Unmatched/failed tracks, in a CSV that can be passed back to --csv to retry
+	skipped_path = dest_dir / SKIPPED_CSV_NAME
+	if not args.no_skipped_csv and not_downloaded:
+		write_skipped_csv(skipped_path, not_downloaded)
+		print(f"Not downloaded: {len(not_downloaded)} (listed in {skipped_path})")
+	elif skipped_path.exists() and not args.no_skipped_csv:
+		# A retry run that got everything: drop the stale list
+		skipped_path.unlink()
+	log(f"cli run done: selected={len(tracks)} downloaded={len(done_tracks)} not_downloaded={len(not_downloaded)}")
 	return 0
 
 if __name__ == "__main__":

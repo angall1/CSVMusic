@@ -576,6 +576,14 @@ def cover_art_url_bytes(url: str | None) -> Optional[bytes]:
 	return None
 
 
+def track_cover_bytes(track: Dict, video_id: str) -> Optional[bytes]:
+	"""Prefer the track's source artwork (CSV "Cover URL"), falling back to the YouTube thumbnail."""
+	cover = cover_art_url_bytes(track.get("cover_url"))
+	if cover:
+		return cover
+	return yt_thumbnail_bytes(video_id)
+
+
 def _fetch_cover_art_url_bytes(url: str) -> Optional[bytes]:
 	try:
 		r = requests.get(str(url), timeout=12, stream=True)
