@@ -57,6 +57,8 @@ CSVMUSIC_OUT=/srv/music/library
 CSVMUSIC_CONFIG=./config
 ```
 
+If `out/` doesn't exist yet, the container creates it for that user. If you point `/out` at an existing folder that belongs to someone else, the container stops with a message asking you to fix PUID/PGID.
+
 `config/` holds the log (`config/.local/share/csvmusic/app.log`) and yt-dlp's cache.
 
 ## Running unattended
