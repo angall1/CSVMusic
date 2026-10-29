@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+build
+dist
+tests
+resources
+*.spec
+**/__pycache__
+in
+out
+config

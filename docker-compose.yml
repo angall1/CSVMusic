@@ -1,0 +1,16 @@
+# Headless CSVMusic. Usage (see README-DOCKER.md):
+#   docker compose build
+#   docker compose run --rm csvmusic --csv "/in/My Playlist.csv" --out /out --format mp3
+services:
+  csvmusic:
+    build: .
+    image: csvmusic:headless
+    environment:
+      # Downloaded files are owned by this user/group (check yours with `id`)
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${CSVMUSIC_IN:-./in}:/in:ro
+      - ${CSVMUSIC_OUT:-./out}:/out
+      - ${CSVMUSIC_CONFIG:-./config}:/config
