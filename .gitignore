@@ -40,3 +40,8 @@ tmp_ytdlp_test/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Docker volumes (docker-compose.yml defaults)
+/in/
+/out/
+/config/

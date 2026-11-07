@@ -1,0 +1,45 @@
+name: Headless Docker checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, codex/pr90-headless-fixes]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build native headless image
+        run: docker build --tag csvmusic-headless:test .
+      - name: Headless regression tests
+        run: |
+          docker run --rm --entrypoint /bin/sh -v "$PWD:/src:ro" -w /src csvmusic-headless:test -c '
+            python -m pip install --no-cache-dir pytest &&
+            python -c "import importlib.util; assert importlib.util.find_spec(\"PySide6\") is None" &&
+            python -m pytest tests -q -p no:cacheprovider --basetemp /tmp/csvmusic-tests
+          '
+      - name: Container permissions and runtime smoke tests
+        run: bash tests/docker/smoke.sh csvmusic-headless:test
+      - uses: actions/setup-python@v6
+        if: matrix.os == 'ubuntu-24.04'
+        with:
+          python-version: '3.12'
+      - name: Full desktop regression suite
+        if: matrix.os == 'ubuntu-24.04'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+          python -m pip install -e . pytest
+          python -m pytest tests -q

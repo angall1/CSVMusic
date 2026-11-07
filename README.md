@@ -54,6 +54,8 @@ sudo apt install libxcb-cursor0
 
 Additional Linux diagnostics are included in `README-LINUX.md` inside the release archive.
 
+To run CSV downloads headless on a home server or NAS (Docker, amd64/arm64), see [`README-DOCKER.md`](README-DOCKER.md).
+
 If launch fails, copy the terminal output along with `uname -m` and the contents of `/etc/os-release` when reporting the problem.
 
 ---
