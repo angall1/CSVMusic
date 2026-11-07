@@ -5,6 +5,7 @@ import pandas as pd
 
 from csvmusic import download_csv
 from csvmusic.core import downloader
+from csvmusic.core import public_artwork
 from csvmusic.core.csv_import import load_csv, tracks_from_csv, write_skipped_csv
 
 
@@ -36,7 +37,8 @@ def test_track_cover_prefers_csv_cover_url(monkeypatch):
 	def fake_cover(url):
 		seen["url"] = url
 		return b"source-art"
-	monkeypatch.setattr(downloader, "cover_art_url_bytes", fake_cover)
+	monkeypatch.setattr(public_artwork, "public_artwork_bytes", fake_cover)
+	monkeypatch.setattr(downloader, "_square_cover_art_bytes", lambda data: data)
 	monkeypatch.setattr(downloader, "yt_thumbnail_bytes", lambda _vid: b"youtube-art")
 
 	cover = downloader.track_cover_bytes({"cover_url": "https://example.test/cover.jpg"}, "vid")
@@ -46,7 +48,7 @@ def test_track_cover_prefers_csv_cover_url(monkeypatch):
 
 
 def test_track_cover_falls_back_to_youtube_thumbnail(monkeypatch):
-	monkeypatch.setattr(downloader, "cover_art_url_bytes", lambda _url: None)
+	monkeypatch.setattr(public_artwork, "public_artwork_bytes", lambda _url: None)
 	monkeypatch.setattr(downloader, "yt_thumbnail_bytes", lambda vid: f"thumb:{vid}".encode())
 
 	assert downloader.track_cover_bytes({"cover_url": None}, "vid-1") == b"thumb:vid-1"
@@ -89,7 +91,7 @@ def test_cli_tags_with_csv_metadata_and_writes_skipped_csv(tmp_path, monkeypatch
 
 	rc = download_csv.main(["prog", "--csv", str(csv_path), "--out", str(out), "--format", "mp3"])
 
-	assert rc == 0
+	assert rc == 2
 	assert len(tagged) == 1
 	fp, meta, cover = tagged[0]
 	assert fp.parent == out / "Road Trip"
@@ -99,5 +101,5 @@ def test_cli_tags_with_csv_metadata_and_writes_skipped_csv(tmp_path, monkeypatch
 	assert cover == b"cover:https://example.test/cover.jpg"
 	assert (out / "Road Trip" / "Road Trip.m3u8").exists()
 
-	skipped = tracks_from_csv(load_csv(out / "Road Trip" / "skipped.csv"))
+	skipped = tracks_from_csv(load_csv(next((out / "Road Trip").glob("skipped-*.csv"))))
 	assert [t["title"] for t in skipped] == ["Obscure B-Side"]

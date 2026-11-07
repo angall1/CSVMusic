@@ -2,7 +2,7 @@
 
 Run CSVMusic's CSV downloader on a home server or NAS, with no desktop and no Qt. The image wraps the existing CLI (`python -m csvmusic.download_csv`): CSV → YouTube Music match → download → tag (title, artist, album, year, cover art) → `.m3u8` playlist.
 
-The image works on `linux/amd64` and `linux/arm64` (e.g. a Raspberry Pi 4/5). It contains Python, FFmpeg and Deno, which yt-dlp needs for YouTube.
+The image targets `linux/amd64` and `linux/arm64`. CI builds and smoke-tests both architectures; Raspberry Pi hardware itself is not tested. It contains Python, FFmpeg and Deno, which yt-dlp needs for YouTube.
 
 ## Set up
 
@@ -27,22 +27,24 @@ Useful options (`docker compose run --rm csvmusic --help` lists them all):
 | --- | --- |
 | `--format mp3` / `--format m4a` | Output format (default `m4a`) |
 | `--cbr320` | MP3 at 320 kbps CBR instead of V0 |
-| `--playlist "Name"` | Only that playlist from a multi-playlist CSV |
+| `--playlist "Name"` | Require that exact playlist name; export one playlist per CSV |
 | `--no-m3u` | Don't write the `.m3u8` playlist |
-| `--no-skipped-csv` | Don't write `skipped.csv` |
+| `--no-skipped-csv` | Don't write a retry CSV/state pair |
 | `-v` | Verbose output |
 
-Cover art comes from the CSV's `Cover URL` column when it has one, otherwise from the YouTube thumbnail.
+Cover art comes from the CSV's `Cover URL` column when it has one, otherwise from the YouTube thumbnail. Only public HTTP(S) addresses on standard ports are fetched; private/loopback/link-local destinations and redirects to them are rejected. Connections are pinned to a validated public address, including HTTPS hostname verification.
 
 ## Tracks that were not downloaded
 
-Tracks without a confident match, or whose download failed, are listed in `out/<playlist>/skipped.csv` with a `Reason` column. It is a normal CSVMusic CSV, so you can retry just those later:
+Tracks without a confident match, or whose download failed, are listed in a uniquely named `out/<playlist>/skipped-<batch-id>.csv` with a `Reason` column. The exact filename is printed at the end of the run. Keep its matching `.state.json` file next to it: this records original playlist order and previously completed tracks. Retry using that exact CSV path and the original output folder and format:
 
 ```bash
-docker compose run --rm csvmusic --csv "/out/My Playlist/skipped.csv" --out /out --format mp3 --no-m3u
+docker compose run --rm csvmusic --csv "/out/My Playlist/skipped-<batch-id>.csv" --out /out --format mp3
 ```
 
-Use `--no-m3u` on retries so the playlist file from the first run is kept. When a retry gets everything, `skipped.csv` is removed.
+The retry rebuilds the M3U with previously downloaded and recovered tracks in their original order, preserving track/disc numbers. Do not use `--no-m3u` if you want recovered songs included. A completed retry removes only its own verified CSV/state pair. A partial retry creates a new pair before removing the old one. Other batches and unrelated `skipped.csv` files are left alone. If the retry CSV or playlist was edited, rerun the original CSV instead. Do not run overlapping jobs against the same playlist folder.
+
+Exit status is `0` on complete success, `2` when some tracks were not downloaded, and `1` for invalid input/setup. Scheduled jobs can use this to detect failures. `--no-skipped-csv` leaves any existing retry files untouched.
 
 ## File ownership and folders
 
@@ -69,7 +71,7 @@ The container runs once and exits, so you can run it in `tmux`/`screen`, with `n
 cd /path/to/CSVMusic && docker compose run --rm -T csvmusic --csv "/in/My Playlist.csv" --out /out --format mp3 >> config/cron.log 2>&1
 ```
 
-Large batches can trigger YouTube rate limits. If many tracks fail with HTTP 429 or "confirm you're not a bot", wait a while and retry from `skipped.csv`. Age-restricted videos need a signed-in YouTube session, which the desktop app supports and the headless CLI does not.
+Large batches can trigger YouTube rate limits. If many tracks fail with HTTP 429 or "confirm you're not a bot", wait a while and retry from the printed retry CSV. Age-restricted videos need a signed-in YouTube session, which the desktop app supports and the headless CLI does not.
 
 ## Update
 

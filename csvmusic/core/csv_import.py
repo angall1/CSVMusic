@@ -1,5 +1,5 @@
 # tabs only
-import csv, pathlib
+import csv, pathlib, os, tempfile
 from typing import Union, List, Dict, Optional
 import pandas as pd
 
@@ -205,7 +205,7 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 	return out
 
 
-SKIPPED_CSV_FIELDS = ["Playlist name", "Track name", "Artist name", "Album", "ISRC", "Spotify - id", "Duration (ms)", "Release date", "Cover URL", "Reason"]
+SKIPPED_CSV_FIELDS = ["Playlist name", "Track name", "Artist name", "Album", "ISRC", "Spotify - id", "Duration (ms)", "Release date", "Cover URL", "Track number", "Disc number", "Reason"]
 
 def write_skipped_csv(path: Union[str, pathlib.Path], skipped: List[Dict]) -> pathlib.Path:
 	"""
@@ -213,21 +213,33 @@ def write_skipped_csv(path: Union[str, pathlib.Path], skipped: List[Dict]) -> pa
 	so a later run can retry just those rows. Each entry is {"track": dict, "reason": str}.
 	"""
 	path = pathlib.Path(path)
-	with path.open("w", encoding="utf-8-sig", newline="") as handle:
-		writer = csv.DictWriter(handle, fieldnames=SKIPPED_CSV_FIELDS)
-		writer.writeheader()
-		for entry in skipped:
-			track = entry.get("track") or {}
-			writer.writerow({
-				"Playlist name": track.get("playlist") or "",
-				"Track name": track.get("title") or "",
-				"Artist name": track.get("artists") or "",
-				"Album": track.get("album") or "",
-				"ISRC": track.get("isrc") or "",
-				"Spotify - id": track.get("sp_id") or "",
-				"Duration (ms)": track.get("duration_ms") or 0,
-				"Release date": track.get("year") or "",
-				"Cover URL": track.get("cover_url") or "",
-				"Reason": entry.get("reason") or "",
-			})
+	# Write beside the destination, then replace: a failed write keeps the old CSV.
+	fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".csvmusic-", suffix=".tmp")
+	try:
+		with os.fdopen(fd, "w", encoding="utf-8-sig", newline="") as handle:
+			_write_skipped_rows(handle, skipped)
+		os.replace(temporary, path)
+	finally:
+		pathlib.Path(temporary).unlink(missing_ok=True)
 	return path
+
+
+def _write_skipped_rows(handle, skipped: List[Dict]) -> None:
+	writer = csv.DictWriter(handle, fieldnames=SKIPPED_CSV_FIELDS)
+	writer.writeheader()
+	for entry in skipped:
+		track = entry.get("track") or {}
+		writer.writerow({
+			"Playlist name": track.get("playlist") or "",
+			"Track name": track.get("title") or "",
+			"Artist name": track.get("artists") or "",
+			"Album": track.get("album") or "",
+			"ISRC": track.get("isrc") or "",
+			"Spotify - id": track.get("sp_id") or "",
+			"Duration (ms)": track.get("duration_ms") or 0,
+			"Release date": track.get("year") or "",
+			"Cover URL": track.get("cover_url") or "",
+			"Track number": track.get("track_no") or 0,
+			"Disc number": track.get("disc_no") or 1,
+			"Reason": entry.get("reason") or "",
+		})

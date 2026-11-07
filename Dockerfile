@@ -9,7 +9,7 @@ FROM denoland/deno:bin-${DENO_VERSION} AS deno
 FROM python:${PYTHON_VERSION}-slim
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+	&& apt-get install -y --no-install-recommends ffmpeg ca-certificates util-linux \
 	&& rm -rf /var/lib/apt/lists/*
 
 # yt-dlp needs a JavaScript runtime for YouTube; csvmusic finds deno on PATH.

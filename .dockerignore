@@ -10,3 +10,9 @@ resources
 in
 out
 config
+.env
+.env.*
+.test-runtime*
+.agents
+.codex
+*.log
