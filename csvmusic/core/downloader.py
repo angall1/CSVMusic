@@ -582,7 +582,11 @@ def track_cover_bytes(track: Dict, video_id: str) -> Optional[bytes]:
 	from csvmusic.core.artwork import artwork_download_urls
 	url = track.get("cover_url")
 	if url:
-		for candidate in artwork_download_urls(str(url)):
+		try:
+			candidates = artwork_download_urls(str(url))
+		except ValueError:
+			candidates = []
+		for candidate in candidates:
 			cover = public_artwork_bytes(candidate)
 			if cover:
 				return _square_cover_art_bytes(cover) or cover

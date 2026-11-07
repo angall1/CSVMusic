@@ -53,6 +53,7 @@ def test_track_cover_falls_back_to_youtube_thumbnail(monkeypatch):
 
 	assert downloader.track_cover_bytes({"cover_url": None}, "vid-1") == b"thumb:vid-1"
 	assert downloader.track_cover_bytes({}, "vid-2") == b"thumb:vid-2"
+	assert downloader.track_cover_bytes({"cover_url": "https://[invalid"}, "vid-3") == b"thumb:vid-3"
 
 
 def test_skipped_csv_round_trips_through_load_csv(tmp_path):
