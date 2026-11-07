@@ -2366,7 +2366,7 @@ class MainWindow(QMainWindow):
 			parent=self,
 		)
 		self.worker.sig_log.connect(self.lbl_log.setText)
-		self.worker.sig_warning.connect(lambda msg: QMessageBox.warning(self, "YouTube throttling detected", msg))
+		self.worker.sig_warning.connect(lambda msg: QMessageBox.warning(self, "YouTube Download Notice", msg))
 		self.worker.sig_total.connect(lambda n: self.lbl_log.setText(f"Queued {n} tracks…"))
 		self.worker.sig_match_stats.connect(lambda m, s: self.lbl_log.setText(f"Matched: {m} | Skipped: {s}"))
 		self.worker.sig_row_status.connect(self.on_row_status)

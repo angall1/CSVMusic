@@ -3550,11 +3550,13 @@ class LibraryModeDialog(QDialog):
 	def _download_log_message(self, message: str) -> None:
 		level = "warning" if "[warn]" in message.casefold() else "note"
 		self.download_log_dialog.append(level, message)
+		if message.startswith("[recovery] "):
+			self.download_detail.setText(message.removeprefix("[recovery] "))
 
 	def _show_download_warning(self, message: str) -> None:
 		self.download_detail.setText(message)
 		self.download_log_dialog.append("warning", message)
-		QMessageBox.warning(self, "YouTube Throttling Detected", message)
+		QMessageBox.warning(self, "YouTube Download Notice", message)
 
 	def _download_track_result(self, row: int, payload: dict) -> None:
 		track = payload.get("track") or {}

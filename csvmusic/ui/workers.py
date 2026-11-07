@@ -195,6 +195,15 @@ class PipelineWorker(QThread):
 		self._stop = True
 
 	def _download_with_profile(self, vid: str, dest_dir: pathlib.Path, base: str, profile: YouTubeMitigationProfile):
+		from csvmusic.core.downloader import take_download_notices, download_notice_handler
+		take_download_notices()
+		try:
+			with download_notice_handler(lambda notice: self.sig_log.emit(f"[recovery] {notice}")):
+				return self._download_with_profile_impl(vid, dest_dir, base, profile)
+		finally:
+			take_download_notices()
+
+	def _download_with_profile_impl(self, vid: str, dest_dir: pathlib.Path, base: str, profile: YouTubeMitigationProfile):
 		extra_args: list[str] = []
 		if self.cookies_file:
 			extra_args += ["--cookies", self.cookies_file]
@@ -606,6 +615,15 @@ class SingleDownloadWorker(QThread):
 		self.force_download = bool(force_download)
 
 	def run(self):
+		from csvmusic.core.downloader import download_notice_handler, take_download_notices
+		take_download_notices()
+		try:
+			with download_notice_handler(lambda notice: self.sig_status.emit(self.row_idx, notice)):
+				self._run_download()
+		finally:
+			take_download_notices()
+
+	def _run_download(self):
 		try:
 			safe_playlist = sanitize_name(self.playlist_name) or "Playlist"
 			dest_dir = self.out_dir / safe_playlist

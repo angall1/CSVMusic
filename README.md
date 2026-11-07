@@ -22,21 +22,21 @@ CSVMusic accepts playlist and album links from supported music services, or a pl
 # Download
 
 Go here:
-https://github.com/angall1/CSVMusic/releases/tag/v1.7.9
+https://github.com/angall1/CSVMusic/releases/tag/v1.7.10
 
 Download one of the following based on your OS:
 
 ### Windows
-https://github.com/angall1/CSVMusic/releases/download/v1.7.9/CSVMusic-windows.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.10/CSVMusic-windows.zip
 
 ### macOS (Apple Silicon)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.9/CSVMusic-macos-arm64.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.10/CSVMusic-macos-arm64.zip
 
 ### macOS (Intel)
-https://github.com/angall1/CSVMusic/releases/download/v1.7.9/CSVMusic-macos-intel.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.10/CSVMusic-macos-intel.zip
 
 ### Linux
-https://github.com/angall1/CSVMusic/releases/download/v1.7.9/CSVMusic-linux.zip
+https://github.com/angall1/CSVMusic/releases/download/v1.7.10/CSVMusic-linux.zip
 
 Extract the ZIP before running the app. If your desktop does not launch the files directly, open a terminal in the extracted folder and run:
 
@@ -72,7 +72,16 @@ Python installations still require a supported graphical desktop environment for
 
 ---
 
-# What's New In 1.7.9
+# What's New In 1.7.10
+
+- Updated bundled yt-dlp to **2026.10.26** for current YouTube compatibility.
+- Automatically retry a signed-in media download once without cookies when YouTube returns HTTP 403. Saved account settings remain enabled; the fallback may not provide Premium formats.
+- Display recovery progress in Download Activity and the download log without an extra popup.
+- Distinguish rate limits, media access denial, bot verification, account restrictions, and player-challenge failures with actionable errors. A plain HTTP 403 no longer triggers generic throttling mode.
+- Preserve age/login restrictions and report the actual error if the public retry also fails. Large-batch pacing is now described as a precaution rather than a detected rate limit.
+
+<details>
+<summary>What's New In 1.7.9</summary>
 
 - Fixed localized Spotify album and playlist links, including `/intl-es/` URLs (#86).
 - Prevented unrelated recommendations and numeric song titles from being captured as playlist rows (#85).
@@ -81,6 +90,8 @@ Python installations still require a supported graphical desktop environment for
 - Added optional YouTube account sign-in, connection checks, and browser/manual-cookie fallbacks. Selected sessions remain enabled throughout downloads.
 - Added YouTube source-quality indicators, clearer legacy iPod MP3 encoding controls, a playlist-folder shortcut, and a scrollable rescan summary.
 - Corrected JavaScript runtime arguments passed to yt-dlp.
+
+</details>
 
 <details>
 <summary>What's New In 1.7.8</summary>

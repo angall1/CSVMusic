@@ -25,7 +25,7 @@ env:
   RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.sha }}
   DENO_VERSION: "2.9.4"
   FFMPEG_VERSION: "8.1.2"
-  YTDLP_VERSION: "2026.08.19"
+  YTDLP_VERSION: "2026.10.26"
 
 jobs:
   ipod-helper:

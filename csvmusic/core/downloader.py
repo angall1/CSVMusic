@@ -1,8 +1,10 @@
 # tabs only
 import os, pathlib, subprocess, requests, io, contextlib, json, base64, hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from collections.abc import Callable
 from typing import Dict, Optional, List
 import re, unicodedata
+import threading
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4, MP4Cover
@@ -18,15 +20,39 @@ YTM_URL = "https://music.youtube.com/watch?v={vid}"
 YT_URL = "https://www.youtube.com/watch?v={vid}"
 YOUTUBE_CLIENTS: list[str | None] = ["web_embedded", None, "ios", "tv", "android_vr"]
 MP3_SOURCE_FORMAT = "bestaudio/best"
+_download_notices = threading.local()
+
+
+def take_download_notices() -> list[str]:
+	"""Return and clear notices from downloads on this worker thread."""
+	items = getattr(_download_notices, "items", [])
+	_download_notices.items = []
+	return items
+
+
+def _download_notice(message: str) -> None:
+	log(message)
+	_download_notices.items = getattr(_download_notices, "items", []) + [message]
+	callback = getattr(_download_notices, "callback", None)
+	if callback is not None:
+		callback(message)
+
+
+@contextlib.contextmanager
+def download_notice_handler(callback: Callable[[str], None]):
+	"""Deliver recovery notices immediately without sharing state across workers."""
+	previous = getattr(_download_notices, "callback", None)
+	_download_notices.callback = callback
+	try:
+		yield
+	finally:
+		_download_notices.callback = previous
+
+
 _YOUTUBE_RISK_PATTERNS: tuple[tuple[str, str], ...] = (
 	("http error 429", "YouTube returned HTTP 429"),
 	("too many requests", "YouTube is rate limiting requests"),
-	("sign in to confirm you're not a bot", "YouTube asked for bot verification"),
-	("sign in to confirm you’re not a bot", "YouTube asked for bot verification"),
-	("confirm you’re not a bot", "YouTube asked for bot verification"),
-	("confirm you're not a bot", "YouTube asked for bot verification"),
 	("this content isn't available, try again later", "YouTube temporarily blocked the session"),
-	("unable to download video data: http error 403", "YouTube rejected the download request"),
 )
 _YOUTUBE_LARGE_BATCH_THRESHOLD = 250
 _YOUTUBE_EXTREME_BATCH_THRESHOLD = 500
@@ -100,7 +126,7 @@ YOUTUBE_MITIGATION_AGGRESSIVE = YouTubeMitigationProfile(
 	sleep_interval_s=8.0,
 	max_sleep_interval_s=15.0,
 	limit_rate="900K",
-	warning="YouTube started throttling or blocking requests. Applying slower download pacing automatically.",
+	warning="YouTube reported a request limit. Applying slower download pacing automatically; waiting before retrying may still be necessary.",
 	reason="YouTube rate-limit response",
 )
 
@@ -167,6 +193,8 @@ def _summarize_tool_output(stderr: str, stdout: str, *, using_cookies: bool = Fa
 	lower_full = full_text.lower()
 	if is_age_restriction_error(full_text):
 		return age_restriction_message(using_cookies=using_cookies)
+	if "http error 429" in lower_full or "too many requests" in lower_full:
+		return "YouTube rate limit (HTTP 429 / too many requests). Stop repeated retries and wait before trying again."
 	if "sign in to confirm you're not a bot" in lower_full or "sign in to confirm you’re not a bot" in lower_full:
 		if using_cookies:
 			return "YouTube asked for bot verification even with cookies enabled. Re-test cookies, wait and retry, or choose another result."
@@ -175,6 +203,17 @@ def _summarize_tool_output(stderr: str, stdout: str, *, using_cookies: bool = Fa
 		return "yt-dlp could not solve the YouTube player challenge. Install Deno 2.3+ or Node 22+, then update yt-dlp with the default extras."
 	if "requested format is not available" in lower_full:
 		return "Requested audio format is not available for this result."
+	if "private video" in lower_full or "members-only" in lower_full or "members only" in lower_full:
+		return "Account access required. Check that your signed-in YouTube account can play this private or members-only video, or choose another result."
+	if "login required" in lower_full or "login_required" in lower_full:
+		return "YouTube sign-in required. Reconnect in Settings > YouTube Account and test the session."
+	if "http error 403" in lower_full:
+		return (
+			"YouTube denied the media request (HTTP 403). This does not establish a rate limit. "
+			+ ("Reconnect in Settings > YouTube Account, or try another result. " if using_cookies else "Update yt-dlp or try another result. ")
+		)
+	if any(marker in lower_full for marker in ("signature solving failed", "n challenge solving failed", "nsig extraction failed")):
+		return "YouTube player challenge failed. Update yt-dlp and check that a supported JavaScript runtime is installed."
 	error_lines = [line for line in lines if line.lower().startswith("error:") or " error:" in line.lower()]
 	warning_lines = [line for line in lines if line.lower().startswith("warning:") or " warning:" in line.lower()]
 	interesting = (error_lines[-2:] or warning_lines[-2:] or lines[-3:])
@@ -185,7 +224,7 @@ def _summarize_tool_output(stderr: str, stdout: str, *, using_cookies: bool = Fa
 
 def youtube_batch_mitigation(track_count: int, *, using_cookies: bool) -> YouTubeMitigationProfile:
 	if track_count >= _YOUTUBE_EXTREME_BATCH_THRESHOLD:
-		return YOUTUBE_MITIGATION_AGGRESSIVE
+		return replace(YOUTUBE_MITIGATION_AGGRESSIVE, warning="Very large YouTube batch. Extra pacing enabled as a precaution; no rate limit has been detected.", reason="large playlist size")
 	if track_count >= _YOUTUBE_LARGE_BATCH_THRESHOLD:
 		return YOUTUBE_MITIGATION_LARGE_BATCH
 	return YOUTUBE_MITIGATION_NONE
@@ -288,7 +327,7 @@ def _run_ytdlp(cmd: list[str]) -> int:
 def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
 	capture_source("")
 	cmd = cmd[:1] + ["--no-simulate", "--print", "after_move:%(.{id,format_id,acodec,vcodec,abr,tbr})j"] + cmd[1:]
-	# Never silently discard an explicitly selected authenticated session.
+	# Keep authentication unless a media-only 403 warrants one public retry.
 	if cmd and cmd[0] == INTERNAL_YTDLP:
 		rc, stdout, stderr = _run_ytdlp_module(cmd[1:])
 	else:
@@ -297,6 +336,34 @@ def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
 	if rc == 0:
 		capture_source(stdout)
 		return 0, ""
+	raw_error = f"{stderr}\n{stdout}".lower()
+	if (
+		_cmd_uses_cookies(cmd)
+		and "unable to download video data: http error 403" in raw_error
+		and not is_age_restriction_error(raw_error)
+		and not any(marker in raw_error for marker in (
+			"sign in", "login required", "login_required", "private video",
+			"members-only", "members only", "http error 429", "too many requests",
+		))
+	):
+		_download_notice("Signed-in YouTube media request returned HTTP 403. Retrying this video once without cookies; saved account settings are unchanged.")
+		public_cmd = _strip_cookie_args(cmd) + ["--ignore-config", "--no-cookies", "--no-cookies-from-browser", "--no-continue"]
+		if public_cmd[0] == INTERNAL_YTDLP:
+			public_rc, public_out, public_err = _run_ytdlp_module(public_cmd[1:])
+		else:
+			public_proc = _run_capture(public_cmd)
+			public_rc, public_out, public_err = public_proc.returncode, public_proc.stdout or "", public_proc.stderr or ""
+		if public_rc == 0:
+			capture_source(public_out)
+			_download_notice("Download recovered without cookies. Account-only/Premium formats may be unavailable for this download.")
+			return 0, ""
+		_download_notice("The public retry also failed; the saved YouTube session remains enabled.")
+		if is_age_restriction_error(public_err + public_out):
+			raise AgeRestrictedError(age_restriction_message(using_cookies=True))
+		public_detail = _summarize_tool_output(public_err, public_out, using_cookies=False)
+		detail = "Signed-in request denied (HTTP 403); automatic retry without cookies also failed. " + public_detail
+		log(f"yt-dlp recovery failed: {detail}")
+		return public_rc, detail
 	detail = _summarize_tool_output(stderr, stdout, using_cookies=_cmd_uses_cookies(cmd))
 	log(f"yt-dlp failed rc={rc}: {detail}")
 	if is_age_restriction_error(detail):
