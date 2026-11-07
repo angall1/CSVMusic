@@ -49,7 +49,13 @@ def test_release_workflow_fetches_packaged_deno() -> None:
 def test_release_workflow_pins_tested_ytdlp() -> None:
 	workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-	assert 'YTDLP_VERSION: "2026.08.19"' in workflow
+	with (ROOT / "pyproject.toml").open("rb") as handle:
+		dependencies = tomllib.load(handle)["project"]["dependencies"]
+	dependency = next(item for item in dependencies if item.startswith("yt-dlp[default]=="))
+	version = dependency.split("==", 1)[1]
+	workflow_version = re.search(r'YTDLP_VERSION: "([0-9.]+)"', workflow)
+	assert workflow_version is not None
+	assert tuple(map(int, workflow_version.group(1).split("."))) == tuple(map(int, version.split(".")))
 	assert '"yt-dlp[default]==${YTDLP_VERSION}"' in workflow
 	assert 'releases/download/{ytdlp_version}/yt-dlp.exe' in workflow
 	assert "releases/latest/download/yt-dlp" not in workflow
