@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -79,17 +80,22 @@ def prepare_retry_batch(csv_path: pathlib.Path, dest_dir: pathlib.Path, tracks: 
 		return RetryBatch(dest_dir / f"skipped-{uuid.uuid4().hex}.csv", tracks, list(range(len(tracks))), set(), fmt, playlist)
 	try:
 		state = json.loads(state_path.read_text(encoding="utf-8"))
-		assert state["version"] == 1 and state["format"] == fmt and state["playlist"] == playlist
-		assert csv_path.resolve().parent == dest_dir.resolve()
-		assert file_digest(csv_path) == state["csv_sha256"]
+		def require(condition: bool) -> None:
+			if not condition:
+				raise ValueError("Retry integrity check failed")
+		require(re.fullmatch(r"skipped-[0-9a-f]{32}\.csv", csv_path.name) is not None)
+		require(state["version"] == 1 and state["format"] == fmt and state["playlist"] == playlist)
+		require(csv_path.resolve().parent == dest_dir.resolve())
+		require(file_digest(csv_path) == state["csv_sha256"])
 		original = state["tracks"]
 		completed, pending = state["completed"], state["pending"]
-		assert isinstance(original, list) and all(isinstance(t, dict) for t in original)
-		assert all(type(i) is int for i in completed + pending)
-		assert sorted(completed + pending) == list(range(len(original)))
-		assert pending == sorted(pending) and len(pending) == len(tracks)
+		require(isinstance(original, list) and all(isinstance(t, dict) for t in original))
+		require(isinstance(completed, list) and isinstance(pending, list))
+		require(all(type(i) is int for i in completed + pending))
+		require(sorted(completed + pending) == list(range(len(original))))
+		require(pending == sorted(pending) and len(pending) == len(tracks))
 		if write_m3u:
-			assert file_digest(m3u) == state["m3u_sha256"]
-	except (OSError, ValueError, KeyError, TypeError, AssertionError) as exc:
+			require(file_digest(m3u) == state["m3u_sha256"])
+	except (OSError, ValueError, KeyError, TypeError) as exc:
 		raise ValueError("Retry state does not match this CSV, output folder, format, or playlist file. Rerun the original CSV instead; no files were changed.") from exc
 	return RetryBatch(csv_path, original, pending, set(completed), fmt, playlist, state["csv_sha256"], state["m3u_sha256"], True)

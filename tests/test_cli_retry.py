@@ -90,6 +90,18 @@ def test_partial_retry_generates_new_owned_pair(batch):
 	assert new.with_suffix(".state.json").exists()
 
 
+def test_renamed_retry_is_not_treated_as_owned_input(batch):
+	source, dest, state, run = batch
+	assert run() == 2
+	old = next(dest.glob("skipped-*.csv"))
+	renamed = dest / "my-original.csv"
+	renamed.write_bytes(old.read_bytes())
+	renamed.with_suffix(".state.json").write_bytes(old.with_suffix(".state.json").read_bytes())
+	state["fail"] = set()
+	assert run(renamed) == 1
+	assert renamed.exists()
+
+
 def test_skipped_writer_is_atomic_and_preserves_numbers(tmp_path, monkeypatch):
 	path = tmp_path / "retry.csv"
 	path.write_bytes(b"original")
