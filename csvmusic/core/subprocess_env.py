@@ -21,14 +21,22 @@ _PYINSTALLER_LEAKED_VARS = (
 )
 
 
+def _restore_leaked_var(env: dict[str, str], key: str, *, drop_without_orig: bool) -> None:
+	orig = env.pop(f"{key}_ORIG", None)
+	if orig is not None:
+		env[key] = orig
+	elif drop_without_orig:
+		env.pop(key, None)
+
+
 def sanitized_subprocess_env() -> dict[str, str]:
 	env = os.environ.copy()
 	for key in _PYINSTALLER_LEAKED_VARS:
-		orig = env.pop(f"{key}_ORIG", None)
-		if orig is not None:
-			env[key] = orig
-		else:
-			env.pop(key, None)
+		_restore_leaked_var(env, key, drop_without_orig=True)
+	# On Linux the bootloader prepends its bundled libraries to LD_LIBRARY_PATH; system
+	# programs such as Firefox would load the bundled libnss3 and fail to start. A value
+	# set by the user of an unfrozen run has no _ORIG twin and must stay.
+	_restore_leaked_var(env, "LD_LIBRARY_PATH", drop_without_orig=bool(getattr(sys, "frozen", False)))
 	# Frozen Python tools such as the packaged yt-dlp executable may otherwise
 	# inherit a legacy Windows console code page. UTF-8 prevents their status
 	# output from crashing on valid Unicode filenames such as a sanitized "？".
