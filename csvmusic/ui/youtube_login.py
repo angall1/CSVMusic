@@ -1,9 +1,10 @@
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QThread, Signal
+from PySide6.QtCore import QProcess, QProcessEnvironment, QThread, Signal
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout
 
 from csvmusic.core.settings import settings_path
+from csvmusic.core.subprocess_env import sanitized_subprocess_env
 from csvmusic.core.youtube_login import find_firefox, import_login_cookies, login_command
 
 
@@ -64,6 +65,10 @@ class YouTubeLoginDialog(QDialog):
 		self.profile = settings_path().parent / "youtube-login" / "firefox"
 		self.profile.mkdir(parents=True, exist_ok=True, mode=0o700)
 		command = login_command(executable, self.profile)
+		environment = QProcessEnvironment()
+		for key, value in sanitized_subprocess_env().items():
+			environment.insert(key, value)
+		self.browser.setProcessEnvironment(environment)
 		self.start.setEnabled(False)
 		self.status.setText("Sign in on YouTube, then close the dedicated Firefox window to finish connecting.")
 		self.browser.start(command[0], command[1:])
@@ -73,7 +78,11 @@ class YouTubeLoginDialog(QDialog):
 			self.status.setText("Firefox could not start. Use the manual export option or check your Firefox installation.")
 			self.start.setEnabled(True)
 
-	def _browser_closed(self, *_args) -> None:
+	def _browser_closed(self, exit_code: int, *_args) -> None:
+		if not (self.profile / "cookies.sqlite").is_file():
+			self.status.setText(f"Firefox closed before creating its profile (exit code {exit_code}). Check that Firefox starts from a terminal, or use the manual export option.")
+			self.start.setEnabled(True)
+			return
 		self.status.setText("Importing the YouTube session…")
 		self.worker = CookieImportWorker(self.profile, self.profile.parent / "youtube-cookies.txt", self)
 		self.worker.completed.connect(self._imported)

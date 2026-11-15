@@ -39,6 +39,43 @@ def test_sanitized_subprocess_env_removes_leaked_pyinstaller_vars():
 	assert env["HOME"] == "/Users/test"
 
 
+def test_sanitized_subprocess_env_restores_linux_library_path():
+	with patch.dict(
+		"csvmusic.core.subprocess_env.os.environ",
+		{
+			"LD_LIBRARY_PATH": "/opt/CSVMusic/_internal:/usr/local/lib",
+			"LD_LIBRARY_PATH_ORIG": "/usr/local/lib",
+		},
+		clear=True,
+	):
+		env = sanitized_subprocess_env()
+
+	assert env["LD_LIBRARY_PATH"] == "/usr/local/lib"
+	assert "LD_LIBRARY_PATH_ORIG" not in env
+
+
+def test_sanitized_subprocess_env_drops_bundled_library_path_when_frozen():
+	with patch.dict(
+		"csvmusic.core.subprocess_env.os.environ",
+		{"LD_LIBRARY_PATH": "/opt/CSVMusic/_internal"},
+		clear=True,
+	), patch("csvmusic.core.subprocess_env.sys.frozen", True, create=True):
+		env = sanitized_subprocess_env()
+
+	assert "LD_LIBRARY_PATH" not in env
+
+
+def test_sanitized_subprocess_env_keeps_user_library_path_when_not_frozen():
+	with patch.dict(
+		"csvmusic.core.subprocess_env.os.environ",
+		{"LD_LIBRARY_PATH": "/home/user/libs"},
+		clear=True,
+	):
+		env = sanitized_subprocess_env()
+
+	assert env["LD_LIBRARY_PATH"] == "/home/user/libs"
+
+
 def test_sanitized_subprocess_env_forces_utf8_for_frozen_tools():
 	with patch.dict(
 		"csvmusic.core.subprocess_env.os.environ",
