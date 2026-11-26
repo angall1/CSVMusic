@@ -721,6 +721,10 @@ class LibrarySettingsDialog(QDialog):
 		format_row.addStretch(1)
 		audio_layout.addLayout(format_row)
 		cfg = load_settings()
+		self.disable_aac_pns = QCheckBox("Disable AAC perceptual noise substitution (PNS)")
+		self.disable_aac_pns.setToolTip("Re-encode M4A downloads at 256 kbps and 44.1 kHz with PNS disabled.")
+		self.disable_aac_pns.setChecked(bool(cfg.get("disable_aac_pns", False)))
+		audio_layout.addWidget(self.disable_aac_pns)
 		audio_layout.addWidget(QLabel("MP3 quality — move right for better quality / larger files"))
 		self.mp3_quality = QSlider(Qt.Horizontal)
 		self.mp3_quality.setRange(0, 10)
@@ -745,10 +749,10 @@ class LibrarySettingsDialog(QDialog):
 			self.legacy_mp3.addItem(label, mode)
 		self.legacy_mp3.setCurrentIndex(max(0, self.legacy_mp3.findData(cfg.get("legacy_mp3_mode") or "vbr")))
 		audio_layout.addWidget(self.legacy_mp3)
-		self.legacy_ipod.toggled.connect(self._update_mp3_encoding)
-		self.legacy_mp3.currentIndexChanged.connect(self._update_mp3_encoding)
-		self.format.currentTextChanged.connect(self._update_mp3_encoding)
-		self._update_mp3_encoding()
+		self.legacy_ipod.toggled.connect(self._update_encoding_controls)
+		self.legacy_mp3.currentIndexChanged.connect(self._update_encoding_controls)
+		self.format.currentTextChanged.connect(self._update_encoding_controls)
+		self._update_encoding_controls()
 		self.embed_art = QCheckBox("Embed album artwork")
 		self.embed_art.setChecked(bool(cfg.get("embed_art", True)))
 		self.force = QCheckBox("Force-download low-confidence matches")
@@ -1032,7 +1036,8 @@ class LibrarySettingsDialog(QDialog):
 			text = f"Quality {value} / 10"
 		self.mp3_quality_value.setText(text)
 
-	def _update_mp3_encoding(self, *_args) -> None:
+	def _update_encoding_controls(self, *_args) -> None:
+		self.disable_aac_pns.setEnabled(self.format.currentText() == "m4a")
 		is_mp3 = self.format.currentText() == "mp3"
 		mode = str(self.legacy_mp3.currentData() or "vbr")
 		fixed = self.legacy_ipod.isChecked() and mode.startswith("cbr_")
@@ -1055,6 +1060,7 @@ class LibrarySettingsDialog(QDialog):
 		save_settings({
 			"yt_dlp_path": self.ytdlp.text().strip() or None,
 			"ffmpeg_path": self.ffmpeg.text().strip() or None,
+			"disable_aac_pns": self.disable_aac_pns.isChecked(),
 			# FFmpeg/libmp3lame uses the inverse scale: 0 is its best quality.
 			"mp3_quality": 10 - self.mp3_quality.value(),
 			"legacy_ipod_mode": self.legacy_ipod.isChecked(),
@@ -3187,6 +3193,7 @@ class LibraryModeDialog(QDialog):
 			cfg.get("cookies_browser") if use_cookies else None,
 			cfg.get("cookies_file") if use_cookies else None,
 			audio_processing=audio, mp3_quality=int(cfg.get("mp3_quality", 0) or 0),
+			disable_aac_pns=bool(cfg.get("disable_aac_pns", False)),
 			legacy_options=legacy, force_download=True, parent=self,
 		)
 		self.single_download_worker = worker
@@ -3481,6 +3488,7 @@ class LibraryModeDialog(QDialog):
 			cfg.get("cookies_browser") if use_cookies else None,
 			cfg.get("cookies_file") if use_cookies else None,
 			audio_processing=audio, mp3_quality=int(cfg.get("mp3_quality", 0) or 0),
+			disable_aac_pns=bool(cfg.get("disable_aac_pns", False)),
 			legacy_options=legacy, force_download=bool(cfg.get("force_download_mode", False)),
 			tracks_override=tracks, m3u_tracks_override=all_playlist_tracks,
 			m3u_output_dir=cfg.get("m3u_output_dir"),

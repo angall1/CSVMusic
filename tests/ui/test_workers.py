@@ -26,12 +26,12 @@ def test_pipeline_preserves_age_error_and_continues_next_track(monkeypatch, tmp_
 	assert all(result["downloaded"] is False and result["error"] == message for result in results)
 
 
-def _pipeline(tmp_path: pathlib.Path, *, force_download: bool) -> workers.PipelineWorker:
+def _pipeline(tmp_path: pathlib.Path, *, force_download: bool, fmt: str = "mp3", disable_aac_pns: bool = False) -> workers.PipelineWorker:
 	return workers.PipelineWorker(
 		csv_path="",
 		out_dir=str(tmp_path),
 		playlist="Test Playlist",
-		fmt="mp3",
+		fmt=fmt,
 		write_m3u8=False,
 		write_m3u_plain=False,
 		embed_art=False,
@@ -47,7 +47,25 @@ def _pipeline(tmp_path: pathlib.Path, *, force_download: bool) -> workers.Pipeli
 			"duration_ms": 244000,
 		}],
 		row_indices=[0],
+		disable_aac_pns=disable_aac_pns,
 	)
+
+
+def test_batch_and_single_workers_forward_m4a_pns_setting(monkeypatch, tmp_path):
+	from unittest.mock import Mock
+
+	download = Mock(return_value=tmp_path / "track.m4a")
+	monkeypatch.setattr(workers, "download_m4a", download)
+	monkeypatch.setattr(workers, "_track_cover_bytes", lambda *_: None)
+	monkeypatch.setattr(workers, "tag_file", lambda *args, **kwargs: None)
+	batch = _pipeline(tmp_path, force_download=False, fmt="m4a", disable_aac_pns=True)
+	batch._download_with_profile("video", tmp_path, "track", workers.YOUTUBE_MITIGATION_NONE)
+	single = workers.SingleDownloadWorker(
+		0, batch.tracks_override[0], {"videoId": "video"}, str(tmp_path), "m4a",
+		False, None, None, None, None, disable_aac_pns=True,
+	)
+	single.run()
+	assert [call.kwargs["disable_aac_pns"] for call in download.call_args_list] == [True, True]
 
 
 def _low_confidence_result():

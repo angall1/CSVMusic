@@ -25,3 +25,31 @@ def test_opus_setting_is_off_by_default_behavior():
 	})()
 
 	assert MainWindow._selected_format(window) == "m4a"
+
+
+def test_aac_pns_preference_is_saved_and_available_only_for_m4a(monkeypatch):
+	from csvmusic.ui import main_window
+
+	settings = {}
+	monkeypatch.setattr(main_window, "load_settings", settings.copy)
+	monkeypatch.setattr(main_window, "save_settings", settings.update)
+	monkeypatch.setattr(MainWindow, "_start_update_check", lambda self: None)
+	window = MainWindow()
+	try:
+		option = window.cb_disable_aac_pns
+		assert option.isEnabled() and not option.isChecked()
+		option.setChecked(True)
+		assert settings["disable_aac_pns"] is True
+		window.rb_mp3.setChecked(True)
+		assert not option.isEnabled()
+		window.rb_m4a.setChecked(True)
+		window.cb_opus_output.setChecked(True)
+		assert not option.isEnabled()
+		window.cb_opus_output.setChecked(False)
+		assert option.isEnabled() and option.isChecked()
+		option.setChecked(False)
+		settings["disable_aac_pns"] = True
+		window._load_last_session()
+		assert option.isChecked()
+	finally:
+		window.close()

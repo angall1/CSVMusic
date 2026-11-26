@@ -136,6 +136,8 @@ Python installations still require a supported graphical desktop environment for
 3. Scan the added playlist, review any warnings or low-confidence matches, and select it.
 4. Click **Download**, confirm the output settings, then click **Start Download**.
 
+For M4A downloads without perceptual noise substitution, choose **m4a** and check **Disable AAC perceptual noise substitution (PNS)** in the download settings. CSVMusic encodes new and replacement downloads as AAC at 44.1 kHz with a target bitrate of 256 kbps.
+
 ## Library Mode
 
 Library Mode keeps multiple public Spotify, Apple Music, YouTube Music, and YouTube playlists in one persistent local catalog:
