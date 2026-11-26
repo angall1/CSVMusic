@@ -15,3 +15,27 @@ def test_legacy_defaults_off_and_bitrate_hidden(monkeypatch, tmp_path):
 	assert dialog.legacy_mp3.isHidden()
 	assert dialog.mp3_quality.isEnabled()
 	dialog.close()
+
+
+def test_pns_setting_is_opt_in_and_remembered_across_formats(monkeypatch, tmp_path):
+	settings = {}
+	monkeypatch.setattr("csvmusic.ui.library_mode.load_settings", settings.copy)
+	monkeypatch.setattr("csvmusic.ui.library_mode.save_settings", settings.update)
+	library = {"output_dir": str(tmp_path), "format": "m4a"}
+	dialog = LibrarySettingsDialog(library, download_confirmation=True)
+	assert dialog.disable_aac_pns.isEnabled()
+	assert not dialog.disable_aac_pns.isChecked()
+	dialog.disable_aac_pns.setChecked(True)
+	for fmt in ("mp3", "opus"):
+		dialog.format.setCurrentText(fmt)
+		assert not dialog.disable_aac_pns.isEnabled()
+	dialog._save()
+	assert settings["disable_aac_pns"] is True
+
+	reopened = LibrarySettingsDialog(library)
+	reopened.format.setCurrentText("m4a")
+	assert reopened.disable_aac_pns.isEnabled()
+	assert reopened.disable_aac_pns.isChecked()
+	reopened.disable_aac_pns.setChecked(False)
+	reopened._save()
+	assert settings["disable_aac_pns"] is False

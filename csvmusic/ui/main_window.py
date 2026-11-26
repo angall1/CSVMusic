@@ -919,6 +919,11 @@ class MainWindow(QMainWindow):
 		opus_note.setWordWrap(True)
 		opus_note.setFont(QFont(retro_font_family, default_pt))
 		audio_layout.addWidget(opus_note)
+		self.cb_disable_aac_pns = QCheckBox("Disable AAC perceptual noise substitution (PNS)")
+		self.cb_disable_aac_pns.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_disable_aac_pns.setToolTip("Re-encode M4A downloads at 256 kbps and 44.1 kHz with PNS disabled.")
+		self.cb_disable_aac_pns.toggled.connect(lambda checked: save_settings({"disable_aac_pns": checked}))
+		audio_layout.addWidget(self.cb_disable_aac_pns)
 		audio_layout.addSpacing(self._px(4))
 		lbl_mp3_quality = QLabel("MP3 quality")
 		lbl_mp3_quality.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
@@ -1163,6 +1168,7 @@ class MainWindow(QMainWindow):
 		self.rb_mp3 = RetroRadioButton("mp3")
 		self.grp_fmt = QButtonGroup(self); self.grp_fmt.addButton(self.rb_m4a); self.grp_fmt.addButton(self.rb_mp3)
 		self.grp_fmt.buttonToggled.connect(lambda _button, checked: self._persist_settings() if checked else None)
+		self.rb_m4a.toggled.connect(self._update_aac_pns_control)
 		self.cb_m3u8 = QCheckBox("Write .m3u8")
 		self.cb_m3u_plain = QCheckBox("Write .m3u"); self.cb_m3u_plain.setChecked(True)
 		self.cb_album_art = QCheckBox("Embed album art"); self.cb_album_art.setChecked(True)
@@ -1468,7 +1474,11 @@ class MainWindow(QMainWindow):
 	def on_toggle_opus_output(self, checked: bool) -> None:
 		self.rb_m4a.setEnabled(not checked)
 		self.rb_mp3.setEnabled(not checked)
+		self._update_aac_pns_control()
 		self._persist_settings()
+
+	def _update_aac_pns_control(self) -> None:
+		self.cb_disable_aac_pns.setEnabled(self._selected_format() == "m4a")
 
 	def _legacy_export_options(self) -> dict:
 		enabled = bool(self.cb_legacy_ipod_mode.isChecked())
@@ -1555,6 +1565,8 @@ class MainWindow(QMainWindow):
 		dialog.tracks_ready.connect(self._on_library_tracks_ready)
 		dialog.legacy_mode_requested.connect(self._return_to_legacy_mode)
 		dialog.exec()
+		with QSignalBlocker(self.cb_disable_aac_pns):
+			self.cb_disable_aac_pns.setChecked(bool(load_settings().get("disable_aac_pns", False)))
 
 	def _return_to_legacy_mode(self) -> None:
 		"""Bring the existing interface forward when Library Mode requests a switch."""
@@ -2249,6 +2261,9 @@ class MainWindow(QMainWindow):
 			self.rb_mp3.setChecked(stored_format == "mp3")
 			del block_m4a
 			del block_mp3
+		with QSignalBlocker(self.cb_disable_aac_pns):
+			self.cb_disable_aac_pns.setChecked(bool(cfg.get("disable_aac_pns", False)))
+		self._update_aac_pns_control()
 		block_m3u8 = QSignalBlocker(self.cb_m3u8)
 		block_m3u = QSignalBlocker(self.cb_m3u_plain)
 		self.cb_m3u8.setChecked(bool(cfg.get("write_m3u8", False)))
@@ -2358,6 +2373,7 @@ class MainWindow(QMainWindow):
 			self._cookies_file(),
 			self._audio_processing_options(),
 			mp3_quality=self._mp3_quality_value(),
+			disable_aac_pns=self.cb_disable_aac_pns.isChecked(),
 			legacy_options=self._legacy_export_options(),
 			force_download=bool(self.cb_force_download.isChecked()),
 			tracks_override=active_tracks,
@@ -2882,7 +2898,8 @@ class MainWindow(QMainWindow):
 			self._audio_processing_options(),
 			self._mp3_quality_value(),
 			self._legacy_export_options(),
-			parent=self
+			parent=self,
+			disable_aac_pns=self.cb_disable_aac_pns.isChecked(),
 		)
 		self.manual_download_workers[row_idx] = worker
 		worker.sig_status.connect(self.on_row_status)

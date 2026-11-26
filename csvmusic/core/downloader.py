@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Dict, Optional, List
 import re, unicodedata
 import threading
+import tempfile
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4, MP4Cover
@@ -428,15 +429,6 @@ def _cleanup_outputs(dir: pathlib.Path, base: str) -> None:
 			pass
 
 
-def _replace_file(src: pathlib.Path, dst: pathlib.Path) -> None:
-	if dst.exists():
-		try:
-			dst.unlink()
-		except Exception:
-			pass
-	src.replace(dst)
-
-
 def _audio_processing_enabled(audio_processing: Dict | None) -> bool:
 	if not audio_processing:
 		return False
@@ -513,43 +505,26 @@ def _append_audio_filter(args: list[str], audio_processing: Dict | None, src: pa
 		args += ["-af", filter_chain]
 
 
-def _normalize_to_m4a(src: pathlib.Path, dst: pathlib.Path, ffmpeg_bin: str, video_id: str, audio_processing: Dict | None = None) -> pathlib.Path:
-	tmp_dst = dst.with_name(dst.stem + ".normalized.m4a")
-	if tmp_dst.exists():
-		try:
-			tmp_dst.unlink()
-		except Exception:
-			pass
-
-	if not _audio_processing_enabled(audio_processing):
-		proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "copy", str(tmp_dst)])
-		rc = proc.returncode
-		if rc == 0 and tmp_dst.exists():
-			if src != dst:
-				try: src.unlink()
-				except Exception: pass
-			_replace_file(tmp_dst, dst)
+def _normalize_to_m4a(src: pathlib.Path, dst: pathlib.Path, ffmpeg_bin: str, video_id: str, audio_processing: Dict | None = None, *, disable_aac_pns: bool = False) -> pathlib.Path:
+	"""Write a new M4A in the track's staging directory."""
+	args = [ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn"]
+	if not disable_aac_pns and not _audio_processing_enabled(audio_processing):
+		proc = _run_capture(args + ["-c:a", "copy", str(dst)])
+		if proc.returncode == 0 and dst.is_file():
 			return dst
 
-	args = [ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn"]
 	_append_audio_filter(args, audio_processing, src=src, ffmpeg_bin=ffmpeg_bin)
-	args += ["-c:a", "aac", "-b:a", "192k", str(tmp_dst)]
-	proc = _run_capture(args)
-	rc = proc.returncode
-	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
-	if rc == 0 and tmp_dst.exists():
-		if src != dst:
-			try: src.unlink()
-			except Exception: pass
-		_replace_file(tmp_dst, dst)
+	args += ["-c:a", "aac"]
+	if disable_aac_pns:
+		args += ["-b:a", "256k", "-ar", "44100", "-aac_pns", "0"]
+	else:
+		args += ["-b:a", "192k"]
+	proc = _run_capture(args + [str(dst)])
+	if proc.returncode == 0 and dst.is_file():
 		return dst
 
-	try:
-		if tmp_dst.exists():
-			tmp_dst.unlink()
-	except Exception:
-		pass
-	log(f"download_m4a: ffmpeg normalization failed video_id={video_id} src='{src.name}' dst='{dst.name}' rc={rc}")
+	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
+	log(f"download_m4a: ffmpeg normalization failed video_id={video_id} src='{src.name}' dst='{dst.name}' rc={proc.returncode}")
 	raise DownloadError(f"failed to produce .m4a: {detail}")
 
 def yt_thumbnail_bytes(video_id: str) -> Optional[bytes]:
@@ -723,22 +698,21 @@ def _extractor_args(client: str | None) -> list[str]:
 	return ["--extractor-args", f"youtube:player_client={client}"]
 
 
-def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None) -> pathlib.Path:
-	"""
-	YT Music only. Save using a sanitized stem so our search matches what yt-dlp writes.
-	- If output is already .m4a → done.
-	- Else try remux to .m4a (stream copy).
-	- Else transcode to AAC .m4a.
-	"""
+def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None, disable_aac_pns: bool = False) -> pathlib.Path:
+	"""Download M4A, optionally forcing a new AAC encode with PNS disabled."""
 	dst_dir.mkdir(parents=True, exist_ok=True)
-	safe_base = _safe(base_name)
+	dst = dst_dir / (_safe(base_name) + ".m4a")
+	with tempfile.TemporaryDirectory(dir=dst_dir, prefix=".csvmusic-") as staging:
+		work = pathlib.Path(staging)
+		src = _download_m4a_source(video_id, base_name, work, yt_dlp_bin or ytdlp_path(), list(extra_yt_dlp_args or []))
+		encoded = _normalize_to_m4a(src, work / "output.m4a", ffmpeg_bin or ffmpeg_path(), video_id, audio_processing, disable_aac_pns=disable_aac_pns)
+		store_source(encoded)
+		encoded.replace(dst)
+	return dst
 
-	# Force yt-dlp to use our sanitized basename
-	out_tpl = str(dst_dir / (safe_base + ".%(ext)s"))
-	_cleanup_outputs(dst_dir, safe_base)
-	# Resolve yt-dlp automatically if not provided
-	yt_bin = yt_dlp_bin or ytdlp_path()
-	cookies_args: list[str] = list(extra_yt_dlp_args or [])
+
+def _download_m4a_source(video_id: str, base_name: str, work: pathlib.Path, yt_bin: str, cookies_args: list[str]) -> pathlib.Path:
+	out_tpl = str(work / "source.%(ext)s")
 	js_runtime_args = ytdlp_js_runtime_args(yt_bin)
 	primary_base = [
 		yt_bin,
@@ -799,16 +773,11 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		raise DownloadError(f"yt-dlp failed for m4a: {last_detail}")
 
 	# What got written?
-	cands = _list_downloads(dst_dir, safe_base)
+	cands = [path for path in _list_downloads(work, "source") if path.stem == "source"]
 	if not cands:
 		raise DownloadError("downloaded file not found")
 
-	src = cands[0]
-	dst = dst_dir / (safe_base + ".m4a")
-	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
-	result = _normalize_to_m4a(src, dst, ffmpeg_bin, video_id, audio_processing)
-	store_source(result)
-	return result
+	return cands[0]
 
 def download_opus(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
 	"""Download native Opus audio and remux it into an Ogg Opus container without re-encoding."""

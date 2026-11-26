@@ -20,6 +20,7 @@ def main(argv: list[str]) -> int:
 	parser.add_argument("--out", required=True, help="Output folder")
 	parser.add_argument("--playlist", help="Require this playlist name (exact match; one playlist per CSV)")
 	parser.add_argument("--format", choices=["m4a","mp3"], default="m4a", help="Output format")
+	parser.add_argument("--disable-aac-pns", action="store_true", help="Encode M4A downloads at 256 kbps / 44.1 kHz with perceptual noise substitution disabled")
 	parser.add_argument("--cbr320", action="store_true", help="MP3 320 kbps CBR (default is V0)")
 	parser.add_argument("--no-m3u", action="store_true", help="Do not write an .m3u8 file")
 	parser.add_argument("--no-skipped-csv", action="store_true", help=f"Do not write {SKIPPED_CSV_NAME} for unmatched or failed tracks")
@@ -101,7 +102,7 @@ def main(argv: list[str]) -> int:
 			if args.verbose:
 				print(f"[dl] {artists} — {title} (id={vid}) → {fmt}")
 			if fmt == "m4a":
-				fp = download_m4a(vid, dest_dir, base)
+				fp = download_m4a(vid, dest_dir, base, disable_aac_pns=args.disable_aac_pns)
 			else:
 				fp = download_mp3(vid, dest_dir, base, cbr_320=args.cbr320)
 			cover = track_cover_bytes(t, vid)  # CSV "Cover URL" first, then YouTube thumbnail

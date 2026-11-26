@@ -26,6 +26,7 @@ Useful options (`docker compose run --rm csvmusic --help` lists them all):
 | Option | Meaning |
 | --- | --- |
 | `--format mp3` / `--format m4a` | Output format (default `m4a`) |
+| `--disable-aac-pns` | Re-encode M4A downloads at 256 kbps and 44.1 kHz with perceptual noise substitution disabled |
 | `--cbr320` | MP3 at 320 kbps CBR instead of V0 |
 | `--playlist "Name"` | Require that exact playlist name; export one playlist per CSV |
 | `--no-m3u` | Don't write the `.m3u8` playlist |
