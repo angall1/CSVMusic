@@ -113,12 +113,14 @@ def load_csv(path: Union[str, pathlib.Path]) -> pd.DataFrame:
 		if column in df.columns:
 			df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
 
-	playlists = list_playlists(df)
-	if len(playlists) > 1:
-		raise ValueError(
-			f"CSV contains multiple playlists ({len(playlists)} found). "
-			"Export one playlist at a time from TuneMyMusic and try again."
-		)
+	# Distinct playlists must not collapse into the same output folder.
+	from csvmusic.core.downloader import sanitize_name
+	folders: dict[str, str] = {}
+	for name in list_playlists(df):
+		folder = sanitize_name(name).casefold()
+		if folder in folders and folders[folder] != name:
+			raise ValueError(f"Playlist names '{folders[folder]}' and '{name}' produce the same output folder. Rename one before importing.")
+		folders[folder] = name
 
 	return df
 
@@ -175,6 +177,7 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 	work = work[mask]
 
 	out: List[Dict] = []
+	positions: dict[str, int] = {}
 	for position, (_, r) in enumerate(work.iterrows(), start=1):
 		isrc = str(r.get("ISRC", "")).strip()
 		spid = _spotify_track_id(r.get("Spotify - id", ""))
@@ -187,6 +190,8 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 		else:
 			dur_ms = 0
 
+		playlist_name = str(r.get("Playlist name", "")).strip()
+		positions[playlist_name] = positions.get(playlist_name, 0) + 1
 		track_no = int(r.get("Track number", 0) or 0) if "Track number" in work.columns else 0
 		disc_no = int(r.get("Disc number", 0) or 0) if "Disc number" in work.columns else 0
 		out.append({
@@ -199,7 +204,7 @@ def tracks_from_csv(df: pd.DataFrame, playlist: Optional[str] = None) -> List[Di
 			"duration_ms": dur_ms,
 			"year": _release_year(r.get("Release date", "")),
 			"cover_url": str(r.get("Cover URL", "")).strip() or None,
-			"track_no": track_no or position,
+			"track_no": track_no or positions[playlist_name],
 			"disc_no": disc_no or 1,
 		})
 	return out

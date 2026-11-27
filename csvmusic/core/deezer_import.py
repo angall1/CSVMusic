@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import requests
 
 from csvmusic.core.import_warnings import incomplete_import_warning
+from csvmusic.core.release_year import metadata_year
 
 
 class DeezerImportError(Exception):
@@ -46,6 +47,9 @@ def fetch_deezer_source(value: str, *, timeout: int = 20, session: requests.Sess
 		items.extend(next_page.get("data") or [])
 		next_url = _text(next_page.get("next"))
 	tracks = _tracks_from_items(items, name)
+	if source_type == "album":
+		for track in tracks:
+			track["year"] = track.get("year") or metadata_year(data)
 	if not tracks:
 		raise DeezerImportError("Deezer loaded the source, but no playable tracks were found.")
 	total_count = _integer(page.get("total")) or len(items)
@@ -97,7 +101,7 @@ def _tracks_from_items(items: list[Any], playlist_name: str) -> list[dict]:
 			"isrc": _text(item.get("isrc")) or None,
 			"sp_id": str(item.get("id") or "") or None,
 			"duration_ms": (_integer(item.get("duration")) or 0) * 1000,
-			"year": None,
+			"year": metadata_year(item) or metadata_year(album),
 			"cover_url": _text(album.get("cover_xl") or album.get("cover_big")) or None,
 			"track_no": len(tracks) + 1,
 			"disc_no": _integer(item.get("disk_number")) or 1,

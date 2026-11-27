@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Dict, Optional, List
 import re, unicodedata
 import threading
+import tempfile
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, APIC
 from mutagen.mp4 import MP4, MP4Cover
@@ -327,7 +328,7 @@ def _run_ytdlp(cmd: list[str]) -> int:
 def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
 	capture_source("")
 	cmd = cmd[:1] + ["--no-simulate", "--print", "after_move:%(.{id,format_id,acodec,vcodec,abr,tbr})j"] + cmd[1:]
-	# Keep authentication unless a media-only 403 warrants one public retry.
+	# Retry a cookie-related media denial or unavailable format once publicly.
 	if cmd and cmd[0] == INTERNAL_YTDLP:
 		rc, stdout, stderr = _run_ytdlp_module(cmd[1:])
 	else:
@@ -339,14 +340,15 @@ def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
 	raw_error = f"{stderr}\n{stdout}".lower()
 	if (
 		_cmd_uses_cookies(cmd)
-		and "unable to download video data: http error 403" in raw_error
+		and ("unable to download video data: http error 403" in raw_error or "requested format is not available" in raw_error)
 		and not is_age_restriction_error(raw_error)
 		and not any(marker in raw_error for marker in (
 			"sign in", "login required", "login_required", "private video",
-			"members-only", "members only", "http error 429", "too many requests",
+			"members-only", "members only", "http error 429", "too many requests", "precondition check failed",
 		))
 	):
-		_download_notice("Signed-in YouTube media request returned HTTP 403. Retrying this video once without cookies; saved account settings are unchanged.")
+		reason = "requested format is unavailable" if "requested format is not available" in raw_error else "media request returned HTTP 403"
+		_download_notice(f"Signed-in YouTube {reason}. Retrying this video once without cookies; saved account settings are unchanged.")
 		public_cmd = _strip_cookie_args(cmd) + ["--ignore-config", "--no-cookies", "--no-cookies-from-browser", "--no-continue"]
 		if public_cmd[0] == INTERNAL_YTDLP:
 			public_rc, public_out, public_err = _run_ytdlp_module(public_cmd[1:])
@@ -361,7 +363,7 @@ def _run_ytdlp_detail(cmd: list[str]) -> tuple[int, str]:
 		if is_age_restriction_error(public_err + public_out):
 			raise AgeRestrictedError(age_restriction_message(using_cookies=True))
 		public_detail = _summarize_tool_output(public_err, public_out, using_cookies=False)
-		detail = "Signed-in request denied (HTTP 403); automatic retry without cookies also failed. " + public_detail
+		detail = f"Signed-in {reason}; automatic retry without cookies also failed. " + public_detail
 		log(f"yt-dlp recovery failed: {detail}")
 		return public_rc, detail
 	detail = _summarize_tool_output(stderr, stdout, using_cookies=_cmd_uses_cookies(cmd))
@@ -428,13 +430,6 @@ def _cleanup_outputs(dir: pathlib.Path, base: str) -> None:
 			pass
 
 
-def _replace_file(src: pathlib.Path, dst: pathlib.Path) -> None:
-	if dst.exists():
-		try:
-			dst.unlink()
-		except Exception:
-			pass
-	src.replace(dst)
 
 
 def _audio_processing_enabled(audio_processing: Dict | None) -> bool:
@@ -513,43 +508,26 @@ def _append_audio_filter(args: list[str], audio_processing: Dict | None, src: pa
 		args += ["-af", filter_chain]
 
 
-def _normalize_to_m4a(src: pathlib.Path, dst: pathlib.Path, ffmpeg_bin: str, video_id: str, audio_processing: Dict | None = None) -> pathlib.Path:
-	tmp_dst = dst.with_name(dst.stem + ".normalized.m4a")
-	if tmp_dst.exists():
-		try:
-			tmp_dst.unlink()
-		except Exception:
-			pass
-
-	if not _audio_processing_enabled(audio_processing):
-		proc = _run_capture([ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn", "-c:a", "copy", str(tmp_dst)])
-		rc = proc.returncode
-		if rc == 0 and tmp_dst.exists():
-			if src != dst:
-				try: src.unlink()
-				except Exception: pass
-			_replace_file(tmp_dst, dst)
+def _normalize_to_m4a(src: pathlib.Path, dst: pathlib.Path, ffmpeg_bin: str, video_id: str, audio_processing: Dict | None = None, *, disable_aac_pns: bool = False) -> pathlib.Path:
+	"""Write a new M4A in the track's staging directory."""
+	args = [ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn"]
+	if not disable_aac_pns and not _audio_processing_enabled(audio_processing):
+		proc = _run_capture(args + ["-c:a", "copy", str(dst)])
+		if proc.returncode == 0 and dst.is_file():
 			return dst
 
-	args = [ffmpeg_bin, "-y", "-i", str(src), "-vn", "-sn"]
 	_append_audio_filter(args, audio_processing, src=src, ffmpeg_bin=ffmpeg_bin)
-	args += ["-c:a", "aac", "-b:a", "192k", str(tmp_dst)]
-	proc = _run_capture(args)
-	rc = proc.returncode
-	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
-	if rc == 0 and tmp_dst.exists():
-		if src != dst:
-			try: src.unlink()
-			except Exception: pass
-		_replace_file(tmp_dst, dst)
+	args += ["-c:a", "aac"]
+	if disable_aac_pns:
+		args += ["-b:a", "256k", "-ar", "44100", "-aac_pns", "0"]
+	else:
+		args += ["-b:a", "192k"]
+	proc = _run_capture(args + [str(dst)])
+	if proc.returncode == 0 and dst.is_file():
 		return dst
 
-	try:
-		if tmp_dst.exists():
-			tmp_dst.unlink()
-	except Exception:
-		pass
-	log(f"download_m4a: ffmpeg normalization failed video_id={video_id} src='{src.name}' dst='{dst.name}' rc={rc}")
+	detail = _summarize_tool_output(proc.stderr or "", proc.stdout or "")
+	log(f"download_m4a: ffmpeg normalization failed video_id={video_id} src='{src.name}' dst='{dst.name}' rc={proc.returncode}")
 	raise DownloadError(f"failed to produce .m4a: {detail}")
 
 def yt_thumbnail_bytes(video_id: str) -> Optional[bytes]:
@@ -723,22 +701,20 @@ def _extractor_args(client: str | None) -> list[str]:
 	return ["--extractor-args", f"youtube:player_client={client}"]
 
 
-def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None) -> pathlib.Path:
-	"""
-	YT Music only. Save using a sanitized stem so our search matches what yt-dlp writes.
-	- If output is already .m4a → done.
-	- Else try remux to .m4a (stream copy).
-	- Else transcode to AAC .m4a.
-	"""
+def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None, disable_aac_pns: bool = False) -> pathlib.Path:
+	"""Download M4A, optionally forcing a new AAC encode with PNS disabled."""
 	dst_dir.mkdir(parents=True, exist_ok=True)
-	safe_base = _safe(base_name)
+	dst = dst_dir / (_safe(base_name) + ".m4a")
+	with tempfile.TemporaryDirectory(dir=dst_dir, prefix=".csvmusic-") as staging:
+		work = pathlib.Path(staging)
+		src = _download_m4a_source(video_id, base_name, work, yt_dlp_bin or ytdlp_path(), list(extra_yt_dlp_args or []))
+		encoded = _normalize_to_m4a(src, work / "output.m4a", ffmpeg_bin or ffmpeg_path(), video_id, audio_processing, disable_aac_pns=disable_aac_pns)
+		store_source(encoded)
+		encoded.replace(dst)
+	return dst
 
-	# Force yt-dlp to use our sanitized basename
-	out_tpl = str(dst_dir / (safe_base + ".%(ext)s"))
-	_cleanup_outputs(dst_dir, safe_base)
-	# Resolve yt-dlp automatically if not provided
-	yt_bin = yt_dlp_bin or ytdlp_path()
-	cookies_args: list[str] = list(extra_yt_dlp_args or [])
+def _download_m4a_source(video_id: str, base_name: str, work: pathlib.Path, yt_bin: str, cookies_args: list[str]) -> pathlib.Path:
+	out_tpl = str(work / "source.%(ext)s")
 	js_runtime_args = ytdlp_js_runtime_args(yt_bin)
 	primary_base = [
 		yt_bin,
@@ -799,16 +775,11 @@ def download_m4a(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp
 		raise DownloadError(f"yt-dlp failed for m4a: {last_detail}")
 
 	# What got written?
-	cands = _list_downloads(dst_dir, safe_base)
+	cands = [path for path in _list_downloads(work, "source") if path.stem == "source"]
 	if not cands:
 		raise DownloadError("downloaded file not found")
 
-	src = cands[0]
-	dst = dst_dir / (safe_base + ".m4a")
-	ffmpeg_bin = ffmpeg_bin or ffmpeg_path()
-	result = _normalize_to_m4a(src, dst, ffmpeg_bin, video_id, audio_processing)
-	store_source(result)
-	return result
+	return cands[0]
 
 def download_opus(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None) -> pathlib.Path:
 	"""Download native Opus audio and remux it into an Ogg Opus container without re-encoding."""
@@ -863,7 +834,7 @@ def download_opus(video_id: str, dst_dir: pathlib.Path, base_name: str, *, yt_dl
 	store_source(dst)
 	return dst
 
-def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None, mp3_quality: int = 0, cbr_bitrate_kbps: int | None = None) -> pathlib.Path:
+def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: bool = False, *, yt_dlp_bin: str | None = None, ffmpeg_bin: str | None = None, extra_yt_dlp_args: List[str] | None = None, audio_processing: Dict | None = None, mp3_quality: int = 0, cbr_bitrate_kbps: int | None = None, force_lr_stereo: bool = False) -> pathlib.Path:
 	dst_dir.mkdir(parents=True, exist_ok=True)
 	safe_base = _safe(base_name)
 	tmp = dst_dir / (safe_base + ".tmp")
@@ -935,6 +906,8 @@ def download_mp3(video_id: str, dst_dir: pathlib.Path, base_name: str, cbr_320: 
 		args += ["-codec:a","libmp3lame","-b:a","320k"]
 	else:
 		args += ["-codec:a","libmp3lame","-q:a", str(mp3_quality)]
+	if force_lr_stereo:
+		args += ["-joint_stereo", "0"]
 	args += [str(dst)]
 	proc = _run_capture(args)
 	rc = proc.returncode
@@ -962,7 +935,7 @@ def write_m3u(out_dir: pathlib.Path, playlist_name: str, tracks_done: List[Dict]
 			if t.get("filename_prefix_number"):
 				width = max(2, int(t.get("filename_prefix_width") or 2))
 				base = f"{int(t['filename_prefix_number']):0{width}d}- {base}"
-			media_path = media_dir / f"{_safe(base)}.{ext}"
+			media_path = pathlib.Path(t["playlist_media_path"]) if t.get("playlist_media_path") else media_dir / f"{_safe(base)}.{ext}"
 			try:
 				rel = pathlib.Path(os.path.relpath(media_path.resolve(), playlist_dir.resolve()))
 			except ValueError:

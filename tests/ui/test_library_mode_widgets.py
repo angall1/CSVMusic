@@ -135,3 +135,58 @@ def test_normal_download_reprocesses_known_eq_changes(tmp_path) -> None:
 		[track], tmp_path, "mp3", audio_signature="normalize=0|volume=4|bass=0|treble=0",
 		audio_enabled=True, prefix_numbers=False,
 	) == [track]
+
+
+def test_use_existing_file_clears_queue_and_saves(monkeypatch):
+	from types import SimpleNamespace
+	from csvmusic.ui.library_mode import LibraryModeDialog
+	track = {"force_redownload": True, "last_error": "failed"}
+	playlist = {"id": "test", "platform": "spotify", "name": "Mix", "tracks": [track]}
+	calls = []
+	def accept(probe, output, fmt):
+		probe.update(downloaded_path="local.mp3", force_redownload=False, last_error=None, last_error_at=None, download_error=None, error=None)
+	monkeypatch.setattr("csvmusic.ui.library_mode.use_existing_track_file", accept)
+	dialog = SimpleNamespace(download_worker=None, single_download_worker=None,
+		library={"playlists": [playlist]}, download_track_states={("spotify:test", 0): "Queued"},
+		_save=lambda: calls.append("save"), _refresh=lambda: calls.append("refresh"))
+	LibraryModeDialog._use_existing_file(dialog, "spotify:test", 0)
+	assert not track["force_redownload"]
+	assert track["last_error"] is None
+	assert not dialog.download_track_states
+	assert calls == ["save", "refresh"]
+
+
+def test_download_rebuilds_playlist_without_audio_or_encoder_work(monkeypatch, tmp_path):
+	from types import SimpleNamespace
+	from csvmusic.ui import library_mode
+	from csvmusic.core.library import write_library_playlists
+	folder = tmp_path / "Mix"
+	folder.mkdir()
+	(folder / "Artist - Song.mp3").write_bytes(b"existing audio")
+	playlist = {"id": "test", "platform": "spotify", "name": "Mix", "tracks": [{"title": "Song", "artists": "Artist", "album": "Album"}]}
+	library = {"playlists": [playlist], "output_dir": str(tmp_path), "format": "mp3"}
+	messages = []
+	monkeypatch.setattr(library_mode, "load_settings", lambda: {})
+	monkeypatch.setattr(library_mode.QMessageBox, "information", lambda *args: messages.append(args[-1]))
+	monkeypatch.setattr(library_mode, "ffmpeg_supports_mp3", lambda *args: (_ for _ in ()).throw(AssertionError("Encoder should not be checked")))
+	dialog = SimpleNamespace(library=library, download_worker=None, single_download_worker=None,
+		_selected_ids=lambda: {"spotify:test"}, _selected_playlists=lambda: [playlist], _open_settings=lambda **kwargs: True,
+		_regenerate_playlists=lambda ids: write_library_playlists(library, ids, {}))
+	library_mode.LibraryModeDialog._start_download(dialog)
+	assert (folder / "Mix.m3u8").is_file()
+	assert "Rebuilt 1 playlist file" in messages[0]
+
+
+def test_csv_rescan_selects_only_its_named_playlist(tmp_path):
+	from csvmusic.ui.library_mode import DirectLibraryScanWorker
+	path = tmp_path / "multi.csv"
+	path.write_text("Playlist name,Track name,Artist name\nA,One,Artist\nB,Two,Artist\n", encoding="utf-8")
+	worker = DirectLibraryScanWorker(str(path), "csv", source_id="a", csv_playlist_name="A")
+	results = []
+	worker.finished_scan.connect(results.append)
+	worker.run()
+	assert [t["title"] for t in results[0]["tracks"]] == ["One"]
+	path.write_text("Playlist name,Track name,Artist name\nB,Two,Artist\n", encoding="utf-8")
+	worker.run()
+	assert results[1]["complete"]
+	assert results[1]["tracks"] == []

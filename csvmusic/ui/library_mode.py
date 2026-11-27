@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from csvmusic.core.library import (
 	add_playlist_urls, edit_library_track, enabled_tracks, export_csv, library_status, library_track_path, load_library,
-	import_csv_playlist, merge_playlist_scan, new_library, playlist_by_id, record_library_download_result,
+	write_library_playlists, use_existing_track_file, import_csv_playlists, merge_playlist_scan, new_library, playlist_by_id, record_library_download_result,
 	rename_library_playlist, save_library,
 )
 from csvmusic.core.log import log
@@ -96,24 +96,28 @@ def _playlists_contributing_tracks(playlists: list[dict], tracks: list[dict]) ->
 class DirectLibraryScanWorker(QThread):
 	finished_scan = Signal(object)
 
-	def __init__(self, url: str, platform: str, parent=None, *, source_id: str = ""):
+	def __init__(self, url: str, platform: str, parent=None, *, source_id: str = "", csv_playlist_name: str | None = None):
 		super().__init__(parent)
 		self.url = url
 		self.platform = platform
 		self.source_id = source_id
+		self.csv_playlist_name = csv_playlist_name
 
 	def run(self) -> None:
 		try:
 			if self.platform == "csv":
 				from csvmusic.core.csv_import import load_csv, tracks_from_csv
-				tracks = tracks_from_csv(load_csv(self.url))
-				if not tracks:
+				df = load_csv(self.url)
+				if self.csv_playlist_name is None and len(df["Playlist name"].unique()) > 1:
+					raise ValueError("Re-import this CSV to separate its playlists.")
+				tracks = tracks_from_csv(df, self.csv_playlist_name)
+				if not tracks and not self.csv_playlist_name:
 					raise ValueError("The CSV did not contain any usable tracks.")
 				self.finished_scan.emit({
 					"id": self.source_id,
-					"name": tracks[0].get("playlist") or pathlib.Path(self.url).stem,
+					"name": self.csv_playlist_name or tracks[0].get("playlist") or pathlib.Path(self.url).stem,
 					"tracks": tracks, "reported_total": len(tracks), "message": "",
-					"complete": bool(tracks), "platform": "csv", "cover_url": None, "direct": True,
+					"complete": True, "platform": "csv", "cover_url": None, "direct": True,
 				})
 				return
 			if self.platform == "apple_music":
@@ -777,6 +781,18 @@ class LibrarySettingsDialog(QDialog):
 		tabs.addTab(general, "General")
 		advanced = QWidget()
 		advanced_layout = QVBoxLayout(advanced)
+		self.force_lr_stereo = QCheckBox("Force L/R stereo")
+		self.force_lr_stereo.setToolTip("MP3 only. Off uses automatic joint stereo (recommended). Enable to force independent left/right encoding for compatibility or personal preference. Applies to new downloads; existing files are unchanged.")
+		self.force_lr_stereo.setChecked(bool(cfg.get("force_lr_stereo", False)))
+		self.force_lr_stereo.setEnabled(self.format.currentText() == "mp3")
+		self.format.currentTextChanged.connect(lambda fmt: self.force_lr_stereo.setEnabled(fmt == "mp3"))
+		advanced_layout.addWidget(self.force_lr_stereo)
+		self.disable_aac_pns = QCheckBox("Disable AAC perceptual noise substitution (PNS)")
+		self.disable_aac_pns.setToolTip("M4A compatibility option: re-encode new downloads at 256 kbps / 44.1 kHz with PNS disabled. Existing files are unchanged.")
+		self.disable_aac_pns.setChecked(bool(cfg.get("disable_aac_pns", False)))
+		self.disable_aac_pns.setEnabled(self.format.currentText() == "m4a")
+		self.format.currentTextChanged.connect(lambda fmt: self.disable_aac_pns.setEnabled(fmt == "m4a"))
+		advanced_layout.addWidget(self.disable_aac_pns)
 		tools_section = self._section("Tool paths — Advanced")
 		tools_layout = tools_section.layout()
 		note = QLabel("These overrides are optional. Leave them blank to use CSVMusic's bundled tools or automatic PATH detection.")
@@ -1057,6 +1073,8 @@ class LibrarySettingsDialog(QDialog):
 			"ffmpeg_path": self.ffmpeg.text().strip() or None,
 			# FFmpeg/libmp3lame uses the inverse scale: 0 is its best quality.
 			"mp3_quality": 10 - self.mp3_quality.value(),
+			"force_lr_stereo": self.force_lr_stereo.isChecked(),
+			"disable_aac_pns": self.disable_aac_pns.isChecked(),
 			"legacy_ipod_mode": self.legacy_ipod.isChecked(),
 			"legacy_mp3_mode": self.legacy_mp3.currentData(),
 			"embed_art": self.embed_art.isChecked(),
@@ -1989,18 +2007,15 @@ class LibraryModeDialog(QDialog):
 		if not path:
 			return
 		try:
-			playlist, created = import_csv_playlist(self.library, path)
+			results = import_csv_playlists(self.library, path)
 		except Exception as exc:
 			log(f"library CSV import failed path={path} error={exc}")
 			QMessageBox.critical(self, "CSV Import Failed", str(exc))
 			return
 		self._save()
 		self._refresh()
-		name = str(playlist.get("name") or pathlib.Path(path).stem)
-		count = len(playlist.get("tracks", []))
-		self.status.setText(
-			f"{'Imported' if created else 'Refreshed'} CSV playlist '{name}' with {count} tracks."
-		)
+		count = sum(len(playlist.get("tracks", [])) for playlist, _created in results)
+		self.status.setText(f"Imported/refreshed {len(results)} CSV playlist(s) with {count} tracks in separate folders.")
 
 	def _switch_to_legacy_mode(self) -> None:
 		"""Switch interfaces only; both modes continue using the shared core workers and settings."""
@@ -2354,7 +2369,7 @@ class LibraryModeDialog(QDialog):
 		if playlist.get("platform") in ("youtube_music", "youtube", "apple_music", "deezer", "amazon_music", "csv") or is_spotify_album:
 			platform = "spotify_album" if is_spotify_album else str(playlist["platform"])
 			self.direct_worker = DirectLibraryScanWorker(
-				playlist.get("csv_path") or playlist["url"], platform, self, source_id=str(playlist.get("id") or "")
+				playlist.get("csv_path") or playlist["url"], platform, self, source_id=str(playlist.get("id") or ""), csv_playlist_name=playlist.get("csv_playlist_name")
 			)
 			self.direct_worker.finished_scan.connect(self._scan_finished)
 			self.direct_worker.start()
@@ -2417,7 +2432,7 @@ class LibraryModeDialog(QDialog):
 			self.scan_warnings.append(str(data["error"]))
 			self.scan_results.append({"name": self.current_scan_name or "Playlist", "error": str(data["error"])})
 		playlist_id = str(data.get("id") or "")
-		if not self.scan_cancelled and playlist_id and data.get("tracks"):
+		if not self.scan_cancelled and playlist_id and isinstance(data.get("tracks"), list) and (data["tracks"] or data.get("complete")):
 			message = str(data.get("message") or "")
 			warning = None if data.get("complete") else message
 			if warning:
@@ -2434,6 +2449,8 @@ class LibraryModeDialog(QDialog):
 			)
 			self._save()
 			playlist_key = f"{merged.get('platform') or 'spotify'}:{merged.get('id')}"
+			if data.get("complete"):
+				self._regenerate_playlists({playlist_key})
 			counts = library_status(
 				self.library,
 				self.library.get("output_dir") or "",
@@ -2999,6 +3016,10 @@ class LibraryModeDialog(QDialog):
 					settings_button.setFixedSize(42, 42)
 					settings_button.clicked.connect(lambda _checked=False, target=item: self._open_track_settings(target))
 					card_layout.addWidget(settings_button)
+				if file_exists and (has_error or track.get("force_redownload")):
+					use_existing = QPushButton("Use existing file / cancel replacement")
+					use_existing.clicked.connect(lambda _checked=False, key=str(playlist_id), row=index: self._use_existing_file(key, row))
+					card_layout.addWidget(use_existing)
 				self.track_tree.setItemWidget(item, 0, card)
 				self.track_art_targets[self.track_tree.indexOfTopLevelItem(item)] = art
 				displayed_tracks += 1
@@ -3187,6 +3208,8 @@ class LibraryModeDialog(QDialog):
 			cfg.get("cookies_browser") if use_cookies else None,
 			cfg.get("cookies_file") if use_cookies else None,
 			audio_processing=audio, mp3_quality=int(cfg.get("mp3_quality", 0) or 0),
+			force_lr_stereo=bool(cfg.get("force_lr_stereo", False)),
+			disable_aac_pns=bool(cfg.get("disable_aac_pns", False)),
 			legacy_options=legacy, force_download=True, parent=self,
 		)
 		self.single_download_worker = worker
@@ -3320,6 +3343,22 @@ class LibraryModeDialog(QDialog):
 		self._save()
 		self._refresh()
 
+	def _use_existing_file(self, playlist_id: str, index: int) -> None:
+		if self.download_worker is not None or self.single_download_worker is not None:
+			return
+		playlist = playlist_by_id(self.library, playlist_id)
+		track = playlist["tracks"][index]
+		probe = dict(track, playlist=playlist.get("name") or "Playlist")
+		try:
+			use_existing_track_file(probe, self.library.get("output_dir") or "", str(self.library.get("format") or "m4a"))
+		except ValueError as exc:
+			QMessageBox.warning(self, "Cannot Use Existing File", str(exc))
+			return
+		track.update({key: probe[key] for key in ("downloaded_path", "force_redownload", "last_error", "last_error_at", "download_error", "error")})
+		self.download_track_states.pop((playlist_id, index), None)
+		self._save()
+		self._refresh()
+
 	def _toggle_redownload(self) -> None:
 		for item in self.track_tree.selectedItems():
 			playlist_id, index = item.data(0, Qt.UserRole)
@@ -3361,6 +3400,13 @@ class LibraryModeDialog(QDialog):
 			export_csv(path, self.library, self._selected_ids() or None)
 			self.status.setText(f"Exported enabled tracks to {path}")
 
+	def _regenerate_playlists(self, playlist_ids: set[str]) -> list[pathlib.Path] | None:
+		try:
+			return write_library_playlists(self.library, playlist_ids, load_settings())
+		except OSError as exc:
+			QMessageBox.warning(self, "Playlist Write Failed", f"Could not rebuild the playlist files: {exc}")
+			return None
+
 	def _start_download(self, *, missing_only: bool = False) -> None:
 		if (self.download_worker and self.download_worker.isRunning()) or (self.single_download_worker and self.single_download_worker.isRunning()):
 			return
@@ -3378,19 +3424,6 @@ class LibraryModeDialog(QDialog):
 		if not output:
 			return
 		fmt = str(self.library.get("format") or "m4a")
-		if fmt == "mp3":
-			try:
-				mp3_ready = ffmpeg_supports_mp3(ffmpeg_path())
-			except Exception:
-				mp3_ready = False
-			if not mp3_ready:
-				QMessageBox.critical(
-					self,
-					"MP3 Encoder Missing",
-					"The selected FFmpeg cannot encode MP3 because its libmp3lame encoder is missing. "
-					"Install the corrected CSVMusic package before retrying.",
-				)
-				return
 		cfg = load_settings()
 		audio = _audio_processing_settings(cfg)
 		audio_signature = _audio_processing_signature(audio)
@@ -3417,13 +3450,31 @@ class LibraryModeDialog(QDialog):
 			tracks, output_path, fmt, audio_signature=audio_signature,
 			audio_enabled=bool(audio), prefix_numbers=prefix_numbers, missing_only=missing_only,
 		)
+		written = self._regenerate_playlists(selected_ids)
+		if written is None:
+			return
 		if not tracks:
 			message = (
 				"There are no missing tracks in the library."
 				if missing_only else "All enabled tracks in the selected playlist are already downloaded."
 			)
+			if written:
+				message += f" Rebuilt {len(written)} playlist file(s)."
 			QMessageBox.information(self, "Library Current" if missing_only else "Playlist Current", message)
 			return
+		if fmt == "mp3":
+			try:
+				mp3_ready = ffmpeg_supports_mp3(ffmpeg_path())
+			except Exception:
+				mp3_ready = False
+			if not mp3_ready:
+				QMessageBox.critical(
+					self,
+					"MP3 Encoder Missing",
+					"The selected FFmpeg cannot encode MP3 because its libmp3lame encoder is missing. "
+					"Install the corrected CSVMusic package before retrying.",
+				)
+				return
 		for track in tracks:
 			track["library_path"] = str(self.library_path)
 		use_cookies = bool(cfg.get("use_cookies", False))
@@ -3481,6 +3532,8 @@ class LibraryModeDialog(QDialog):
 			cfg.get("cookies_browser") if use_cookies else None,
 			cfg.get("cookies_file") if use_cookies else None,
 			audio_processing=audio, mp3_quality=int(cfg.get("mp3_quality", 0) or 0),
+			force_lr_stereo=bool(cfg.get("force_lr_stereo", False)),
+			disable_aac_pns=bool(cfg.get("disable_aac_pns", False)),
 			legacy_options=legacy, force_download=bool(cfg.get("force_download_mode", False)),
 			tracks_override=tracks, m3u_tracks_override=all_playlist_tracks,
 			m3u_output_dir=cfg.get("m3u_output_dir"),
@@ -3612,6 +3665,19 @@ class LibraryModeDialog(QDialog):
 		if not output:
 			QMessageBox.warning(self, "Missing Output", "Choose the library output folder first.")
 			return
+		if fmt == "mp3":
+			try:
+				mp3_ready = ffmpeg_supports_mp3(ffmpeg_path())
+			except Exception:
+				mp3_ready = False
+			if not mp3_ready:
+				QMessageBox.critical(
+					self,
+					"MP3 Encoder Missing",
+					"The selected FFmpeg cannot encode MP3 because its libmp3lame encoder is missing. "
+					"Install the corrected CSVMusic package before retrying.",
+				)
+				return
 		for track in tracks:
 			track["library_path"] = str(self.library_path)
 		log(f"library handed to downloader tracks={len(tracks)} output={output}")

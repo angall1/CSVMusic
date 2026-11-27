@@ -7,17 +7,19 @@ import pathlib
 import unicodedata
 import re
 import tempfile
+import mutagen
+from csvmusic.core.release_year import release_year
 from typing import Any
 from urllib.parse import urlparse
 
 from csvmusic.core.spotify_import import parse_spotify_source
-from csvmusic.core.downloader import sanitize_name
+from csvmusic.core.downloader import sanitize_name, write_m3u
 from csvmusic.core.track_output import expected_track_path
 from csvmusic.core.youtube_music_import import parse_youtube_music_source
 from csvmusic.core.apple_music_import import parse_apple_music_source_url
 from csvmusic.core.deezer_import import parse_deezer_source
 from csvmusic.core.amazon_music_import import parse_amazon_music_source
-from csvmusic.core.csv_import import load_csv, tracks_from_csv
+from csvmusic.core.csv_import import load_csv, tracks_from_csv, list_playlists
 
 
 LIBRARY_VERSION = 1
@@ -119,15 +121,23 @@ def add_playlist_urls(library: dict, values: list[str]) -> tuple[list[dict], lis
 	return added, errors
 
 
-def import_csv_playlist(library: dict, path: str | pathlib.Path) -> tuple[dict, bool]:
+def import_csv_playlist(library: dict, path: str | pathlib.Path, *, playlist_name: str | None = None) -> tuple[dict, bool]:
 	"""Import or refresh one CSV file as a first-class library playlist."""
 	source_path = pathlib.Path(path).expanduser().resolve()
 	df = load_csv(source_path)
-	tracks = tracks_from_csv(df)
+	names = list_playlists(df)
+	if playlist_name is None and len(names) > 1:
+		raise ValueError("Select a playlist from this CSV, or import all playlists in Library Mode.")
+	tracks = tracks_from_csv(df, playlist_name)
 	if not tracks:
 		raise ValueError("The CSV did not contain any usable tracks.")
 	name = str(tracks[0].get("playlist") or source_path.stem).strip() or source_path.stem
-	source_id = hashlib.sha256(str(source_path).casefold().encode("utf-8")).hexdigest()[:20]
+	base_id = hashlib.sha256(str(source_path).casefold().encode("utf-8")).hexdigest()[:20]
+	group_id = hashlib.sha256((str(source_path).casefold() + "\n" + name).encode("utf-8")).hexdigest()[:20]
+	legacy = playlist_by_id(library, f"csv:{base_id}")
+	group = playlist_by_id(library, f"csv:{group_id}")
+	legacy_matches = legacy and (legacy.get("csv_playlist_name") or legacy.get("name")) == name
+	source_id = group_id if group else base_id if legacy_matches or (len(names) == 1 and not legacy) else group_id
 	key = f"csv:{source_id}"
 	playlist = playlist_by_id(library, key)
 	created = playlist is None
@@ -147,8 +157,21 @@ def import_csv_playlist(library: dict, path: str | pathlib.Path) -> tuple[dict, 
 		library.setdefault("playlists", []).append(playlist)
 	merge_playlist_scan(library, key, name, tracks, reported_total=len(tracks))
 	playlist["csv_path"] = str(source_path)
+	playlist["csv_playlist_name"] = name
 	playlist["url"] = str(source_path)
 	return playlist, created
+
+
+def import_csv_playlists(library: dict, path: str | pathlib.Path) -> list[tuple[dict, bool]]:
+	"""Import named CSV playlists independently, preserving each row and its order."""
+	from copy import deepcopy
+	names = list_playlists(load_csv(path))
+	candidate = deepcopy(library)
+	results = [import_csv_playlist(candidate, path, playlist_name=name) for name in names]
+	if not results:
+		raise ValueError("The CSV did not contain any usable tracks.")
+	library.update(candidate)
+	return results
 
 
 def rename_library_playlist(
@@ -233,6 +256,23 @@ def edit_library_track(library: dict, playlist_id: str, track_index: int, title:
 	return track
 
 
+def use_existing_track_file(track: dict, output_dir: str | pathlib.Path, fmt: str) -> pathlib.Path:
+	"""Accept a readable local audio file without claiming a YouTube download."""
+	path = library_track_path(track, output_dir, fmt)
+	try:
+		audio = mutagen.File(path)
+		valid = audio is not None and float(getattr(audio.info, "length", 0)) > 0
+	except Exception:
+		valid = False
+	if not path.is_file() or not valid:
+		raise ValueError("No readable audio file was found for this song.")
+	track["downloaded_path"] = str(path)
+	track["force_redownload"] = False
+	for field in ("last_error", "last_error_at", "download_error", "error"):
+		track[field] = None
+	return path
+
+
 def merge_playlist_scan(
 	library: dict,
 	playlist_id: str,
@@ -274,6 +314,7 @@ def merge_playlist_scan(
 			matching_old = [candidate for candidate in playlist.get("tracks", []) if _track_text_key(candidate) == text_key]
 			if len(matching_old) == 1:
 				old = matching_old[0]
+		track["year"] = release_year(track.get("year")) or release_year(old.get("year"))
 		if old.get("custom_title"):
 			track["title"] = old.get("title") or track["title"]
 			track["custom_title"] = True
@@ -305,6 +346,16 @@ def merge_playlist_scan(
 		track["downloaded_path"] = old_downloaded_path or None
 		track["low_confidence_review"] = bool(old.get("low_confidence_review", False))
 		track["download_confidence"] = old.get("download_confidence")
+		# A failed first download can be satisfied by a manually supplied file.
+		# Existing replacement requests and previous downloads are ambiguous:
+		# only explicit acceptance may clear those states.
+		if (old.get("last_error") and not old.get("force_redownload")
+			and not old.get("last_downloaded_at") and not old.get("downloaded_video_id")
+			and not old.get("preferred_selection_locked")):
+			try:
+				use_existing_track_file(track, library.get("output_dir") or "", str(library.get("format") or "mp3"))
+			except ValueError:
+				pass
 		merged.append(track)
 	removed = [old for key, old in previous.items() if key not in seen]
 	playlist.update({
@@ -551,3 +602,27 @@ def _now() -> str:
 
 def _playlist_key(playlist: dict) -> str:
 	return f"{playlist.get('platform') or 'spotify'}:{playlist.get('id')}"
+
+
+def write_library_playlists(library: dict, playlist_ids: set[str], settings: dict) -> list[pathlib.Path]:
+	"""Rebuild selected manifests from existing files in current playlist order."""
+	output = str(library.get("output_dir") or "").strip()
+	if not output:
+		return []
+	root = pathlib.Path(output)
+	fmt = str(library.get("format") or "m4a")
+	written: list[pathlib.Path] = []
+	for playlist in library.get("playlists", []):
+		key = _playlist_key(playlist)
+		if key not in playlist_ids and playlist.get("id") not in playlist_ids:
+			continue
+		tracks = []
+		for track in enabled_tracks(library, {key}):
+			path = library_track_path(track, root, fmt)
+			if path.is_file():
+				track["playlist_media_path"] = str(path)
+				tracks.append(track)
+		for suffix, setting, encoding in ((".m3u8", "write_m3u8", "utf-8"), (".m3u", "write_m3u_plain", "utf-8-sig")):
+			if settings.get(setting, setting == "write_m3u8"):
+				written.append(write_m3u(root, playlist.get("name") or "Playlist", tracks, fmt, suffix=suffix, encoding=encoding, playlist_output_dir=settings.get("m3u_output_dir")))
+	return written

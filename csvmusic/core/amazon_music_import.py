@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import requests
 
 from csvmusic.core.import_warnings import incomplete_import_warning
+from csvmusic.core.release_year import metadata_year
 
 
 class AmazonMusicImportError(Exception):
@@ -158,7 +159,7 @@ def parse_amazon_music_web_player(root: Any, source_id: str, source_type: str) -
 			"isrc": None,
 			"sp_id": track_id,
 			"duration_ms": _clock_duration_ms(item.get("secondaryText3")),
-			"year": None,
+			"year": metadata_year(item),
 			"cover_url": _text(item.get("image")) or None,
 			"track_no": len(tracks) + 1,
 			"disc_no": 1,
@@ -261,7 +262,7 @@ def _amazon_track(item: Any, playlist_name: str) -> dict | None:
 		"isrc": _text(item.get("isrc")) or None,
 		"sp_id": _text(item.get("id") or item.get("asin")) or None,
 		"duration_ms": _duration_ms(item),
-		"year": None,
+		"year": metadata_year(item),
 		"cover_url": _text(item.get("imageUrl") or item.get("artwork")) or None,
 		"track_no": 0,
 		"disc_no": 1,

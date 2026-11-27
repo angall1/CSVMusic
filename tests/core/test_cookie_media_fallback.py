@@ -104,3 +104,37 @@ def test_huge_batch_warning_does_not_claim_detected_rate_limit():
 	assert profile.active
 	assert profile.reason == "large playlist size"
 	assert "precaution" in profile.warning
+
+
+@pytest.mark.parametrize("internal", [False, True])
+def test_cookie_format_unavailable_retries_publicly_once(monkeypatch, internal):
+	calls = []
+	def run(args):
+		calls.append(args)
+		return (1, "", "ERROR: Requested format is not available") if len(calls) == 1 else (0, "public source", "")
+	monkeypatch.setattr(downloader, "_run_ytdlp_module", run)
+	monkeypatch.setattr(downloader, "_run_capture", lambda args: subprocess.CompletedProcess(args, *run(args)))
+	monkeypatch.setattr(downloader, "log", lambda _: None)
+	downloader.take_download_notices()
+	cmd = [downloader.INTERNAL_YTDLP if internal else "yt-dlp", "--cookies", "private.txt", "url"]
+	assert downloader._run_ytdlp_detail(cmd) == (0, "")
+	assert len(calls) == 2
+	assert "private.txt" not in calls[1]
+	assert "--no-cookies" in calls[1]
+	assert "--cookies" in cmd
+	assert "format is unavailable" in downloader.take_download_notices()[0]
+
+
+@pytest.mark.parametrize("restriction", ["Sign in to confirm your age", "private video", "members-only", "Precondition check failed", "HTTP Error 429", "Sign in to confirm you're not a bot"])
+def test_format_error_with_restriction_does_not_retry(monkeypatch, restriction):
+	calls = []
+	def run(args):
+		calls.append(args)
+		return 1, "", "ERROR: Requested format is not available. " + restriction
+	monkeypatch.setattr(downloader, "_run_ytdlp_module", run)
+	monkeypatch.setattr(downloader, "log", lambda _: None)
+	try:
+		downloader._run_ytdlp_detail([downloader.INTERNAL_YTDLP, "--cookies=x", "url"])
+	except downloader.AgeRestrictedError:
+		pass
+	assert len(calls) == 1

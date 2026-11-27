@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urljoin
 import requests
 
 from csvmusic.core.import_warnings import incomplete_import_warning
+from csvmusic.core.release_year import metadata_year, release_year
 
 
 class AppleMusicImportError(Exception):
@@ -97,6 +98,7 @@ def _fetch_catalog_tracks(client: requests.Session, page: str, url: str, name: s
 				track = _track_dict(attrs["name"], attrs["artistName"], attrs.get("albumName", ""), name,
 					_safe_int(attrs.get("durationInMillis")) or 0, _artwork_url(attrs.get("artwork")), len(tracks) + 1, item.get("id"))
 				track["isrc"] = attrs.get("isrc")
+				track["year"] = metadata_year(attrs)
 				tracks.append(track)
 			next_page = payload.get("next")
 			if not next_page:
@@ -131,6 +133,9 @@ def parse_apple_music_page(html_text: str, url: str = "") -> AppleMusicSource:
 	tracks = _tracks_from_server_data(server, name)
 	if not tracks and ld:
 		tracks = _tracks_from_ld(ld, name)
+	if ld and ld.get("@type") == "MusicAlbum":
+		for track in tracks:
+			track["year"] = track.get("year") or metadata_year(ld) or release_year(ld.get("datePublished"))
 	if not tracks:
 		raise AppleMusicImportError("Apple Music loaded the page, but no playable tracks were found.")
 	warning = None
@@ -201,6 +206,7 @@ def _tracks_from_server_data(server: dict[str, Any] | None, playlist_name: str) 
 			cover_url=_artwork_url(item.get("artwork")),
 			track_no=len(out) + 1,
 			source_id=apple_id or None,
+			year=metadata_year(item),
 		))
 	return out
 
@@ -223,6 +229,7 @@ def _tracks_from_ld(ld: dict[str, Any], playlist_name: str) -> list[dict]:
 			cover_url=_clean_text(audio.get("thumbnailUrl")) or None,
 			track_no=len(out) + 1,
 			source_id=_apple_source_id(item.get("url") or ""),
+			year=metadata_year(item) or release_year(item.get("datePublished")),
 		))
 	return out
 
@@ -236,7 +243,7 @@ def _link_title(value: Any) -> str:
 	return ""
 
 
-def _track_dict(title: str, artists: str, album: str, playlist_name: str, duration_ms: int, cover_url: str | None, track_no: int, source_id: str | None) -> dict:
+def _track_dict(title: str, artists: str, album: str, playlist_name: str, duration_ms: int, cover_url: str | None, track_no: int, source_id: str | None, year: int | None = None) -> dict:
 	return {
 		"title": title,
 		"artists": artists,
@@ -246,7 +253,7 @@ def _track_dict(title: str, artists: str, album: str, playlist_name: str, durati
 		"sp_id": None,
 		"apple_music_id": source_id,
 		"duration_ms": duration_ms,
-		"year": None,
+		"year": year,
 		"cover_url": cover_url,
 		"track_no": track_no,
 		"disc_no": 1,

@@ -33,7 +33,7 @@ def test_authenticated_clients_use_ytdlp_defaults():
 
 
 @pytest.mark.parametrize("runner", [downloader._run_ytdlp, downloader._run_ytdlp_detail])
-def test_authenticated_failure_never_retries_anonymously(monkeypatch, runner):
+def test_authenticated_format_failure_retries_anonymously_only_once(monkeypatch, runner):
 	calls = []
 	def fail(args):
 		calls.append(args)
@@ -41,5 +41,7 @@ def test_authenticated_failure_never_retries_anonymously(monkeypatch, runner):
 	monkeypatch.setattr(downloader, "_run_ytdlp_module", fail)
 	result = runner([downloader.INTERNAL_YTDLP, "--cookies", "cookies.txt", "url"])
 	assert (result[0] if isinstance(result, tuple) else result) == 1
-	assert len(calls) == 1
+	assert len(calls) == 2
 	assert "--cookies" in calls[0]
+	assert "--cookies" not in calls[1]
+	assert "--no-cookies" in calls[1]

@@ -22,6 +22,7 @@ from csvmusic.core.paths import ytdlp_path as _resolve_ytdlp, INTERNAL_YTDLP
 from csvmusic.core.subprocess_env import subprocess_kwargs
 from csvmusic.core.update_check import UpdateInfo, fetch_available_update
 from csvmusic.core.track_output import expected_track_path, track_filename_base
+from csvmusic.core.library import library_track_path
 
 _FORCE_FALLBACK_MIN_SCORE = 0.45
 
@@ -166,12 +167,13 @@ class PipelineWorker(QThread):
 	             m3u_tracks_override: List[Dict] | None = None,
 	             m3u_output_dir: str | None = None,
 	             row_indices: List[int] | None = None,
-	             parent: QObject | None = None):
+	             parent: QObject | None = None, *, disable_aac_pns: bool = False, force_lr_stereo: bool = False):
 		super().__init__(parent)
 		self.csv_path = csv_path
 		self.out_dir = pathlib.Path(out_dir)
 		self.playlist = playlist
 		self.fmt = fmt
+		self.disable_aac_pns = disable_aac_pns
 		self.write_m3u8 = write_m3u8
 		self.write_m3u_plain = write_m3u_plain
 		self.embed_art = embed_art
@@ -182,6 +184,7 @@ class PipelineWorker(QThread):
 		self.audio_processing = audio_processing or {}
 		self._active_audio_processing = dict(self.audio_processing)
 		self.mp3_quality = max(0, min(10, int(mp3_quality)))
+		self.force_lr_stereo = bool(force_lr_stereo)
 		self.legacy_options = legacy_options or {}
 		self.force_download = bool(force_download)
 		self.tracks_override = tracks_override
@@ -211,10 +214,14 @@ class PipelineWorker(QThread):
 			extra_args += ["--cookies-from-browser", self.cookies_browser]
 		extra_args += build_ytdlp_mitigation_args(profile)
 		if self.fmt == "m4a":
-			return download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self._active_audio_processing)
+			return download_m4a(
+				vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override,
+				extra_yt_dlp_args=extra_args or None, audio_processing=self._active_audio_processing,
+				disable_aac_pns=self.disable_aac_pns,
+			)
 		if self.fmt == "opus":
 			return download_opus(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None)
-		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self._active_audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options))
+		return download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=extra_args or None, audio_processing=self._active_audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options), force_lr_stereo=self.force_lr_stereo)
 
 	def _set_track_audio_processing(self, track: Dict) -> None:
 		processing = dict(self.audio_processing)
@@ -562,8 +569,11 @@ class PipelineWorker(QThread):
 				for completed_track in manifest_tracks:
 					completed_playlist = self.playlist or completed_track.get("playlist") or playlist_name
 					expected_file = expected_track_path(completed_track, self.out_dir, ext)
-					if expected_file.exists():
-						by_playlist.setdefault(completed_playlist, []).append(completed_track)
+					if not expected_file.is_file():
+						expected_file = library_track_path(completed_track, self.out_dir, ext)
+					if expected_file.is_file():
+						entry = dict(completed_track, playlist_media_path=str(expected_file))
+						by_playlist.setdefault(completed_playlist, []).append(entry)
 				for completed_playlist, playlist_tracks in by_playlist.items():
 					if self.write_m3u8:
 						m3u = write_m3u(self.out_dir, completed_playlist, playlist_tracks, ext, suffix=".m3u8", encoding="utf-8", playlist_output_dir=self.m3u_output_dir)
@@ -596,13 +606,14 @@ class SingleDownloadWorker(QThread):
 	             mp3_quality: int = 0,
 	             legacy_options: Dict | None = None,
 	             force_download: bool = False,
-	             parent: QObject | None = None):
+	             parent: QObject | None = None, *, disable_aac_pns: bool = False, force_lr_stereo: bool = False):
 		super().__init__(parent)
 		self.row_idx = row_idx
 		self.track = track
 		self.match = match
 		self.out_dir = pathlib.Path(out_dir)
 		self.fmt = fmt
+		self.disable_aac_pns = disable_aac_pns
 		self.embed_art = embed_art
 		self.playlist_name = track.get("playlist") or "Playlist"
 		self.yt_dlp_path = yt_dlp_path
@@ -611,6 +622,7 @@ class SingleDownloadWorker(QThread):
 		self.cookies_file = cookies_file
 		self.audio_processing = audio_processing or {}
 		self.mp3_quality = max(0, min(10, int(mp3_quality)))
+		self.force_lr_stereo = bool(force_lr_stereo)
 		self.legacy_options = legacy_options or {}
 		self.force_download = bool(force_download)
 
@@ -639,11 +651,15 @@ class SingleDownloadWorker(QThread):
 			else:
 				cookies_args = None
 			if self.fmt == "m4a":
-				fp = download_m4a(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing)
+				fp = download_m4a(
+					vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override,
+					extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing,
+					disable_aac_pns=self.disable_aac_pns,
+				)
 			elif self.fmt == "opus":
 				fp = download_opus(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args)
 			else:
-				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options))
+				fp = download_mp3(vid, dest_dir, base, yt_dlp_bin=self.yt_dlp_path, ffmpeg_bin=self.ffmpeg_path_override, extra_yt_dlp_args=cookies_args, audio_processing=self.audio_processing, mp3_quality=self.mp3_quality, cbr_bitrate_kbps=_legacy_cbr_bitrate(self.legacy_options), force_lr_stereo=self.force_lr_stereo)
 			self.sig_status.emit(self.row_idx, "Tagging…")
 			cover = _track_cover_bytes(self.track, vid)
 			tag_file(fp, self.track, cover if self.embed_art else None, cover_size=_legacy_cover_size(self.legacy_options, embed_art=self.embed_art))

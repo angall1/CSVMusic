@@ -1,5 +1,9 @@
 from csvmusic.core import downloader
 import unicodedata
+import pytest
+from pathlib import Path
+from types import SimpleNamespace
+from subprocess import CompletedProcess
 
 
 def test_youtube_client_fallbacks_use_current_client_names():
@@ -195,3 +199,75 @@ def test_write_m3u_uses_relative_media_paths_from_custom_folder(tmp_path):
 
 	assert path == playlist_dir / "Mix.m3u8"
 	assert path.read_text(encoding="utf-8").splitlines()[-1] == "../Music/Mix/Artist - Song.mp3"
+
+
+@pytest.mark.parametrize("force_lr", [False, True])
+@pytest.mark.parametrize("bitrate", [None, 192, 320])
+def test_mp3_stereo_encoding(monkeypatch, tmp_path, force_lr, bitrate):
+	commands = []
+	def fetch(cmd):
+		Path(cmd[cmd.index("-o") + 1]).write_bytes(b"source")
+		return 0, ""
+	def encode(cmd):
+		commands.append(cmd)
+		Path(cmd[-1]).write_bytes(b"mp3")
+		return SimpleNamespace(returncode=0, stdout="", stderr="")
+	monkeypatch.setattr(downloader, "_run_ytdlp_detail", fetch)
+	monkeypatch.setattr(downloader, "_run_capture", encode)
+	monkeypatch.setattr(downloader, "ytdlp_js_runtime_args", lambda _: [])
+	monkeypatch.setattr(downloader, "store_source", lambda _: None)
+	downloader.download_mp3("video", tmp_path, "song", yt_dlp_bin="yt-dlp", ffmpeg_bin="ffmpeg", force_lr_stereo=force_lr, cbr_bitrate_kbps=bitrate)
+	cmd = commands[0]
+	if force_lr:
+		assert cmd[cmd.index("-joint_stereo") + 1] == "0"
+	else:
+		assert "-joint_stereo" not in cmd
+	assert "-ac" not in cmd
+
+
+@pytest.mark.parametrize("disable_pns, processing, expected_codec", [
+	(True, {}, "aac"),
+	(True, {"volume_gain": 1}, "aac"),
+	(False, {}, "copy"),
+	(False, {"volume_gain": 1}, "aac"),
+])
+def test_m4a_encoding_options(monkeypatch, tmp_path, disable_pns, processing, expected_codec):
+	calls = []
+	def encode(args):
+		calls.append(args)
+		Path(args[-1]).write_bytes(b"encoded")
+		return CompletedProcess(args, 0, "", "")
+	monkeypatch.setattr(downloader, "_run_capture", encode)
+	src, dst = tmp_path / "source.m4a", tmp_path / "output.m4a"
+	src.write_bytes(b"download")
+	assert downloader._normalize_to_m4a(src, dst, "ffmpeg", "video", processing, disable_aac_pns=disable_pns) == dst
+	args, = calls
+	assert args[args.index("-c:a") + 1] == expected_codec
+	assert ("-af" in args) == bool(processing)
+	if disable_pns:
+		for option, value in (("-aac_pns", "0"), ("-b:a", "256k"), ("-ar", "44100")):
+			assert args[args.index(option) + 1] == value
+	else:
+		assert "-aac_pns" not in args
+		if expected_codec == "aac":
+			assert args[args.index("-b:a") + 1] == "192k"
+
+
+def test_failed_pns_encode_preserves_existing_track(monkeypatch, tmp_path):
+	dst = tmp_path / "Song.m4a"
+	dst.write_bytes(b"previous download")
+	def download(args):
+		template = args[args.index("-o") + 1]
+		Path(template.replace("%(ext)s", "m4a")).write_bytes(b"unprocessed AAC")
+		return 0, ""
+	def reject_pns_option(args):
+		assert args[args.index("-aac_pns") + 1] == "0"
+		Path(args[-1]).write_bytes(b"incomplete output")
+		return CompletedProcess(args, 1, "", "Unrecognized option 'aac_pns'")
+	monkeypatch.setattr(downloader, "ytdlp_js_runtime_args", lambda _bin: [])
+	monkeypatch.setattr(downloader, "_run_ytdlp_detail", download)
+	monkeypatch.setattr(downloader, "_run_capture", reject_pns_option)
+	with pytest.raises(downloader.DownloadError, match="aac_pns"):
+		downloader.download_m4a("video", tmp_path, "Song", yt_dlp_bin="yt-dlp", ffmpeg_bin="ffmpeg", disable_aac_pns=True)
+	assert dst.read_bytes() == b"previous download"
+	assert list(tmp_path.iterdir()) == [dst]

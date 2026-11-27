@@ -919,6 +919,11 @@ class MainWindow(QMainWindow):
 		opus_note.setWordWrap(True)
 		opus_note.setFont(QFont(retro_font_family, default_pt))
 		audio_layout.addWidget(opus_note)
+		self.cb_disable_aac_pns = QCheckBox("Disable AAC perceptual noise substitution (PNS)")
+		self.cb_disable_aac_pns.setFont(QFont(retro_font_family, default_pt + 1, QFont.Bold))
+		self.cb_disable_aac_pns.setToolTip("Re-encode M4A downloads at 256 kbps and 44.1 kHz with PNS disabled.")
+		self.cb_disable_aac_pns.toggled.connect(lambda checked: save_settings({"disable_aac_pns": checked}))
+		adv_layout.addWidget(self.cb_disable_aac_pns)
 		audio_layout.addSpacing(self._px(4))
 		lbl_mp3_quality = QLabel("MP3 quality")
 		lbl_mp3_quality.setFont(QFont(retro_font_family, default_pt + 2, QFont.Bold))
@@ -1111,7 +1116,7 @@ class MainWindow(QMainWindow):
 
 		row1 = QHBoxLayout()
 		row1.setSpacing(self._px(6))
-		self.ed_csv = QLineEdit(); self.ed_csv.setPlaceholderText("Path to one playlist CSV file (optional if Spotify link is loaded)")
+		self.ed_csv = QLineEdit(); self.ed_csv.setPlaceholderText("Path to a playlist CSV file (optional if a music link is loaded)")
 		self.ed_csv.setFont(QFont(retro_font_family, default_pt + 1))
 		self.ed_csv.textEdited.connect(self._clear_loaded_source)
 		btn_csv = QPushButton("Browse…"); btn_csv.clicked.connect(self.on_browse_csv)
@@ -1163,6 +1168,7 @@ class MainWindow(QMainWindow):
 		self.rb_mp3 = RetroRadioButton("mp3")
 		self.grp_fmt = QButtonGroup(self); self.grp_fmt.addButton(self.rb_m4a); self.grp_fmt.addButton(self.rb_mp3)
 		self.grp_fmt.buttonToggled.connect(lambda _button, checked: self._persist_settings() if checked else None)
+		self.rb_m4a.toggled.connect(self._update_aac_pns_control)
 		self.cb_m3u8 = QCheckBox("Write .m3u8")
 		self.cb_m3u_plain = QCheckBox("Write .m3u"); self.cb_m3u_plain.setChecked(True)
 		self.cb_album_art = QCheckBox("Embed album art"); self.cb_album_art.setChecked(True)
@@ -1468,7 +1474,11 @@ class MainWindow(QMainWindow):
 	def on_toggle_opus_output(self, checked: bool) -> None:
 		self.rb_m4a.setEnabled(not checked)
 		self.rb_mp3.setEnabled(not checked)
+		self._update_aac_pns_control()
 		self._persist_settings()
+
+	def _update_aac_pns_control(self) -> None:
+		self.cb_disable_aac_pns.setEnabled(self._selected_format() == "m4a")
 
 	def _legacy_export_options(self) -> dict:
 		enabled = bool(self.cb_legacy_ipod_mode.isChecked())
@@ -1555,6 +1565,8 @@ class MainWindow(QMainWindow):
 		dialog.tracks_ready.connect(self._on_library_tracks_ready)
 		dialog.legacy_mode_requested.connect(self._return_to_legacy_mode)
 		dialog.exec()
+		with QSignalBlocker(self.cb_disable_aac_pns):
+			self.cb_disable_aac_pns.setChecked(bool(load_settings().get("disable_aac_pns", False)))
 
 	def _return_to_legacy_mode(self) -> None:
 		"""Bring the existing interface forward when Library Mode requests a switch."""
@@ -2249,6 +2261,9 @@ class MainWindow(QMainWindow):
 			self.rb_mp3.setChecked(stored_format == "mp3")
 			del block_m4a
 			del block_mp3
+		with QSignalBlocker(self.cb_disable_aac_pns):
+			self.cb_disable_aac_pns.setChecked(bool(cfg.get("disable_aac_pns", False)))
+		self._update_aac_pns_control()
 		block_m3u8 = QSignalBlocker(self.cb_m3u8)
 		block_m3u = QSignalBlocker(self.cb_m3u_plain)
 		self.cb_m3u8.setChecked(bool(cfg.get("write_m3u8", False)))
@@ -2358,6 +2373,8 @@ class MainWindow(QMainWindow):
 			self._cookies_file(),
 			self._audio_processing_options(),
 			mp3_quality=self._mp3_quality_value(),
+			force_lr_stereo=bool(load_settings().get("force_lr_stereo", False)),
+			disable_aac_pns=self.cb_disable_aac_pns.isChecked(),
 			legacy_options=self._legacy_export_options(),
 			force_download=bool(self.cb_force_download.isChecked()),
 			tracks_override=active_tracks,
@@ -2882,7 +2899,9 @@ class MainWindow(QMainWindow):
 			self._audio_processing_options(),
 			self._mp3_quality_value(),
 			self._legacy_export_options(),
-			parent=self
+			force_lr_stereo=bool(load_settings().get("force_lr_stereo", False)),
+			parent=self,
+			disable_aac_pns=self.cb_disable_aac_pns.isChecked(),
 		)
 		self.manual_download_workers[row_idx] = worker
 		worker.sig_status.connect(self.on_row_status)
@@ -3000,47 +3019,24 @@ class MainWindow(QMainWindow):
 		if not out_dir_text:
 			return
 		out_root = pathlib.Path(out_dir_text)
-		write_m3u8 = self.cb_m3u8.isChecked()
-		write_m3u_plain = self.cb_m3u_plain.isChecked()
-		ordered_entries: list[tuple[dict, pathlib.Path]] = []
-		playlist_name = None
+		groups: dict[str, list[tuple[dict, pathlib.Path]]] = {}
+		for track in self.tracks:
+			groups.setdefault(track.get("playlist") or "Playlist", [])
 		for row in range(self.table.rowCount()):
-			info = self.track_results.get(row)
-			if not info or not info.get("downloaded") or info.get("removed"):
-				continue
+			info = self.track_results.get(row) or {}
 			track = info.get("track")
-			fp = info.get("file_path")
-			if not track or not fp:
+			path = info.get("file_path")
+			if not track or not path or not info.get("downloaded") or info.get("removed"):
 				continue
-			path_obj = pathlib.Path(fp).resolve()
-			ordered_entries.append((track, path_obj))
-			if not playlist_name:
-				playlist_name = info.get("playlist_name") or track.get("playlist")
-		if not ordered_entries:
-			name = self.last_playlist_name or "Playlist"
-			self._remove_playlist_file(out_root, name, ".m3u8")
-			self._remove_playlist_file(out_root, name, ".m3u")
-			return
-		playlist_name = playlist_name or self.last_playlist_name or "Playlist"
-		self.last_playlist_name = playlist_name
-		entries_resolved: list[tuple[dict, pathlib.Path]] = []
-		for track, abs_path in ordered_entries:
-			entries_resolved.append((track, abs_path))
-		# determine extension from actual files
-		ext = "m4a"
-		for _, abs_path in entries_resolved:
-			suf = abs_path.suffix.lower().lstrip('.')
-			if suf in ("m4a", "mp3", "opus"):
-				ext = suf
-				break
-		if write_m3u8:
-			self._write_playlist_file(out_root, playlist_name, entries_resolved, ext, ".m3u8", "utf-8")
-		else:
-			self._remove_playlist_file(out_root, playlist_name, ".m3u8")
-		if write_m3u_plain:
-			self._write_playlist_file(out_root, playlist_name, entries_resolved, ext, ".m3u", "utf-8-sig")
-		else:
-			self._remove_playlist_file(out_root, playlist_name, ".m3u")
+			name = info.get("playlist_name") or track.get("playlist") or "Playlist"
+			groups.setdefault(name, []).append((track, pathlib.Path(path).resolve()))
+		for name, entries in groups.items():
+			ext = entries[0][1].suffix.lstrip(".") if entries else self._selected_format()
+			for suffix, enabled, encoding in ((".m3u8", self.cb_m3u8.isChecked(), "utf-8"), (".m3u", self.cb_m3u_plain.isChecked(), "utf-8-sig")):
+				if enabled and entries:
+					self._write_playlist_file(out_root, name, entries, ext, suffix, encoding)
+				else:
+					self._remove_playlist_file(out_root, name, suffix)
 
 	def _write_playlist_file(self, out_root: pathlib.Path, playlist_name: str, entries: list[tuple[dict, pathlib.Path]], ext: str, suffix: str, encoding: str) -> None:
 		media_dir = out_root / sanitize_name(playlist_name)

@@ -88,3 +88,20 @@ def test_csv_import_preserves_cover_url(tmp_path):
 	track = tracks_from_csv(load_csv(path))[0]
 
 	assert track["cover_url"] == "https://example.com/cover.jpg"
+
+
+def test_multi_playlist_csv_preserves_duplicates_and_per_playlist_positions(tmp_path):
+	path = tmp_path / "multi.csv"
+	path.write_text("Playlist name,Track name,Artist name\nA,One,Artist\nB,Shared,Artist\nA,One,Artist\nB,Other,Artist\n", encoding="utf-8")
+	tracks = tracks_from_csv(load_csv(path))
+	assert [track["playlist"] for track in tracks] == ["A", "B", "A", "B"]
+	assert [track["track_no"] for track in tracks] == [1, 1, 2, 2]
+	assert len(tracks_from_csv(load_csv(path), "A")) == 2
+
+
+def test_multi_playlist_rejects_folder_name_collision(tmp_path):
+	import pytest
+	path = tmp_path / "collision.csv"
+	path.write_text("Playlist name,Track name,Artist name\nMix,One,Artist\nmix,Two,Artist\n", encoding="utf-8")
+	with pytest.raises(ValueError, match="same output folder"):
+		load_csv(path)

@@ -395,3 +395,103 @@ def test_successful_selected_alternative_removes_superseded_local_file(tmp_path)
 
 	assert not old_file.exists()
 	assert new_file.exists()
+
+
+def _failed_local_track(tmp_path):
+	library = new_library(output_dir=str(tmp_path))
+	library["format"] = "wav"
+	add_playlist_urls(library, [URL])
+	playlist = merge_playlist_scan(library, "611N3KSs459UD5IVPH1ES4", "Mix", [_track()])
+	track = playlist["tracks"][0]
+	track["last_error"] = "Sign in to confirm your age"
+	track["last_error_at"] = "2026-11-10"
+	path = expected_track_path(dict(track, playlist="Mix"), tmp_path, "wav")
+	path.parent.mkdir(parents=True)
+	import wave
+	with wave.open(str(path), "wb") as audio:
+		audio.setnchannels(2)
+		audio.setsampwidth(2)
+		audio.setframerate(44100)
+		audio.writeframes(b"\x00" * 4410 * 4)
+	return library, playlist, track, path
+
+
+def test_rescan_accepts_readable_manual_audio_after_failure(tmp_path):
+	library, playlist, track, path = _failed_local_track(tmp_path)
+	merge_playlist_scan(library, "611N3KSs459UD5IVPH1ES4", "Mix", [_track()])
+	updated = playlist["tracks"][0]
+	assert updated["last_error"] is None
+	assert updated["last_error_at"] is None
+	assert updated["downloaded_path"] == str(path)
+	assert not updated["last_downloaded_at"]
+	assert not updated["downloaded_video_id"]
+	assert library_status(library, tmp_path, "wav")["totals"]["redownload"] == 0
+
+
+def test_rescan_preserves_replacement_until_user_accepts_existing_file(tmp_path):
+	from csvmusic.core.library import use_existing_track_file
+	library, playlist, track, path = _failed_local_track(tmp_path)
+	track.update(force_redownload=True, preferred_video_id="replacement", preferred_selection_locked=True)
+	merge_playlist_scan(library, "611N3KSs459UD5IVPH1ES4", "Mix", [_track()])
+	updated = playlist["tracks"][0]
+	assert updated["force_redownload"]
+	assert updated["last_error"]
+	use_existing_track_file(updated, tmp_path, "wav")
+	assert not updated["force_redownload"]
+	assert updated["last_error"] is None
+	assert updated["preferred_video_id"] == "replacement"
+	assert not updated["downloaded_video_id"]
+
+
+def test_rescan_and_acceptance_reject_corrupt_local_audio(tmp_path):
+	import pytest
+	from csvmusic.core.library import use_existing_track_file
+	library, playlist, track, path = _failed_local_track(tmp_path)
+	path.write_bytes(b"not audio")
+	merge_playlist_scan(library, "611N3KSs459UD5IVPH1ES4", "Mix", [_track()])
+	updated = playlist["tracks"][0]
+	assert updated["last_error"]
+	with pytest.raises(ValueError, match="readable audio"):
+		use_existing_track_file(updated, tmp_path, "wav")
+	assert updated["last_error"]
+
+
+def test_rescan_keeps_failure_for_previous_download(tmp_path):
+	library, playlist, track, path = _failed_local_track(tmp_path)
+	track["last_downloaded_at"] = "2026-11-01"
+	merge_playlist_scan(library, "611N3KSs459UD5IVPH1ES4", "Mix", [_track()])
+	assert playlist["tracks"][0]["last_error"]
+
+
+def test_multi_csv_refresh_keeps_independent_ids_and_preferences(tmp_path):
+	from csvmusic.core.library import import_csv_playlists
+	path = tmp_path / "multi.csv"
+	path.write_text("Playlist name,Track name,Artist name\nA,Shared,Artist\nB,Shared,Artist\nA,Shared,Artist\n", encoding="utf-8")
+	library = new_library()
+	results = import_csv_playlists(library, path)
+	assert len(results) == 2
+	assert len({playlist["id"] for playlist, created in results}) == 2
+	first = results[0][0]
+	first["tracks"][0]["preferred_video_id"] = "my-choice"
+	ids = [playlist["id"] for playlist, _ in results]
+	results = import_csv_playlists(library, path)
+	assert all(not created for _, created in results)
+	assert [playlist["id"] for playlist, _ in results] == ids
+	assert results[0][0]["tracks"][0]["preferred_video_id"] == "my-choice"
+	assert len(results[0][0]["tracks"]) == 2
+	assert not results[1][0]["tracks"][0]["preferred_video_id"]
+	path.write_text("Playlist name,Track name,Artist name\nA,Shared,Artist\n", encoding="utf-8")
+	assert import_csv_playlists(library, path)[0][0]["id"] == ids[0]
+
+
+def test_single_csv_can_gain_second_playlist_without_losing_identity(tmp_path):
+	from csvmusic.core.library import import_csv_playlists
+	path = tmp_path / "multi.csv"
+	path.write_text("Playlist name,Track name,Artist name\nA,Song,Artist\n", encoding="utf-8")
+	library = new_library()
+	old, _ = import_csv_playlist(library, path)
+	old_id = old["id"]
+	path.write_text("Playlist name,Track name,Artist name\nA,Song,Artist\nB,Song,Artist\n", encoding="utf-8")
+	results = import_csv_playlists(library, path)
+	assert results[0][0]["id"] == old_id
+	assert len(library["playlists"]) == 2

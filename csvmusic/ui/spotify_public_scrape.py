@@ -353,6 +353,7 @@ class SpotifyPublicScrapeDialog(QDialog):
 					"artists": track.get("artists") or "",
 					"album": track.get("album") or "",
 					"cover_url": track.get("cover_url"),
+					"year": track.get("year"),
 				}
 		self.baseline_count = len(self.tracks)
 		self.playlist_name = getattr(playlist, "name", "Spotify Playlist")

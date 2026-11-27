@@ -146,6 +146,20 @@ Library Mode keeps multiple public Spotify, Apple Music, YouTube Music, and YouT
 4. Click **Download**, configure the shared output folder and format, then click **Start Download**.
 5. Use **Sync** if you want to copy selected completed playlists to a supported portable player.
 
+Settings → Advanced includes **Force L/R stereo** for MP3 downloads. It is off by default, preserving LAME’s automatic joint stereo. Enable it for a specific compatibility need or preference; it does not guarantee better quality and does not re-encode existing files. The saved choice also applies to downloads in the legacy window.
+
+After a failed first download, rescanning recognizes a readable matching local audio file and clears the old failure. Explicit replacement requests remain queued. For a song with an existing file and a saved error or replacement request, choose **Use existing file / cancel replacement** to accept that file. This preserves your selected YouTube match for future downloads.
+
+Release years are imported when provided by the source and written to MP3, M4A, and Opus tags. Rescans preserve an already known year when the source omits it. Unknown years remain blank; upload dates are not used as release dates. To update existing files, rescan and redownload the affected tracks.
+
+CSV files can contain multiple named playlists. **Add CSV** creates a separate library entry for each playlist; downloads and M3U files stay in separate playlist folders. Re-importing refreshes the same entries, and rescanning one entry reads only its named playlist. Tracks are not deduplicated across playlists.
+
+**Settings → Advanced → Disable AAC perceptual noise substitution (PNS)** is off by default. Enable it for M4A compatibility with older players: new downloads are re-encoded at 256 kbps / 44.1 kHz. Existing files require an explicit redownload. M4A downloads are staged so a failed conversion leaves the previous file intact.
+
+With playlist writing enabled, **Download** rebuilds M3U8/M3U files even when no audio needs downloading. Complete rescans refresh their order and membership. Missing audio is omitted, and existing numbered filenames are preserved.
+
+Signed-in YouTube requests that report an unavailable format can retry once without cookies, with a visible notice. Saved account settings stay enabled; account-only/Premium formats may be unavailable on the public retry. Login restrictions and rate-limit errors do not trigger this fallback.
+
 The library is saved locally as `library.json` in CSVMusic's settings folder by default. **Save As...** can create a portable library file. Rescanning preserves track selections and manual YouTube corrections while reporting added and removed tracks.
 
 For standalone development testing, launch only the Library Mode window with:

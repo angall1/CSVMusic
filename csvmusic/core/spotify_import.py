@@ -11,6 +11,7 @@ import time
 import requests
 
 from csvmusic.core.import_warnings import incomplete_import_warning
+from csvmusic.core.release_year import metadata_year, release_year
 
 
 class SpotifyImportError(Exception):
@@ -160,7 +161,7 @@ def parse_spotify_embed_page(html_text: str, source: SpotifySource) -> SpotifyPl
 		raise SpotifyImportError("Spotify embed returned the wrong item.")
 	name = _clean_text(entity.get("title") or entity.get("name")) or ("Spotify Album" if source.type == "album" else "Spotify Playlist")
 	items = entity.get("trackList") if isinstance(entity.get("trackList"), list) else []
-	tracks = _tracks_from_embed_items(items, name, album_name=name if source.type == "album" else None, cover_url=_embed_cover_url(entity))
+	tracks = _tracks_from_embed_items(items, name, album_name=name if source.type == "album" else None, cover_url=_embed_cover_url(entity), album_year=metadata_year(entity) if source.type == "album" else None)
 	if not tracks:
 		raise SpotifyImportError("Spotify embed loaded, but no playable tracks were found.")
 	total_count = _safe_int(entity.get("trackCount") or entity.get("totalCount")) or len(tracks)
@@ -200,7 +201,7 @@ def _parse_album_state(state: dict[str, Any], album_id: str) -> SpotifyPlaylist:
 	tracks_v2 = album.get("tracksV2") if isinstance(album.get("tracksV2"), dict) else {}
 	items = tracks_v2.get("items") if isinstance(tracks_v2.get("items"), list) else []
 	total_count = _safe_int(tracks_v2.get("totalCount"))
-	tracks = _tracks_from_items(items, name, album_name=name, cover_url=_album_cover_url(album))
+	tracks = _tracks_from_items(items, name, album_name=name, cover_url=_album_cover_url(album), album_year=metadata_year(album) or release_year(album.get("date")))
 	if not tracks:
 		raise SpotifyImportError("Spotify loaded the album, but no playable tracks were found.")
 	warning = None
@@ -259,7 +260,7 @@ def _find_album_entity(state: dict[str, Any], album_id: str) -> dict[str, Any] |
 	return None
 
 
-def _tracks_from_items(items: list[Any], playlist_name: str, *, album_name: str | None = None, cover_url: str | None = None) -> list[dict]:
+def _tracks_from_items(items: list[Any], playlist_name: str, *, album_name: str | None = None, cover_url: str | None = None, album_year: int | None = None) -> list[dict]:
 	tracks: list[dict] = []
 	for idx, item in enumerate(items, start=1):
 		data = _track_data(item)
@@ -280,7 +281,7 @@ def _tracks_from_items(items: list[Any], playlist_name: str, *, album_name: str 
 			"isrc": _external_id(data, "isrc"),
 			"sp_id": sp_id,
 			"duration_ms": _duration_ms(data),
-			"year": None,
+			"year": metadata_year(data) or metadata_year(data.get("albumOfTrack") or data.get("album")) or _album_release_year(data) or album_year,
 			"cover_url": _cover_url(data) or cover_url,
 			# Album track numbers are not playlist positions. A playlist can contain
 			# many songs whose album track number is 1, so using that value here
@@ -306,7 +307,7 @@ def _track_data(item: Any) -> dict[str, Any] | None:
 	return None
 
 
-def _tracks_from_embed_items(items: list[Any], playlist_name: str, *, album_name: str | None = None, cover_url: str | None = None) -> list[dict]:
+def _tracks_from_embed_items(items: list[Any], playlist_name: str, *, album_name: str | None = None, cover_url: str | None = None, album_year: int | None = None) -> list[dict]:
 	tracks: list[dict] = []
 	for idx, item in enumerate(items, start=1):
 		if not isinstance(item, dict) or item.get("entityType") != "track":
@@ -324,7 +325,7 @@ def _tracks_from_embed_items(items: list[Any], playlist_name: str, *, album_name
 			"isrc": None,
 			"sp_id": sp_id,
 			"duration_ms": _safe_int(item.get("duration")) or 0,
-			"year": None,
+			"year": metadata_year(item) or album_year,
 			"cover_url": cover_url,
 			"track_no": idx,
 			"disc_no": 1,
@@ -476,3 +477,8 @@ def _safe_int(value: Any) -> int | None:
 
 def _clean_text(value: Any) -> str:
 	return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _album_release_year(data: dict) -> int | None:
+	album = data.get("albumOfTrack") or data.get("album")
+	return release_year(album.get("date")) if isinstance(album, dict) else None

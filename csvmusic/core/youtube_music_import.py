@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 from ytmusicapi import YTMusic
 
 from csvmusic.core.import_warnings import incomplete_import_warning
+from csvmusic.core.release_year import metadata_year
 
 
 class YouTubeMusicImportError(Exception):
@@ -37,6 +38,9 @@ def fetch_youtube_music_source(value: str, *, limit: int | None = None) -> YouTu
 	raw_tracks = playlist.get("tracks") if isinstance(playlist.get("tracks"), list) else []
 	total_count = _safe_int(playlist.get("trackCount")) or len(raw_tracks)
 	tracks = _tracks_from_playlist(raw_tracks, name)
+	if source_type == "album":
+		for track in tracks:
+			track["year"] = track.get("year") or metadata_year(playlist)
 	if not tracks:
 		raise YouTubeMusicImportError(f"YouTube Music loaded the {source_type}, but no playable tracks were found.")
 	warning = None
@@ -110,7 +114,7 @@ def _tracks_from_playlist(items: list[Any], playlist_name: str) -> list[dict]:
 			"youtube_video_title": title,
 			"youtube_video_author": artists,
 			"duration_ms": (_safe_int(item.get("duration_seconds")) or 0) * 1000,
-			"year": None,
+			"year": metadata_year(item),
 			"cover_url": _cover_url(item),
 			"track_no": len(out) + 1,
 			"disc_no": 1,

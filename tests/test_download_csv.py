@@ -104,3 +104,23 @@ def test_cli_tags_with_csv_metadata_and_writes_skipped_csv(tmp_path, monkeypatch
 
 	skipped = tracks_from_csv(load_csv(next((out / "Road Trip").glob("skipped-*.csv"))))
 	assert [t["title"] for t in skipped] == ["Obscure B-Side"]
+
+
+def test_cli_multi_playlist_uses_separate_folders_and_manifests(tmp_path, monkeypatch):
+	path = tmp_path / "multi.csv"
+	path.write_text("Playlist name,Track name,Artist name,Album\nA,Shared,Artist,Album\nB,Shared,Artist,Album\nA,Last,Artist,Album\n", encoding="utf-8")
+	monkeypatch.setattr(download_csv, "batch_match", lambda tracks: [{"track": t, "skipped": False, "match": {"videoId": "video"}} for t in tracks])
+	def download(video, folder, base, **kwargs):
+		file = folder / (base + ".mp3")
+		file.write_bytes(b"audio")
+		return file
+	monkeypatch.setattr(download_csv, "download_mp3", download)
+	monkeypatch.setattr(download_csv, "tag_file", lambda *args: None)
+	monkeypatch.setattr(download_csv, "track_cover_bytes", lambda *args: None)
+	monkeypatch.setattr(download_csv.time, "sleep", lambda _: None)
+	out = tmp_path / "out"
+	assert download_csv.main(["prog", "--csv", str(path), "--out", str(out), "--format", "mp3"]) == 0
+	for name in ("A", "B"):
+		assert (out / name / "Artist - Shared.mp3").is_file()
+		assert (out / name / (name + ".m3u8")).is_file()
+	assert "Last" not in (out / "B" / "B.m3u8").read_text()
